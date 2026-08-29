@@ -2,6 +2,7 @@ import express from 'express';
 import healthRoutes from '../healthRoutes.js';
 import authRoutes from '../authRoutes.js';
 import studentRoutes from '../studentRoutes.js';
+import publicRoutes from '../publicRoutes.js';
 
 const router = express.Router();
 
@@ -13,5 +14,8 @@ router.use('/auth', authRoutes);
 
 // Student enrollment & numbering endpoints
 router.use('/students', studentRoutes);
+
+// Public Gateway & Landing page statistics
+router.use('/public', publicRoutes);
 
 export default router;
