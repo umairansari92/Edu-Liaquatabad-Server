@@ -36,12 +36,23 @@ app.use(helmet({
 }));
 
 // ─── CORS & Origin Whitelisting ───────────────────────────────────────────────
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173').split(',');
+const rawAllowed = (process.env.CLIENT_URL || 'http://localhost:5173,http://localhost:3000').split(',');
+const allowedOrigins = rawAllowed.map((url) => url.trim().replace(/\/$/, ''));
+
+if (process.env.NODE_ENV !== 'production') {
+  ['3000', '5173', '5174', '4173'].forEach((port) => {
+    allowedOrigins.push(`http://localhost:${port}`, `http://127.0.0.1:${port}`);
+  });
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) return callback(null, true);
+    const normalizedOrigin = origin.trim().replace(/\/$/, '');
+    if (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      logger.warn(`[CORS Blocked] Origin: ${origin} not in allowed list`);
       callback(new Error('Blocked by CORS policy.'));
     }
   },
