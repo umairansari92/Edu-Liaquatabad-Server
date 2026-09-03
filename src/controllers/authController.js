@@ -14,7 +14,8 @@ import Organization from '../models/Organization.js';
 import Town from '../models/Town.js';
 import School from '../models/School.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS } from '../../config/constants.js';
+import { ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import { getEffectivePermissions } from '../config/permissions.js';
 
 /**
  * Generate Math Security CAPTCHA
@@ -80,7 +81,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     captchaChallengeToken,
   } = req.body;
 
-  // 1. Math CAPTCHA validation (if provided)
+  // 1. Math CAPTCHA validation
   if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
     return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
   }
@@ -125,7 +126,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     });
   }
 
-  // 6. Create User in PENDING_APPROVAL status
+  // 6. Create User in PENDING_APPROVAL status (role locked to STUDENT)
   const passwordHash = await hashPassword(password);
   const user = await User.create({
     organizationId: defaultOrg._id,
@@ -135,12 +136,14 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     email: email.toLowerCase().trim(),
     passwordHash,
     phoneNumber: phoneNumber || guardianContactNumber || '',
+    designation: 'Enrolled Student',
     role: ROLES.STUDENT,
-    scope: SCOPES.SELF_CHILD,
+    scope: SCOPES.SELF,
     status: USER_STATUS.PENDING_APPROVAL,
+    tokenVersion: 1,
   });
 
-  // 7. Create StudentProfile in PENDING_APPROVAL status
+  // 7. Create StudentProfile
   await StudentProfile.create({
     userId: user._id,
     schoolId: validSchool ? validSchool._id : defaultTown._id,
@@ -153,18 +156,22 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
   });
 
   // 8. Immutable Audit Log
-  const deviceFingerprint = generateDeviceFingerprint(req);
   await AuditLog.create({
     actorId: user._id,
     actorRole: ROLES.STUDENT,
+    actorDesignation: 'Enrolled Student',
+    actorName: user.fullName,
     action: 'STUDENT_REGISTERED_OTP_VERIFIED',
     targetModel: 'User',
     targetId: user._id,
+    targetName: user.fullName,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email },
+    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email, role: user.role },
+    result: 'SUCCESS',
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
+    requestId: req.headers['x-request-id'] || '',
   });
 
   return sendSuccess(res, 201, 'Student account registered and email verified. Your profile is now awaiting Head Master (HM) approval.', {
@@ -185,7 +192,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     email,
     password,
     phoneNumber,
-    designation,
+    designation = 'Teacher',
     qualification,
     schoolId,
     otpCode,
@@ -238,7 +245,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     });
   }
 
-  // 6. Create User in PENDING_APPROVAL status
+  // 6. Create User in PENDING_APPROVAL status (role locked to TEACHER)
   const passwordHash = await hashPassword(password);
   const user = await User.create({
     organizationId: defaultOrg._id,
@@ -248,9 +255,11 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     email: email.toLowerCase().trim(),
     passwordHash,
     phoneNumber: phoneNumber || '',
+    designation: designation || 'Teacher',
     role: ROLES.TEACHER,
     scope: SCOPES.CLASS_SECTION,
     status: USER_STATUS.PENDING_APPROVAL,
+    tokenVersion: 1,
   });
 
   // 7. Create TeacherProfile
@@ -266,17 +275,22 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
   await AuditLog.create({
     actorId: user._id,
     actorRole: ROLES.TEACHER,
+    actorDesignation: user.designation,
+    actorName: user.fullName,
     action: 'TEACHER_REGISTERED_OTP_VERIFIED',
     targetModel: 'User',
     targetId: user._id,
+    targetName: user.fullName,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email },
+    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email, role: user.role },
+    result: 'SUCCESS',
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
+    requestId: req.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 201, 'Faculty registration submitted and email verified. Your profile is now awaiting HM / DDO authorization.', {
+  return sendSuccess(res, 201, 'Faculty registration submitted and email verified. Your profile is now awaiting HM / Admin authorization.', {
     userId: user._id,
     email: user.email,
     role: user.role,
@@ -309,8 +323,8 @@ export const handleLogin = asyncHandler(async (req, res) => {
     return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
   }
 
-  // 3. User Lookup (including passwordHash)
-  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash');
+  // 3. User Lookup (including passwordHash & tokenVersion)
+  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +tokenVersion');
 
   if (!user) {
     await recordFailedLogin(normalizedEmail, req);
@@ -354,11 +368,17 @@ export const handleLogin = asyncHandler(async (req, res) => {
     return sendError(res, 403, 'This account is inactive.');
   }
 
-  // 7. Generate JWT Tokens
+  // 7. Generate JWT Tokens with Authoritative Claims
+  const permissions = getEffectivePermissions(user);
+  const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+
   const tokenPayload = {
     userId: user._id,
     role: user.role,
+    roleLevel,
+    designation: user.designation || '',
     scope: user.scope,
+    tokenVersion: user.tokenVersion || 0,
     organizationId: user.organizationId,
     townId: user.townId,
     schoolId: user.schoolId,
@@ -366,7 +386,7 @@ export const handleLogin = asyncHandler(async (req, res) => {
   };
 
   const accessToken = signAccessToken(tokenPayload);
-  const refreshToken = signRefreshToken({ userId: user._id });
+  const refreshToken = signRefreshToken({ userId: user._id, tokenVersion: user.tokenVersion || 0 });
 
   // 8. Set Secure HttpOnly Refresh Cookie
   setRefreshCookie(res, refreshToken);
@@ -379,14 +399,19 @@ export const handleLogin = asyncHandler(async (req, res) => {
   await AuditLog.create({
     actorId: user._id,
     actorRole: user.role,
+    actorDesignation: user.designation || '',
+    actorName: user.fullName,
     action: 'USER_LOGIN_SUCCESS',
     targetModel: 'User',
     targetId: user._id,
+    targetName: user.fullName,
     townId: user.townId,
     schoolId: user.schoolId || null,
     newState: { lastLoginAt: user.lastLoginAt },
+    result: 'SUCCESS',
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
+    requestId: req.headers['x-request-id'] || '',
   });
 
   return sendSuccess(res, 200, 'Authentication successful. Welcome to Liaquatabad Education Portal.', {
@@ -395,8 +420,11 @@ export const handleLogin = asyncHandler(async (req, res) => {
       fullName: user.fullName,
       email: user.email,
       phoneNumber: user.phoneNumber,
+      designation: user.designation || '',
       role: user.role,
+      roleLevel,
       scope: user.scope,
+      permissions,
       status: user.status,
       schoolId: user.schoolId,
       townId: user.townId,
@@ -425,17 +453,29 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
     return sendError(res, 401, 'Session token expired or invalid. Please sign in again.');
   }
 
-  const user = await User.findById(decoded.userId);
+  const user = await User.findById(decoded.userId).select('+tokenVersion');
   if (!user || user.status !== USER_STATUS.ACTIVE) {
     clearRefreshCookie(res);
     return sendError(res, 401, 'Account session revoked or account is no longer active.');
   }
 
+  // Verify tokenVersion to reject revoked tokens
+  if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+    clearRefreshCookie(res);
+    return sendError(res, 401, 'Session has been invalidated due to a security update. Please sign in again.');
+  }
+
   // Generate fresh token pair (Rotation)
+  const permissions = getEffectivePermissions(user);
+  const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+
   const tokenPayload = {
     userId: user._id,
     role: user.role,
+    roleLevel,
+    designation: user.designation || '',
     scope: user.scope,
+    tokenVersion: user.tokenVersion || 0,
     organizationId: user.organizationId,
     townId: user.townId,
     schoolId: user.schoolId,
@@ -443,7 +483,7 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
   };
 
   const newAccessToken = signAccessToken(tokenPayload);
-  const newRefreshToken = signRefreshToken({ userId: user._id });
+  const newRefreshToken = signRefreshToken({ userId: user._id, tokenVersion: user.tokenVersion || 0 });
 
   setRefreshCookie(res, newRefreshToken);
 
@@ -453,8 +493,11 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
       _id: user._id,
       fullName: user.fullName,
       email: user.email,
+      designation: user.designation || '',
       role: user.role,
+      roleLevel,
       scope: user.scope,
+      permissions,
       status: user.status,
       schoolId: user.schoolId,
       townId: user.townId,
@@ -474,13 +517,18 @@ export const handleLogout = asyncHandler(async (req, res) => {
     await AuditLog.create({
       actorId: req.user.userId,
       actorRole: req.user.role,
+      actorDesignation: req.user.designation || '',
+      actorName: req.user.fullName || '',
       action: 'USER_LOGOUT',
       targetModel: 'User',
       targetId: req.user.userId,
+      targetName: req.user.fullName,
       townId: req.user.townId,
       schoolId: req.user.schoolId || null,
+      result: 'SUCCESS',
       ipAddress: req.ip || '',
       userAgent: req.headers['user-agent'] || '',
+      requestId: req.headers['x-request-id'] || '',
     });
   }
 
@@ -500,14 +548,20 @@ export const handleGetMe = asyncHandler(async (req, res) => {
     return sendError(res, 404, 'User profile not found.');
   }
 
+  const permissions = getEffectivePermissions(user);
+  const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+
   return sendSuccess(res, 200, 'Active user session profile retrieved.', {
     user: {
       _id: user._id,
       fullName: user.fullName,
       email: user.email,
       phoneNumber: user.phoneNumber,
+      designation: user.designation || '',
       role: user.role,
+      roleLevel,
       scope: user.scope,
+      permissions,
       status: user.status,
       schoolId: user.schoolId,
       townId: user.townId,
@@ -527,7 +581,6 @@ export const handleForgotPassword = asyncHandler(async (req, res) => {
 
   const user = await User.findOne({ email: normalizedEmail });
   if (!user || user.status !== USER_STATUS.ACTIVE) {
-    // Return positive response to prevent user enumeration attacks
     return sendSuccess(res, 200, `If an active account exists for ${normalizedEmail}, a 6-digit password reset code has been sent.`);
   }
 
@@ -553,19 +606,25 @@ export const handleResetPassword = asyncHandler(async (req, res) => {
   }
 
   user.passwordHash = await hashPassword(newPassword);
+  user.tokenVersion = (user.tokenVersion || 0) + 1; // Invalidate all prior sessions
   await user.save();
 
   // 3. Audit Log
   await AuditLog.create({
     actorId: user._id,
     actorRole: user.role,
+    actorDesignation: user.designation || '',
+    actorName: user.fullName,
     action: 'PASSWORD_RESET_COMPLETED',
     targetModel: 'User',
     targetId: user._id,
+    targetName: user.fullName,
     townId: user.townId,
     schoolId: user.schoolId || null,
+    result: 'SUCCESS',
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
+    requestId: req.headers['x-request-id'] || '',
   });
 
   return sendSuccess(res, 200, 'Password has been successfully updated. You may now sign in with your new password.');

@@ -3,6 +3,7 @@ import healthRoutes from '../healthRoutes.js';
 import authRoutes from '../authRoutes.js';
 import studentRoutes from '../studentRoutes.js';
 import publicRoutes from '../publicRoutes.js';
+import userRoutes from '../userRoutes.js';
 
 const router = express.Router();
 
@@ -11,6 +12,9 @@ router.use('/health', healthRoutes);
 
 // Auth & OTP endpoints
 router.use('/auth', authRoutes);
+
+// User & Role Management endpoints
+router.use('/users', userRoutes);
 
 // Student enrollment & numbering endpoints
 router.use('/students', studentRoutes);

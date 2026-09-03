@@ -1,17 +1,31 @@
 /**
  * Core Application Constants & Enums
  * Education Department Liaquatabad Town Centre (DMC)
+ *
+ * Constitution:
+ * Designation (Civil Title) ≠ Role (System Authority Level) ≠ Permissions ≠ Scope
  */
 
 export const ROLES = Object.freeze({
+  ROOT_ADMIN: 'ROOT_ADMIN',
   SUPER_ADMIN: 'SUPER_ADMIN',
-  DDO: 'DDO',
+  ADMIN: 'ADMIN',
   SUPERVISOR: 'SUPERVISOR',
   HM: 'HM',
-  ASSISTANT_HM: 'ASSISTANT_HM',
   TEACHER: 'TEACHER',
   STUDENT: 'STUDENT',
   PARENT: 'PARENT',
+});
+
+export const ROLE_HIERARCHY = Object.freeze({
+  [ROLES.ROOT_ADMIN]: 100,
+  [ROLES.SUPER_ADMIN]: 90,
+  [ROLES.ADMIN]: 80,
+  [ROLES.SUPERVISOR]: 60,
+  [ROLES.HM]: 50,
+  [ROLES.TEACHER]: 30,
+  [ROLES.STUDENT]: 10,
+  [ROLES.PARENT]: 10,
 });
 
 export const SCOPES = Object.freeze({
@@ -20,7 +34,8 @@ export const SCOPES = Object.freeze({
   ASSIGNED_SCHOOLS: 'ASSIGNED_SCHOOLS',
   SCHOOL: 'SCHOOL',
   CLASS_SECTION: 'CLASS_SECTION',
-  SELF_CHILD: 'SELF_CHILD',
+  SELF: 'SELF',
+  CHILD: 'CHILD',
 });
 
 export const USER_STATUS = Object.freeze({
