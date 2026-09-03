@@ -9,7 +9,7 @@ const TransferRequestSchema = new mongoose.Schema({
   initiatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   initiatorRole: {
     type: String,
-    enum: [ROLES.SUPERVISOR, ROLES.DDO, ROLES.CHAIRMAN, ROLES.VICE_CHAIRMAN],
+    enum: [ROLES.SUPERVISOR, ROLES.DDO, ROLES.SUPER_ADMIN],
     required: true,
   },
 

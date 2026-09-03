@@ -2,11 +2,11 @@ import asyncHandler from 'express-async-handler';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import { requestOtp, verifyOtp } from '../services/otpService.js';
 import { isDisposableEmail } from '../utils/disposableEmailValidator.js';
-import { verifyMathCaptcha } from '../utils/customMathCaptcha.js';
+import { verifyMathCaptcha, generateMathCaptcha } from '../utils/customMathCaptcha.js';
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import { checkEmailLockout, recordFailedLogin, clearLoginLockout } from '../middlewares/tripleLockRateLimiter.js';
 import { hashPassword, verifyPassword } from '../utils/passwordUtils.js';
-import { signAccessToken, signRefreshToken, setRefreshCookie } from '../utils/tokenUtils.js';
+import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken } from '../utils/tokenUtils.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import TeacherProfile from '../models/TeacherProfile.js';
@@ -17,6 +17,15 @@ import AuditLog from '../models/AuditLog.js';
 import { ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS } from '../../config/constants.js';
 
 /**
+ * Generate Math Security CAPTCHA
+ * GET /api/v1/auth/captcha
+ */
+export const handleGetCaptcha = (req, res) => {
+  const captcha = generateMathCaptcha();
+  return sendSuccess(res, 200, 'Security CAPTCHA challenge generated.', captcha);
+};
+
+/**
  * Request OTP verification code
  * POST /api/v1/auth/send-otp
  */
@@ -24,11 +33,11 @@ export const handleSendOtp = asyncHandler(async (req, res) => {
   const { email, purpose = 'REGISTRATION' } = req.body;
 
   if (!email) {
-    return sendError(res, 400, 'Email address is required.');
+    return sendError(res, 400, 'Official email address is required.');
   }
 
   if (isDisposableEmail(email)) {
-    return sendError(res, 400, 'Disposable or temporary email addresses are strictly blocked.');
+    return sendError(res, 400, 'Disposable or temporary email addresses are strictly prohibited.');
   }
 
   const result = await requestOtp(email, purpose);
@@ -43,7 +52,7 @@ export const handleVerifyOtp = asyncHandler(async (req, res) => {
   const { email, otpCode, purpose = 'REGISTRATION' } = req.body;
 
   if (!email || !otpCode) {
-    return sendError(res, 400, 'Email and 6-digit OTP code are required.');
+    return sendError(res, 400, 'Email and 6-digit verification code are required.');
   }
 
   await verifyOtp(email, otpCode, purpose);
@@ -71,7 +80,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     captchaChallengeToken,
   } = req.body;
 
-  // 1. Mandatory Math CAPTCHA validation (if provided in payload)
+  // 1. Math CAPTCHA validation (if provided)
   if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
     return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
   }
@@ -89,7 +98,16 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     return sendError(res, 400, 'An account with this official email already exists.');
   }
 
-  // 4. Resolve default Organization & Town if not provided
+  // 4. Validate school exists and is active (if provided)
+  let validSchool = null;
+  if (schoolId) {
+    validSchool = await School.findById(schoolId);
+    if (!validSchool) {
+      return sendError(res, 400, 'The selected municipal school does not exist.');
+    }
+  }
+
+  // 5. Resolve default Organization & Town
   let defaultOrg = await Organization.findOne({ code: 'DMC_LIAQUATABAD' });
   if (!defaultOrg) {
     defaultOrg = await Organization.create({
@@ -107,12 +125,12 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     });
   }
 
-  // 5. Create User in PENDING_APPROVAL status
-  const passwordHash = await hashPassword(password || 'Student@123456');
+  // 6. Create User in PENDING_APPROVAL status
+  const passwordHash = await hashPassword(password);
   const user = await User.create({
     organizationId: defaultOrg._id,
     townId: defaultTown._id,
-    schoolId: schoolId || null,
+    schoolId: validSchool ? validSchool._id : null,
     fullName,
     email: email.toLowerCase().trim(),
     passwordHash,
@@ -122,10 +140,10 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     status: USER_STATUS.PENDING_APPROVAL,
   });
 
-  // 6. Create StudentProfile
+  // 7. Create StudentProfile in PENDING_APPROVAL status
   await StudentProfile.create({
     userId: user._id,
-    schoolId: schoolId || defaultTown._id,
+    schoolId: validSchool ? validSchool._id : defaultTown._id,
     classId: classId || defaultTown._id,
     sectionId: sectionId || defaultTown._id,
     rollNumber: rollNumber || 'TBD',
@@ -134,7 +152,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     lifecycleStatus: STUDENT_STATUS.PENDING_APPROVAL,
   });
 
-  // 7. Audit Log
+  // 8. Immutable Audit Log
   const deviceFingerprint = generateDeviceFingerprint(req);
   await AuditLog.create({
     actorId: user._id,
@@ -143,8 +161,8 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     targetModel: 'User',
     targetId: user._id,
     townId: defaultTown._id,
-    schoolId: schoolId || null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL },
+    schoolId: validSchool ? validSchool._id : null,
+    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email },
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
   });
@@ -175,7 +193,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     captchaChallengeToken,
   } = req.body;
 
-  // 1. Mandatory Math CAPTCHA validation
+  // 1. Math CAPTCHA validation
   if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
     return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
   }
@@ -190,10 +208,19 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
   // 3. Duplicate check
   const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
   if (existingUser) {
-    return sendError(res, 400, 'A faculty account with this email already exists.');
+    return sendError(res, 400, 'A faculty account with this official email already exists.');
   }
 
-  // 4. Resolve default Organization & Town
+  // 4. Validate school exists
+  let validSchool = null;
+  if (schoolId) {
+    validSchool = await School.findById(schoolId);
+    if (!validSchool) {
+      return sendError(res, 400, 'The selected municipal school does not exist.');
+    }
+  }
+
+  // 5. Resolve default Organization & Town
   let defaultOrg = await Organization.findOne({ code: 'DMC_LIAQUATABAD' });
   if (!defaultOrg) {
     defaultOrg = await Organization.create({
@@ -211,12 +238,12 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     });
   }
 
-  // 5. Create User
+  // 6. Create User in PENDING_APPROVAL status
   const passwordHash = await hashPassword(password);
   const user = await User.create({
     organizationId: defaultOrg._id,
     townId: defaultTown._id,
-    schoolId: schoolId || null,
+    schoolId: validSchool ? validSchool._id : null,
     fullName,
     email: email.toLowerCase().trim(),
     passwordHash,
@@ -226,16 +253,16 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     status: USER_STATUS.PENDING_APPROVAL,
   });
 
-  // 6. Create TeacherProfile
+  // 7. Create TeacherProfile
   await TeacherProfile.create({
     userId: user._id,
-    currentSchoolId: schoolId || defaultTown._id,
+    currentSchoolId: validSchool ? validSchool._id : defaultTown._id,
     designation: designation || 'Teacher',
     qualification: qualification || 'TBD',
     lifecycleStatus: TEACHER_STATUS.PENDING_APPROVAL,
   });
 
-  // 7. Audit Log
+  // 8. Immutable Audit Log
   await AuditLog.create({
     actorId: user._id,
     actorRole: ROLES.TEACHER,
@@ -243,8 +270,8 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     targetModel: 'User',
     targetId: user._id,
     townId: defaultTown._id,
-    schoolId: schoolId || null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL },
+    schoolId: validSchool ? validSchool._id : null,
+    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email },
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
   });
@@ -255,4 +282,291 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     role: user.role,
     status: user.status,
   });
+});
+
+/**
+ * Official Account Sign In (Triple-Lock Rate Limited & Password Protected)
+ * POST /api/v1/auth/login
+ */
+export const handleLogin = asyncHandler(async (req, res) => {
+  const { email, password, captchaAnswer, captchaChallengeToken } = req.body;
+
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // 1. Check Triple-Lock Account Lockout Status
+  const lockoutStatus = await checkEmailLockout(normalizedEmail, req);
+  if (lockoutStatus.locked) {
+    return sendError(
+      res,
+      423,
+      `Account locked due to excessive failed attempts. Please retry in ${lockoutStatus.minutesRemaining} minute(s).`
+    );
+  }
+
+  // 2. Math CAPTCHA verification (if challenge token is provided)
+  if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+    await recordFailedLogin(normalizedEmail, req);
+    return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+  }
+
+  // 3. User Lookup (including passwordHash)
+  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash');
+
+  if (!user) {
+    await recordFailedLogin(normalizedEmail, req);
+    return sendError(res, 401, 'Invalid official email or password.');
+  }
+
+  // 4. Password Verification with Server Pepper
+  const isMatch = await verifyPassword(password, user.passwordHash);
+  if (!isMatch) {
+    const attemptsInfo = await recordFailedLogin(normalizedEmail, req);
+    const remaining = Math.max(0, 5 - (attemptsInfo.failedAttempts || 1));
+    return sendError(
+      res,
+      401,
+      `Invalid official email or password. ${remaining > 0 ? `(${remaining} attempt(s) remaining before security lockout)` : ''}`
+    );
+  }
+
+  // 5. Password Verified — Clear Lockout Counters
+  await clearLoginLockout(normalizedEmail);
+
+  // 6. Account Lifecycle Status Verification
+  if (user.status === USER_STATUS.PENDING_APPROVAL) {
+    return sendError(res, 403, 'Your account is awaiting approval by your Head Master or Administration.');
+  }
+
+  if (user.status === USER_STATUS.SUSPENDED) {
+    return sendError(res, 403, 'Your account is currently suspended. Please contact the Town Education Directorate.');
+  }
+
+  if (user.status === USER_STATUS.TRANSFERRED) {
+    return sendError(res, 403, 'Your account has been transferred. Please report to your destination school Head Master for joining approval.');
+  }
+
+  if (user.status === USER_STATUS.REQUIRES_CORRECTION) {
+    const remarks = user.approvalDetails?.correctionRemarks ? `: ${user.approvalDetails.correctionRemarks}` : '';
+    return sendError(res, 403, `Your profile requires correction${remarks}. Please contact your school administrator.`);
+  }
+
+  if (user.status === USER_STATUS.RETIRED || user.status === USER_STATUS.INACTIVE) {
+    return sendError(res, 403, 'This account is inactive.');
+  }
+
+  // 7. Generate JWT Tokens
+  const tokenPayload = {
+    userId: user._id,
+    role: user.role,
+    scope: user.scope,
+    organizationId: user.organizationId,
+    townId: user.townId,
+    schoolId: user.schoolId,
+    assignedSchools: user.assignedSchools || [],
+  };
+
+  const accessToken = signAccessToken(tokenPayload);
+  const refreshToken = signRefreshToken({ userId: user._id });
+
+  // 8. Set Secure HttpOnly Refresh Cookie
+  setRefreshCookie(res, refreshToken);
+
+  // 9. Record Login Metadata
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  // 10. Write Immutable Audit Log
+  await AuditLog.create({
+    actorId: user._id,
+    actorRole: user.role,
+    action: 'USER_LOGIN_SUCCESS',
+    targetModel: 'User',
+    targetId: user._id,
+    townId: user.townId,
+    schoolId: user.schoolId || null,
+    newState: { lastLoginAt: user.lastLoginAt },
+    ipAddress: req.ip || '',
+    userAgent: req.headers['user-agent'] || '',
+  });
+
+  return sendSuccess(res, 200, 'Authentication successful. Welcome to Liaquatabad Education Portal.', {
+    user: {
+      _id: user._id,
+      fullName: user.fullName,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      scope: user.scope,
+      status: user.status,
+      schoolId: user.schoolId,
+      townId: user.townId,
+      assignedSchools: user.assignedSchools || [],
+    },
+    accessToken,
+  });
+});
+
+/**
+ * Rotate Access Token via HttpOnly Refresh Cookie
+ * POST /api/v1/auth/refresh-token
+ */
+export const handleRefreshToken = asyncHandler(async (req, res) => {
+  const token = req.cookies?.refreshToken || req.body?.refreshToken;
+
+  if (!token) {
+    return sendError(res, 401, 'No active refresh session found. Please sign in again.');
+  }
+
+  let decoded;
+  try {
+    decoded = verifyRefreshToken(token);
+  } catch {
+    clearRefreshCookie(res);
+    return sendError(res, 401, 'Session token expired or invalid. Please sign in again.');
+  }
+
+  const user = await User.findById(decoded.userId);
+  if (!user || user.status !== USER_STATUS.ACTIVE) {
+    clearRefreshCookie(res);
+    return sendError(res, 401, 'Account session revoked or account is no longer active.');
+  }
+
+  // Generate fresh token pair (Rotation)
+  const tokenPayload = {
+    userId: user._id,
+    role: user.role,
+    scope: user.scope,
+    organizationId: user.organizationId,
+    townId: user.townId,
+    schoolId: user.schoolId,
+    assignedSchools: user.assignedSchools || [],
+  };
+
+  const newAccessToken = signAccessToken(tokenPayload);
+  const newRefreshToken = signRefreshToken({ userId: user._id });
+
+  setRefreshCookie(res, newRefreshToken);
+
+  return sendSuccess(res, 200, 'Session token refreshed.', {
+    accessToken: newAccessToken,
+    user: {
+      _id: user._id,
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role,
+      scope: user.scope,
+      status: user.status,
+      schoolId: user.schoolId,
+      townId: user.townId,
+      assignedSchools: user.assignedSchools || [],
+    },
+  });
+});
+
+/**
+ * User Logout & Session Revocation
+ * POST /api/v1/auth/logout
+ */
+export const handleLogout = asyncHandler(async (req, res) => {
+  clearRefreshCookie(res);
+
+  if (req.user && req.user.userId) {
+    await AuditLog.create({
+      actorId: req.user.userId,
+      actorRole: req.user.role,
+      action: 'USER_LOGOUT',
+      targetModel: 'User',
+      targetId: req.user.userId,
+      townId: req.user.townId,
+      schoolId: req.user.schoolId || null,
+      ipAddress: req.ip || '',
+      userAgent: req.headers['user-agent'] || '',
+    });
+  }
+
+  return sendSuccess(res, 200, 'Signed out successfully.');
+});
+
+/**
+ * Get Authenticated User Profile (Hydrate Redux on App Load)
+ * GET /api/v1/auth/me
+ */
+export const handleGetMe = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.userId)
+    .populate('schoolId', 'name schoolCode emisCode')
+    .populate('townId', 'name code');
+
+  if (!user) {
+    return sendError(res, 404, 'User profile not found.');
+  }
+
+  return sendSuccess(res, 200, 'Active user session profile retrieved.', {
+    user: {
+      _id: user._id,
+      fullName: user.fullName,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      scope: user.scope,
+      status: user.status,
+      schoolId: user.schoolId,
+      townId: user.townId,
+      assignedSchools: user.assignedSchools || [],
+      lastLoginAt: user.lastLoginAt,
+    },
+  });
+});
+
+/**
+ * Request Password Reset OTP
+ * POST /api/v1/auth/forgot-password
+ */
+export const handleForgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  const normalizedEmail = email.toLowerCase().trim();
+
+  const user = await User.findOne({ email: normalizedEmail });
+  if (!user || user.status !== USER_STATUS.ACTIVE) {
+    // Return positive response to prevent user enumeration attacks
+    return sendSuccess(res, 200, `If an active account exists for ${normalizedEmail}, a 6-digit password reset code has been sent.`);
+  }
+
+  await requestOtp(normalizedEmail, 'PASSWORD_RESET');
+  return sendSuccess(res, 200, `A 6-digit password reset code has been sent to ${normalizedEmail}.`);
+});
+
+/**
+ * Confirm Password Reset with OTP
+ * POST /api/v1/auth/reset-password
+ */
+export const handleResetPassword = asyncHandler(async (req, res) => {
+  const { email, otpCode, newPassword } = req.body;
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // 1. Verify OTP
+  await verifyOtp(normalizedEmail, otpCode, 'PASSWORD_RESET');
+
+  // 2. Find User & Update Password
+  const user = await User.findOne({ email: normalizedEmail });
+  if (!user) {
+    return sendError(res, 404, 'User account not found.');
+  }
+
+  user.passwordHash = await hashPassword(newPassword);
+  await user.save();
+
+  // 3. Audit Log
+  await AuditLog.create({
+    actorId: user._id,
+    actorRole: user.role,
+    action: 'PASSWORD_RESET_COMPLETED',
+    targetModel: 'User',
+    targetId: user._id,
+    townId: user.townId,
+    schoolId: user.schoolId || null,
+    ipAddress: req.ip || '',
+    userAgent: req.headers['user-agent'] || '',
+  });
+
+  return sendSuccess(res, 200, 'Password has been successfully updated. You may now sign in with your new password.');
 });

@@ -19,8 +19,6 @@ import { hashPassword } from '../utils/passwordUtils.js';
 // Roles authorized to enroll students
 const ENROLLMENT_ALLOWED_ROLES = new Set([
   ROLES.SUPER_ADMIN,
-  ROLES.CHAIRMAN,
-  ROLES.VICE_CHAIRMAN,
   ROLES.DDO,
   ROLES.SUPERVISOR,
   ROLES.HM,
@@ -30,8 +28,6 @@ const ENROLLMENT_ALLOWED_ROLES = new Set([
 // Roles authorized to set school code
 const SCHOOL_CODE_ALLOWED_ROLES = new Set([
   ROLES.SUPER_ADMIN,
-  ROLES.CHAIRMAN,
-  ROLES.VICE_CHAIRMAN,
   ROLES.DDO,
   ROLES.SUPERVISOR,
   ROLES.HM,

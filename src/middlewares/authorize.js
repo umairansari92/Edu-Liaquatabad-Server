@@ -20,8 +20,8 @@ export const enforceSchoolScope = (req, res, next) => {
     return sendError(res, 401, 'Unauthorized.');
   }
 
-  // Super Admin, Chairman, VC, and DDO have Town/Global scope
-  if ([ROLES.SUPER_ADMIN, ROLES.CHAIRMAN, ROLES.VICE_CHAIRMAN, ROLES.DDO].includes(req.user.role)) {
+  // Super Admin and DDO have Town/Global scope
+  if ([ROLES.SUPER_ADMIN, ROLES.DDO].includes(req.user.role)) {
     return next();
   }
 

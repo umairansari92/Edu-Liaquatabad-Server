@@ -5,8 +5,6 @@
 
 export const ROLES = Object.freeze({
   SUPER_ADMIN: 'SUPER_ADMIN',
-  CHAIRMAN: 'CHAIRMAN',
-  VICE_CHAIRMAN: 'VICE_CHAIRMAN',
   DDO: 'DDO',
   SUPERVISOR: 'SUPERVISOR',
   HM: 'HM',

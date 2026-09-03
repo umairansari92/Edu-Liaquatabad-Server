@@ -9,7 +9,7 @@ const SchoolSchema = new mongoose.Schema({
   /**
    * schoolCode — Short unique abbreviation used as prefix for global student IDs.
    * e.g. 'MMHA' → student gets 'MMHA-0001', 'MMHA-0002' ...
-   * Can ONLY be set/changed by: HM, SUPERVISOR, DDO, VICE_CHAIRMAN, CHAIRMAN, SUPER_ADMIN
+   * Can ONLY be set/changed by: HM, SUPERVISOR, DDO, SUPER_ADMIN
    */
   schoolCode: {
     type: String,
