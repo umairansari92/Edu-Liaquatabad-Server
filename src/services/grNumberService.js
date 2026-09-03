@@ -27,7 +27,7 @@ import StudentProfile from '../models/StudentProfile.js';
  * Uses atomic MongoDB $inc to prevent race conditions in concurrent requests.
  *
  * @param {string} schoolId - MongoDB ObjectId of the school
- * @returns {number} - The next GR number (e.g. 127)
+ * @returns {Promise<number>} - The next GR number (e.g. 127)
  */
 export const generateNextGrNumber = async (schoolId) => {
   const updated = await School.findByIdAndUpdate(
@@ -48,7 +48,7 @@ export const generateNextGrNumber = async (schoolId) => {
  * Used by the HM enrollment form to show a suggested GR number.
  *
  * @param {string} schoolId
- * @returns {number} - The suggested next GR number (lastGrNumber + 1)
+ * @returns {Promise<number>} - The suggested next GR number (lastGrNumber + 1)
  */
 export const previewNextGrNumber = async (schoolId) => {
   const school = await School.findById(schoolId).select('lastGrNumber');
@@ -62,6 +62,7 @@ export const previewNextGrNumber = async (schoolId) => {
  *
  * @param {string} schoolId
  * @param {number} grNumber
+ * @returns {Promise<void>}
  * @throws Error if GR number is already taken in this school
  */
 export const validateManualGrNumber = async (schoolId, grNumber) => {
@@ -79,6 +80,7 @@ export const validateManualGrNumber = async (schoolId, grNumber) => {
  *
  * @param {string} schoolId
  * @param {number} manualGrNumber - The GR number that was just manually entered
+ * @returns {Promise<void>}
  */
 export const syncGrCounterIfNeeded = async (schoolId, manualGrNumber) => {
   await School.findByIdAndUpdate(schoolId, [
@@ -106,7 +108,7 @@ export const syncGrCounterIfNeeded = async (schoolId, manualGrNumber) => {
  * Returns null if the school has no schoolCode assigned yet (deferred until configured).
  *
  * @param {string} schoolId
- * @returns {string|null} - e.g. 'MMHA-0127' or null if schoolCode not set
+ * @returns {Promise<string|null>} - e.g. 'MMHA-0127' or null if schoolCode not set
  */
 export const generateGlobalStudentId = async (schoolId) => {
   const school = await School.findById(schoolId).select('schoolCode lastGlobalSequence');
@@ -130,7 +132,7 @@ export const generateGlobalStudentId = async (schoolId) => {
  * Run this AFTER a school code is first assigned by an admin.
  *
  * @param {string} schoolId
- * @returns {number} - count of students updated
+ * @returns {Promise<number>} - count of students updated
  */
 export const backfillGlobalStudentIds = async (schoolId) => {
   const school = await School.findById(schoolId).select('schoolCode');
