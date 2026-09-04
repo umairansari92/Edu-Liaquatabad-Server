@@ -69,10 +69,17 @@ const rollNumberField = z
   .max(20, 'Roll number too long')
   .regex(/^[A-Za-z0-9\-\/]+$/, 'Roll number may only contain letters, numbers, hyphens, or slashes');
 
-// ─── Auth Schemas ──────────────────────────────────────────────────────────────
+const loginIdentifierField = z
+  .string()
+  .trim()
+  .min(1, 'Email or GR Number is required')
+  .max(254, 'Identifier is too long')
+  .refine((val) => !SCRIPT_INJECTION_REGEX.test(val), {
+    message: 'Identifier contains disallowed patterns.',
+  });
 
 export const loginSchema = z.object({
-  email: emailField,
+  email: loginIdentifierField,
   password: z.string().min(1, 'Password is required').max(128, 'Password too long'),
   captchaAnswer: z.union([z.string(), z.number()]).optional(),
   captchaChallengeToken: z.string().trim().optional(),
@@ -97,17 +104,19 @@ export const verifyOtpSchema = z.object({
 
 export const registerStudentSchema = z.object({
   fullName: nameField('Full Name'),
-  email: emailField,
-  password: passwordField,
   fatherOrGuardianName: nameField('Father/Guardian Name'),
-  guardianContactNumber: phoneField,
-  rollNumber: rollNumberField,
-  className: safeString(50, 1, 'Class is required'),
-  sectionName: safeString(10, 1, 'Section is required'),
   schoolId: z.string().trim().max(100).optional(),
+  grNumber: z.union([z.string().trim().min(1, 'GR Number is required').max(50), z.number()]).optional(),
+  rollNumber: z.string().trim().max(50).optional(),
+  password: passwordField,
+  confirmPassword: z.string().min(1, 'Confirm password is required').optional(),
+  email: emailField.optional().or(z.literal('')),
+  className: safeString(50, 0).optional(),
+  sectionName: safeString(10, 0).optional(),
+  guardianContactNumber: phoneField.optional().or(z.literal('')),
   classId: z.string().trim().max(100).optional(),
   sectionId: z.string().trim().max(100).optional(),
-  otpCode: otpField,
+  otpCode: otpField.optional().or(z.literal('')),
   captchaAnswer: z.string().trim().optional(),
   captchaChallengeToken: z.string().trim().optional(),
   _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot

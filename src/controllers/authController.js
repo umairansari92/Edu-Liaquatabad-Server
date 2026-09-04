@@ -67,13 +67,14 @@ export const handleVerifyOtp = asyncHandler(async (req, res) => {
 export const handleRegisterStudent = asyncHandler(async (req, res) => {
   const {
     fullName,
-    email,
-    password,
-    phoneNumber,
     fatherOrGuardianName,
-    guardianContactNumber,
-    rollNumber,
     schoolId,
+    grNumber,
+    rollNumber,
+    password,
+    email,
+    phoneNumber,
+    guardianContactNumber,
     classId,
     sectionId,
     otpCode,
@@ -81,36 +82,28 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     captchaChallengeToken,
   } = req.body;
 
-  // 1. Math CAPTCHA validation
+  const rawGr = (grNumber || rollNumber || '').toString().trim();
+  if (!rawGr) {
+    return sendError(res, 400, 'GR Number is required for student registration.');
+  }
+
+  // 1. Math CAPTCHA validation (if provided)
   if (captchaChallengeToken || captchaAnswer) {
     if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
       return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
     }
   }
 
-  // 2. Mandatory OTP verification before account creation
-  if (!otpCode) {
-    return sendError(res, 400, 'Mandatory 6-digit OTP verification code is required to complete registration.');
-  }
-
-  await verifyOtp(email, otpCode, 'REGISTRATION');
-
-  // 3. Prevent duplicate email
-  const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-  if (existingUser) {
-    return sendError(res, 400, 'An account with this official email already exists.');
-  }
-
-  // 4. Validate school exists and is active (if provided)
+  // 2. Validate school exists and is active (if provided)
   let validSchool = null;
   if (schoolId) {
     validSchool = await School.findById(schoolId);
     if (!validSchool) {
-      return sendError(res, 400, 'The selected municipal school does not exist.');
+      return sendError(res, 400, 'The selected school does not exist.');
     }
   }
 
-  // 5. Resolve default Organization & Town
+  // 3. Resolve default Organization & Town
   let defaultOrg = await Organization.findOne({ code: 'DMC_LIAQUATABAD' });
   if (!defaultOrg) {
     defaultOrg = await Organization.create({
@@ -128,6 +121,37 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     });
   }
 
+  // 4. Determine student email / unique identifier handle
+  let studentEmail = email ? email.toLowerCase().trim() : '';
+  if (!studentEmail) {
+    const schoolCodeClean = validSchool?.code ? validSchool.code.toLowerCase().replace(/[^a-z0-9]/g, '') : 'dmc';
+    const grClean = rawGr.toLowerCase().replace(/[^a-z0-9]/g, '');
+    studentEmail = `gr-${grClean}.${schoolCodeClean}@student.liaquatabad-schools.gov.pk`;
+  }
+
+  // 5. Prevent duplicate email or duplicate GR number in the same school
+  const existingUser = await User.findOne({ email: studentEmail });
+  if (existingUser) {
+    return sendError(res, 400, 'An account with this GR Number or email already exists.');
+  }
+
+  const parsedGrNumber = parseInt(rawGr.replace(/\D/g, ''), 10) || Math.floor(1000 + Math.random() * 9000);
+
+  if (validSchool) {
+    const existingProfile = await StudentProfile.findOne({
+      schoolId: validSchool._id,
+      grNumber: parsedGrNumber,
+    });
+    if (existingProfile) {
+      return sendError(res, 400, `A student with GR Number ${rawGr} is already registered in this school.`);
+    }
+  }
+
+  // Optional OTP verification if otpCode was supplied
+  if (otpCode && email) {
+    await verifyOtp(email, otpCode, 'REGISTRATION');
+  }
+
   // 6. Create User in PENDING_APPROVAL status (role locked to STUDENT)
   const passwordHash = await hashPassword(password);
   const user = await User.create({
@@ -135,7 +159,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
     fullName,
-    email: email.toLowerCase().trim(),
+    email: studentEmail,
     passwordHash,
     phoneNumber: phoneNumber || guardianContactNumber || '',
     designation: 'Enrolled Student',
@@ -151,7 +175,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     schoolId: validSchool ? validSchool._id : defaultTown._id,
     classId: classId || defaultTown._id,
     sectionId: sectionId || defaultTown._id,
-    rollNumber: rollNumber || 'TBD',
+    grNumber: parsedGrNumber,
     fatherOrGuardianName: fatherOrGuardianName || 'TBD',
     guardianContactNumber: guardianContactNumber || phoneNumber || 'TBD',
     lifecycleStatus: STUDENT_STATUS.PENDING_APPROVAL,
@@ -163,22 +187,23 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     actorRole: ROLES.STUDENT,
     actorDesignation: 'Enrolled Student',
     actorName: user.fullName,
-    action: 'STUDENT_REGISTERED_OTP_VERIFIED',
+    action: 'STUDENT_REGISTERED_PENDING_APPROVAL',
     targetModel: 'User',
     targetId: user._id,
     targetName: user.fullName,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email, role: user.role },
+    newState: { status: USER_STATUS.PENDING_APPROVAL, grNumber: rawGr, role: user.role },
     result: 'SUCCESS',
     ipAddress: req.ip || '',
     userAgent: req.headers['user-agent'] || '',
     requestId: req.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 201, 'Student account registered and email verified. Your profile is now awaiting Head Master (HM) approval.', {
+  return sendSuccess(res, 201, 'Student registration submitted successfully. Your profile is now awaiting Head Master (HM) approval.', {
     userId: user._id,
-    email: user.email,
+    email: studentEmail,
+    grNumber: rawGr,
     role: user.role,
     status: user.status,
   });
@@ -331,11 +356,20 @@ export const handleLogin = asyncHandler(async (req, res) => {
   }
 
   // 3. User Lookup (including passwordHash, refreshTokenHash & tokenVersion)
-  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +tokenVersion');
+  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +tokenVersion');
+
+  if (!user && !normalizedEmail.includes('@')) {
+    const parsedGr = parseInt(normalizedEmail.replace(/\D/g, ''), 10);
+    const grQuery = parsedGr ? { $in: [parsedGr, normalizedEmail] } : normalizedEmail;
+    const profile = await StudentProfile.findOne({ grNumber: grQuery });
+    if (profile) {
+      user = await User.findById(profile.userId).select('+passwordHash +refreshTokenHash +tokenVersion');
+    }
+  }
 
   if (!user) {
     await recordFailedLogin(normalizedEmail, clientIp);
-    return sendError(res, 401, 'Invalid official email or password.');
+    return sendError(res, 401, 'Invalid official email, GR number, or password.');
   }
 
   // 4. Password Verification with Server Pepper (Uniform error message prevents account enumeration)
