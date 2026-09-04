@@ -1,9 +1,13 @@
 /**
- * Emergency Break-Glass Root Admin Recovery Script
+ * Emergency Break-Glass ROOT_ADMIN Recovery Script
  * Education Department Liaquatabad Town Centre (DMC)
  *
+ * ROOT_ADMIN (Level 100) is the supreme platform authority.
+ * It is ONLY provisioned via this CLI script — never through the web portal.
+ * This script is for emergency recovery when SUPER_ADMIN accounts are locked out.
+ *
  * Usage:
- * node scripts/breakGlassRecovery.js <root_admin_email> <new_password>
+ * node scripts/breakGlassRecovery.js <email> <new_password>
  */
 
 import dotenv from 'dotenv';
@@ -49,7 +53,7 @@ async function executeBreakGlass() {
     // Elevate and reset existing account to ROOT_ADMIN
     rootUser.role = ROLES.ROOT_ADMIN;
     rootUser.scope = SCOPES.GLOBAL;
-    rootUser.designation = 'Supreme Platform Authority (Break-Glass)';
+    rootUser.designation = 'Platform Root Administrator (Break-Glass Recovery)';
     rootUser.status = USER_STATUS.ACTIVE;
     rootUser.passwordHash = passwordHash;
     rootUser.tokenVersion = (rootUser.tokenVersion || 0) + 1;
@@ -77,9 +81,9 @@ async function executeBreakGlass() {
     rootUser = await User.create({
       organizationId: org._id,
       townId: town._id,
-      fullName: 'System Root Administrator',
+      fullName: 'Platform Root Administrator',
       email: normalizedEmail,
-      designation: 'Supreme Platform Authority (Break-Glass)',
+      designation: 'Platform Root Administrator (Break-Glass Recovery)',
       role: ROLES.ROOT_ADMIN,
       scope: SCOPES.GLOBAL,
       status: USER_STATUS.ACTIVE,

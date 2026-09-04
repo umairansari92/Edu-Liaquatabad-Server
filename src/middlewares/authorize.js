@@ -30,7 +30,7 @@ export const enforceSchoolScope = (req, res, next) => {
     return sendError(res, 401, 'Unauthorized.');
   }
 
-  // ROOT_ADMIN, SUPER_ADMIN, and ADMIN have Global/Town scope
+  // ROOT_ADMIN, SUPER_ADMIN, and ADMIN have Global/Town scope — bypass school boundary checks
   if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(req.user.role)) {
     return next();
   }

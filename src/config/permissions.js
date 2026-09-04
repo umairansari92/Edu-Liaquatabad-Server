@@ -1,60 +1,85 @@
 /**
  * Master Permissions & Capability Registry
  * Education Department Liaquatabad Town Centre (DMC)
+ *
+ * Role Table (8 Fixed Roles):
+ *   ROOT_ADMIN(100) > SUPER_ADMIN(90) > ADMIN(80) > SUPERVISOR(60) > HM(50) > TEACHER(30) > STUDENT(10) | PARENT(10)
+ *
+ * DESIGNATION MAPPING EXAMPLES (Designation → Role):
+ *   "Town Chairman"           → SUPER_ADMIN
+ *   "Vice Chairman"           → SUPER_ADMIN or ADMIN
+ *   "Deputy Director (DDO)"   → ADMIN
+ *   "Education Officer"       → SUPERVISOR
+ *   "Head Master"             → HM
+ *   "Assistant Head Master"   → HM
+ *
+ * DO NOT add DDO, Chairman, Vice Chairman as roles.
+ * They are civil designations assigned at the User level.
  */
 
-import { ROLES, ROLE_HIERARCHY } from '../../config/constants.js';
+import { ROLES } from '../../config/constants.js';
+
+// ─── Permission Keys ──────────────────────────────────────────────────────────
 
 export const PERMISSIONS = Object.freeze({
   // User & Administrative Governance
-  USERS_VIEW: 'users.view',
-  USERS_CREATE: 'users.create',
-  USERS_UPDATE: 'users.update',
-  USERS_SUSPEND: 'users.suspend',
-  USERS_ASSIGN_ROLE: 'users.assign_role',
+  USERS_VIEW:               'users.view',
+  USERS_CREATE:             'users.create',
+  USERS_UPDATE:             'users.update',
+  USERS_SUSPEND:            'users.suspend',
+  USERS_ASSIGN_ROLE:        'users.assign_role',
   USERS_ASSIGN_DESIGNATION: 'users.assign_designation',
-  USERS_APPROVE: 'users.approve',
+  USERS_APPROVE:            'users.approve',
 
   // School Institutional Management
-  SCHOOLS_VIEW: 'schools.view',
-  SCHOOLS_CREATE: 'schools.create',
-  SCHOOLS_UPDATE: 'schools.update',
+  SCHOOLS_VIEW:     'schools.view',
+  SCHOOLS_CREATE:   'schools.create',
+  SCHOOLS_UPDATE:   'schools.update',
   SCHOOLS_SET_CODE: 'schools.set_code',
 
   // Attendance Operations
-  ATTENDANCE_VIEW: 'attendance.view',
-  ATTENDANCE_MARK: 'attendance.mark',
+  ATTENDANCE_VIEW:   'attendance.view',
+  ATTENDANCE_MARK:   'attendance.mark',
   ATTENDANCE_VERIFY: 'attendance.verify',
 
   // Academic & Examinations
-  EXAMS_VIEW: 'exams.view',
-  EXAMS_CREATE: 'exams.create',
+  EXAMS_VIEW:        'exams.view',
+  EXAMS_CREATE:      'exams.create',
   EXAMS_ENTER_MARKS: 'exams.enter_marks',
-  EXAMS_VERIFY: 'exams.verify',
+  EXAMS_VERIFY:      'exams.verify',
 
   // Faculty Transfers
-  TRANSFERS_VIEW: 'transfers.view',
-  TRANSFERS_INITIATE: 'transfers.initiate',
-  TRANSFERS_APPROVE_JOINING: 'transfers.approve_joining',
+  TRANSFERS_VIEW:               'transfers.view',
+  TRANSFERS_INITIATE:           'transfers.initiate',
+  TRANSFERS_APPROVE_JOINING:    'transfers.approve_joining',
   TRANSFERS_EMERGENCY_OVERRIDE: 'transfers.emergency_override',
 
   // Official Documents & Circulars
-  DOCUMENTS_VIEW: 'documents.view',
+  DOCUMENTS_VIEW:    'documents.view',
   DOCUMENTS_PUBLISH: 'documents.publish',
-  DOCUMENTS_DELETE: 'documents.delete',
+  DOCUMENTS_DELETE:  'documents.delete',
 
   // Audit Logs & Security Telemetry
   AUDIT_VIEW: 'audit.view',
 });
 
+// ─── Role Default Permissions ─────────────────────────────────────────────────
+
 /**
- * Base Permissions intrinsically granted by Role
+ * Base permissions intrinsically granted by Role.
+ * These are the floor — cannot be removed from a role.
  */
 export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
+
+  // ROOT_ADMIN: Supreme platform authority — all permissions
   [ROLES.ROOT_ADMIN]: Object.values(PERMISSIONS),
 
+  // SUPER_ADMIN: Town/Global authority — all permissions
+  // e.g., Town Chairman holds SUPER_ADMIN role
   [ROLES.SUPER_ADMIN]: Object.values(PERMISSIONS),
 
+  // ADMIN: Town administrative governance
+  // e.g., Deputy Director (DDO) holds ADMIN role
   [ROLES.ADMIN]: [
     PERMISSIONS.USERS_VIEW,
     PERMISSIONS.USERS_CREATE,
@@ -73,15 +98,20 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.TRANSFERS_EMERGENCY_OVERRIDE,
     PERMISSIONS.DOCUMENTS_VIEW,
     PERMISSIONS.DOCUMENTS_PUBLISH,
+    PERMISSIONS.DOCUMENTS_DELETE,
     PERMISSIONS.AUDIT_VIEW,
   ],
 
+  // SUPERVISOR: Field oversight across assigned schools
+  // e.g., Education Officer holds SUPERVISOR role
   [ROLES.SUPERVISOR]: [
     PERMISSIONS.USERS_VIEW,
     PERMISSIONS.SCHOOLS_VIEW,
     PERMISSIONS.ATTENDANCE_VIEW,
+    PERMISSIONS.ATTENDANCE_VERIFY,
     PERMISSIONS.EXAMS_VIEW,
     PERMISSIONS.EXAMS_CREATE,
+    PERMISSIONS.EXAMS_VERIFY,
     PERMISSIONS.TRANSFERS_VIEW,
     PERMISSIONS.TRANSFERS_INITIATE,
     PERMISSIONS.DOCUMENTS_VIEW,
@@ -89,9 +119,12 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.AUDIT_VIEW,
   ],
 
+  // HM: School authority
+  // e.g., Head Master or Assistant Head Master holds HM role
   [ROLES.HM]: [
     PERMISSIONS.USERS_VIEW,
     PERMISSIONS.USERS_APPROVE,
+    PERMISSIONS.USERS_UPDATE,
     PERMISSIONS.SCHOOLS_VIEW,
     PERMISSIONS.SCHOOLS_UPDATE,
     PERMISSIONS.SCHOOLS_SET_CODE,
@@ -106,6 +139,7 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_PUBLISH,
   ],
 
+  // TEACHER: Class/section operational authority
   [ROLES.TEACHER]: [
     PERMISSIONS.SCHOOLS_VIEW,
     PERMISSIONS.ATTENDANCE_VIEW,
@@ -115,12 +149,14 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_VIEW,
   ],
 
+  // STUDENT: Read-only access to own records
   [ROLES.STUDENT]: [
     PERMISSIONS.ATTENDANCE_VIEW,
     PERMISSIONS.EXAMS_VIEW,
     PERMISSIONS.DOCUMENTS_VIEW,
   ],
 
+  // PARENT: Read-only access to child's records
   [ROLES.PARENT]: [
     PERMISSIONS.ATTENDANCE_VIEW,
     PERMISSIONS.EXAMS_VIEW,
@@ -128,47 +164,66 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
   ],
 });
 
+// ─── Permission Ceiling Enforcement ──────────────────────────────────────────
+
 /**
- * Permissions strictly forbidden from being granted to lower roles via customPermissions
- * (Permission Ceiling Enforcement)
+ * Permissions that CANNOT be granted to a role even via customPermissions.
+ * This is the security ceiling — prevents privilege escalation attacks.
  */
 export const ROLE_PERMISSION_CEILING = Object.freeze({
-  [ROLES.TEACHER]: [
+  // ADMIN cannot assign system roles — that is SUPER_ADMIN/ROOT_ADMIN authority only
+  [ROLES.ADMIN]: [
     PERMISSIONS.USERS_ASSIGN_ROLE,
-    PERMISSIONS.USERS_SUSPEND,
-    PERMISSIONS.TRANSFERS_EMERGENCY_OVERRIDE,
-    PERMISSIONS.AUDIT_VIEW,
   ],
-  [ROLES.STUDENT]: Object.values(PERMISSIONS).filter(
-    (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)
-  ),
-  [ROLES.PARENT]: Object.values(PERMISSIONS).filter(
-    (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)
-  ),
+
+  [ROLES.SUPERVISOR]: [
+    PERMISSIONS.USERS_ASSIGN_ROLE,
+    PERMISSIONS.USERS_CREATE,
+    PERMISSIONS.TRANSFERS_EMERGENCY_OVERRIDE,
+    PERMISSIONS.SCHOOLS_CREATE,
+  ],
+
   [ROLES.HM]: [
     PERMISSIONS.USERS_ASSIGN_ROLE,
     PERMISSIONS.TRANSFERS_EMERGENCY_OVERRIDE,
     PERMISSIONS.AUDIT_VIEW,
+    PERMISSIONS.SCHOOLS_CREATE,
   ],
-  [ROLES.SUPERVISOR]: [
+
+  [ROLES.TEACHER]: [
     PERMISSIONS.USERS_ASSIGN_ROLE,
+    PERMISSIONS.USERS_SUSPEND,
+    PERMISSIONS.USERS_CREATE,
+    PERMISSIONS.USERS_APPROVE,
     PERMISSIONS.TRANSFERS_EMERGENCY_OVERRIDE,
+    PERMISSIONS.TRANSFERS_INITIATE,
+    PERMISSIONS.TRANSFERS_APPROVE_JOINING,
+    PERMISSIONS.AUDIT_VIEW,
+    PERMISSIONS.SCHOOLS_CREATE,
+    PERMISSIONS.SCHOOLS_UPDATE,
+    PERMISSIONS.SCHOOLS_SET_CODE,
   ],
-  [ROLES.ADMIN]: [
-    PERMISSIONS.USERS_ASSIGN_ROLE, // Role elevation reserved for Super Admin & Root Admin
-  ],
+
+  [ROLES.STUDENT]: Object.values(PERMISSIONS).filter(
+    (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)
+  ),
+
+  [ROLES.PARENT]: Object.values(PERMISSIONS).filter(
+    (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)
+  ),
 });
 
+// ─── Utility Functions ────────────────────────────────────────────────────────
+
 /**
- * Validates whether proposed custom permissions exceed the role's allowed ceiling
- * @param {string} role 
- * @param {string[]} customPermissions 
+ * Validates whether proposed custom permissions exceed the role's allowed ceiling.
+ * @param {string} role
+ * @param {string[]} customPermissions
  * @returns {{ valid: boolean, forbiddenPermissions: string[] }}
  */
 export const validatePermissionCeiling = (role, customPermissions = []) => {
   const forbiddenList = ROLE_PERMISSION_CEILING[role] || [];
   const violations = customPermissions.filter((p) => forbiddenList.includes(p));
-
   return {
     valid: violations.length === 0,
     forbiddenPermissions: violations,
@@ -176,8 +231,9 @@ export const validatePermissionCeiling = (role, customPermissions = []) => {
 };
 
 /**
- * Resolves the complete set of effective permissions for a user
- * @param {Object} user 
+ * Resolves the complete set of effective permissions for a user.
+ * Merges role defaults with safe custom permissions (ceiling-filtered).
+ * @param {Object} user
  * @returns {string[]}
  */
 export const getEffectivePermissions = (user) => {
@@ -185,7 +241,7 @@ export const getEffectivePermissions = (user) => {
   const defaultPerms = ROLE_DEFAULT_PERMISSIONS[user.role] || [];
   const customPerms = Array.isArray(user.customPermissions) ? user.customPermissions : [];
 
-  // Filter out any custom permissions that violate ceiling
+  // Strip any ceiling violations from custom permissions
   const ceilingForbidden = new Set(ROLE_PERMISSION_CEILING[user.role] || []);
   const safeCustomPerms = customPerms.filter((p) => !ceilingForbidden.has(p));
 

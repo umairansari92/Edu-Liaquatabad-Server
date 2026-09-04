@@ -55,7 +55,7 @@ async function runAuthSuite() {
   console.log('\n--- 2. JWT Token Issuance & Claim Payload ---');
   const mockClaims = {
     userId: '60d0fe4f5311236168a109ca',
-    role: ROLES.DDO,
+    role: ROLES.ADMIN,            // ADMIN role (e.g., assigned to someone with DDO designation)
     scope: SCOPES.TOWN,
     organizationId: '60d0fe4f5311236168a109cb',
     townId: '60d0fe4f5311236168a109cc',
@@ -64,7 +64,7 @@ async function runAuthSuite() {
   const accessToken = signAccessToken(mockClaims);
   const decodedAccess = verifyAccessToken(accessToken);
   assert(decodedAccess.userId === mockClaims.userId, 'Access token contains correct userId claim');
-  assert(decodedAccess.role === ROLES.DDO, 'Access token contains correct role (DDO)');
+  assert(decodedAccess.role === ROLES.ADMIN, 'Access token contains ADMIN role (DDO is a designation, ADMIN is the role)');
   assert(decodedAccess.scope === SCOPES.TOWN, 'Access token contains correct scope (TOWN)');
 
   const refreshToken = signRefreshToken({ userId: mockClaims.userId });
@@ -104,20 +104,21 @@ async function runAuthSuite() {
   assert(!invalidEmail.success, 'Script injection in email is strictly rejected by schema');
 
   // 6. Role Matrix & Scope Completeness Check
-  console.log('\n--- 6. 8-Role Definitive System Hierarchy ---');
+  console.log('\n--- 6. 8-Role Definitive System Hierarchy (Designation ≠ Role) ---');
+  // CORRECT final 8 roles — DDO is a designation, ADMIN is the role
   const expectedRoles = [
-    ROLES.SUPER_ADMIN,
-    ROLES.DDO,
-    ROLES.SUPERVISOR,
-    ROLES.HM,
-    ROLES.ASSISTANT_HM,
-    ROLES.TEACHER,
-    ROLES.STUDENT,
-    ROLES.PARENT,
+    ROLES.ROOT_ADMIN,   // Level 100 — CLI-only emergency
+    ROLES.SUPER_ADMIN,  // Level 90  — e.g., Town Chairman designation
+    ROLES.ADMIN,        // Level 80  — e.g., DDO designation
+    ROLES.SUPERVISOR,   // Level 60  — e.g., Education Officer designation
+    ROLES.HM,           // Level 50  — e.g., Head Master / Asst. Head Master designation
+    ROLES.TEACHER,      // Level 30
+    ROLES.STUDENT,      // Level 10
+    ROLES.PARENT,       // Level 10
   ];
   assert(Object.values(ROLES).length === 8, 'Exact 8 system roles codified in constants');
   expectedRoles.forEach((role) => {
-    assert(Object.values(ROLES).includes(role), `Role ${role} is verified`);
+    assert(Object.values(ROLES).includes(role), `Role ${role} is verified in constants`);
   });
 
   // 7. Account Lifecycle States Check
