@@ -74,6 +74,8 @@ const rollNumberField = z
 export const loginSchema = z.object({
   email: emailField,
   password: z.string().min(1, 'Password is required').max(128, 'Password too long'),
+  captchaAnswer: z.union([z.string(), z.number()]).optional(),
+  captchaChallengeToken: z.string().trim().optional(),
   _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
 });
 

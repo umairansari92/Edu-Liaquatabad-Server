@@ -6,7 +6,7 @@ import { verifyMathCaptcha, generateMathCaptcha } from '../utils/customMathCaptc
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import { checkEmailLockout, recordFailedLogin, clearLoginLockout } from '../middlewares/tripleLockRateLimiter.js';
 import { hashPassword, verifyPassword } from '../utils/passwordUtils.js';
-import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken } from '../utils/tokenUtils.js';
+import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken, hashToken } from '../utils/tokenUtils.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import TeacherProfile from '../models/TeacherProfile.js';
@@ -82,8 +82,10 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
   } = req.body;
 
   // 1. Math CAPTCHA validation
-  if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
-    return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+  if (captchaChallengeToken || captchaAnswer) {
+    if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+      return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+    }
   }
 
   // 2. Mandatory OTP verification before account creation
@@ -201,8 +203,10 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
   } = req.body;
 
   // 1. Math CAPTCHA validation
-  if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
-    return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+  if (captchaChallengeToken || captchaAnswer) {
+    if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+      return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+    }
   }
 
   // 2. Mandatory OTP verification before account creation
@@ -306,9 +310,10 @@ export const handleLogin = asyncHandler(async (req, res) => {
   const { email, password, captchaAnswer, captchaChallengeToken } = req.body;
 
   const normalizedEmail = email.toLowerCase().trim();
+  const clientIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '0.0.0.0';
 
   // 1. Check Triple-Lock Account Lockout Status
-  const lockoutStatus = await checkEmailLockout(normalizedEmail, req);
+  const lockoutStatus = await checkEmailLockout(normalizedEmail, clientIp);
   if (lockoutStatus.locked) {
     return sendError(
       res,
@@ -317,30 +322,27 @@ export const handleLogin = asyncHandler(async (req, res) => {
     );
   }
 
-  // 2. Math CAPTCHA verification (if challenge token is provided)
-  if (captchaChallengeToken && !verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
-    await recordFailedLogin(normalizedEmail, req);
-    return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+  // 2. Math CAPTCHA verification
+  if (captchaChallengeToken || captchaAnswer) {
+    if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+      await recordFailedLogin(normalizedEmail, clientIp);
+      return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+    }
   }
 
-  // 3. User Lookup (including passwordHash & tokenVersion)
+  // 3. User Lookup (including passwordHash, refreshTokenHash & tokenVersion)
   const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +tokenVersion');
 
   if (!user) {
-    await recordFailedLogin(normalizedEmail, req);
+    await recordFailedLogin(normalizedEmail, clientIp);
     return sendError(res, 401, 'Invalid official email or password.');
   }
 
-  // 4. Password Verification with Server Pepper
+  // 4. Password Verification with Server Pepper (Uniform error message prevents account enumeration)
   const isMatch = await verifyPassword(password, user.passwordHash);
   if (!isMatch) {
-    const attemptsInfo = await recordFailedLogin(normalizedEmail, req);
-    const remaining = Math.max(0, 5 - (attemptsInfo.failedAttempts || 1));
-    return sendError(
-      res,
-      401,
-      `Invalid official email or password. ${remaining > 0 ? `(${remaining} attempt(s) remaining before security lockout)` : ''}`
-    );
+    await recordFailedLogin(normalizedEmail, clientIp);
+    return sendError(res, 401, 'Invalid official email or password.');
   }
 
   // 5. Password Verified — Clear Lockout Counters
@@ -388,12 +390,13 @@ export const handleLogin = asyncHandler(async (req, res) => {
   const accessToken = signAccessToken(tokenPayload);
   const refreshToken = signRefreshToken({ userId: user._id, tokenVersion: user.tokenVersion || 0 });
 
-  // 8. Set Secure HttpOnly Refresh Cookie
-  setRefreshCookie(res, refreshToken);
-
-  // 9. Record Login Metadata
+  // Store SHA-256 hash of active refresh token on user for reuse detection
+  user.refreshTokenHash = hashToken(refreshToken);
   user.lastLoginAt = new Date();
   await user.save();
+
+  // 8. Set Secure HttpOnly Refresh Cookie
+  setRefreshCookie(res, refreshToken);
 
   // 10. Write Immutable Audit Log
   await AuditLog.create({
@@ -453,7 +456,7 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
     return sendError(res, 401, 'Session token expired or invalid. Please sign in again.');
   }
 
-  const user = await User.findById(decoded.userId).select('+tokenVersion');
+  const user = await User.findById(decoded.userId).select('+refreshTokenHash +tokenVersion');
   if (!user || user.status !== USER_STATUS.ACTIVE) {
     clearRefreshCookie(res);
     return sendError(res, 401, 'Account session revoked or account is no longer active.');
@@ -463,6 +466,36 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
   if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
     clearRefreshCookie(res);
     return sendError(res, 401, 'Session has been invalidated due to a security update. Please sign in again.');
+  }
+
+  // Refresh Token Reuse Detection
+  const incomingHash = hashToken(token);
+  if (user.refreshTokenHash && user.refreshTokenHash !== incomingHash) {
+    // Replay/Theft detected: Revoke all active sessions for this account immediately
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    user.refreshTokenHash = null;
+    await user.save();
+    clearRefreshCookie(res);
+
+    await AuditLog.create({
+      actorId: user._id,
+      actorRole: user.role,
+      actorDesignation: user.designation || '',
+      actorName: user.fullName,
+      action: 'SECURITY_TOKEN_REUSE_DETECTED',
+      targetModel: 'User',
+      targetId: user._id,
+      targetName: user.fullName,
+      townId: user.townId,
+      schoolId: user.schoolId || null,
+      result: 'DENIED',
+      reason: 'Refresh token reuse detected. All user sessions invalidated immediately.',
+      ipAddress: req.ip || '',
+      userAgent: req.headers['user-agent'] || '',
+      requestId: req.headers['x-request-id'] || '',
+    });
+
+    return sendError(res, 401, 'Security alert: Token reuse detected. All active sessions have been invalidated.');
   }
 
   // Generate fresh token pair (Rotation)
@@ -484,6 +517,10 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
 
   const newAccessToken = signAccessToken(tokenPayload);
   const newRefreshToken = signRefreshToken({ userId: user._id, tokenVersion: user.tokenVersion || 0 });
+
+  // Update stored refresh token hash with newly rotated token
+  user.refreshTokenHash = hashToken(newRefreshToken);
+  await user.save();
 
   setRefreshCookie(res, newRefreshToken);
 
@@ -507,21 +544,29 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
 });
 
 /**
- * User Logout & Session Revocation
+ * User Logout & Active Database Session Revocation
  * POST /api/v1/auth/logout
  */
 export const handleLogout = asyncHandler(async (req, res) => {
   clearRefreshCookie(res);
 
-  if (req.user && req.user.userId) {
+  if (req.user && (req.user.userId || req.user._id)) {
+    const targetUserId = req.user.userId || req.user._id;
+
+    // Immediately revoke server-side sessions by incrementing tokenVersion and wiping token hash
+    await User.findByIdAndUpdate(targetUserId, {
+      $inc: { tokenVersion: 1 },
+      $unset: { refreshTokenHash: 1 },
+    });
+
     await AuditLog.create({
-      actorId: req.user.userId,
+      actorId: targetUserId,
       actorRole: req.user.role,
       actorDesignation: req.user.designation || '',
       actorName: req.user.fullName || '',
       action: 'USER_LOGOUT',
       targetModel: 'User',
-      targetId: req.user.userId,
+      targetId: targetUserId,
       targetName: req.user.fullName,
       townId: req.user.townId,
       schoolId: req.user.schoolId || null,

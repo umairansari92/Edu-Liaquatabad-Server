@@ -40,9 +40,10 @@ export const checkEmailLockout = async (email, ip) => {
     if (record && record.isLocked && record.lockExpiresAt) {
       const now = new Date();
       if (now < record.lockExpiresAt) {
-        const remainingMinutes = Math.ceil((record.lockExpiresAt.getTime() - now.getTime()) / 60000);
+        const remainingMinutes = Math.max(1, Math.ceil((record.lockExpiresAt.getTime() - now.getTime()) / 60000));
         return {
           locked: true,
+          minutesRemaining: remainingMinutes,
           message: `Account is temporarily locked due to repeated failed attempts across network proxies (Security v7.0). Please try again in ${remainingMinutes} minute(s).`,
         };
       } else {
@@ -54,7 +55,7 @@ export const checkEmailLockout = async (email, ip) => {
     console.error('[SecurityLockout Error]', err.message);
   }
 
-  return { locked: false };
+  return { locked: false, minutesRemaining: 0 };
 };
 
 /**
@@ -62,25 +63,27 @@ export const checkEmailLockout = async (email, ip) => {
  */
 export const recordFailedLogin = async (email, ip, deviceFingerprint = '') => {
   const targetKey = `email:${email.toLowerCase().trim()}`;
+  const ipStr = typeof ip === 'string' ? ip : (ip?.ip || '0.0.0.0');
+
   try {
-    const record = await SecurityLockout.findOne({ targetKey });
+    let record = await SecurityLockout.findOne({ targetKey });
     const now = new Date();
 
     if (!record) {
-      await SecurityLockout.create({
+      record = await SecurityLockout.create({
         targetKey,
         lockType: 'EMAIL',
         failedAttempts: 1,
         isLocked: false,
         lastAttemptAt: now,
-        ipAddresses: [ip],
+        ipAddresses: [ipStr],
         deviceFingerprints: deviceFingerprint ? [deviceFingerprint] : [],
       });
     } else {
       record.failedAttempts += 1;
       record.lastAttemptAt = now;
-      if (ip && !record.ipAddresses.includes(ip)) {
-        record.ipAddresses.push(ip);
+      if (ipStr && !record.ipAddresses.includes(ipStr)) {
+        record.ipAddresses.push(ipStr);
       }
       if (deviceFingerprint && !record.deviceFingerprints.includes(deviceFingerprint)) {
         record.deviceFingerprints.push(deviceFingerprint);
@@ -94,8 +97,15 @@ export const recordFailedLogin = async (email, ip, deviceFingerprint = '') => {
 
       await record.save();
     }
+
+    return {
+      failedAttempts: record.failedAttempts,
+      isLocked: record.isLocked,
+      lockExpiresAt: record.lockExpiresAt,
+    };
   } catch (err) {
     console.error('[RecordFailedLogin Error]', err.message);
+    return { failedAttempts: 1, isLocked: false };
   }
 };
 
@@ -110,3 +120,4 @@ export const clearLoginLockout = async (email, ip) => {
     console.error('[ClearLoginLockout Error]', err.message);
   }
 };
+

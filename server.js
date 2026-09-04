@@ -12,6 +12,9 @@ import logger from './config/logger.js';
 import { startScheduledJobs } from './config/scheduledJobs.js';
 import { globalLimiter } from './src/middlewares/tripleLockRateLimiter.js';
 import { ipReputationCheck } from './src/middlewares/ipReputation.js';
+import { deepSanitize } from './src/middlewares/deepSanitize.js';
+import { hppGuard, contentTypeGuard } from './src/middlewares/parameterGuard.js';
+import { ratTrapHoneypotCheck, ratTrapBaitRouter } from './src/middlewares/ratTrapHoneypot.js';
 import { errorHandler } from './src/middlewares/errorHandler.js';
 import v1Routes from './src/routes/v1/index.js';
 
@@ -20,7 +23,13 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ─── Security Headers ─────────────────────────────────────────────────────────
+// ─── Reverse Proxy Configuration (Prevents IP Spoofing) ──────────────────────
+app.set('trust proxy', 1);
+
+// ─── Decoy Honeypot Bait Router (Catches Automated Vulnerability Scanners) ─────
+app.use(ratTrapBaitRouter);
+
+// ─── Security Headers (Helmet Suite) ──────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -33,6 +42,14 @@ app.use(helmet({
     },
   },
   crossOriginEmbedderPolicy: false,
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: {
+    policy: 'strict-origin-when-cross-origin',
+  },
 }));
 
 // ─── CORS & Origin Whitelisting ───────────────────────────────────────────────
@@ -71,11 +88,15 @@ app.use(morgan('combined', {
   skip: (req) => req.path === '/api/v1/health',
 }));
 
-// ─── Body Parsing & Sanitization ─────────────────────────────────────────────
+// ─── Body Parsing, Media Gate & Deep Sanitization Pipeline ────────────────────
 app.use(cookieParser());
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(contentTypeGuard);
+app.use(hppGuard);
 app.use(mongoSanitize());
+app.use(deepSanitize);
+app.use(ratTrapHoneypotCheck);
 
 // ─── Global IP Rate Limiter ───────────────────────────────────────────────────
 app.use(globalLimiter);

@@ -203,15 +203,19 @@ export const handleGetUsers = asyncHandler(async (req, res) => {
     query.schoolId = schoolId;
   }
 
-  if (search) {
+  if (search && typeof search === 'string') {
+    const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     query.$or = [
-      { fullName: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } },
-      { designation: { $regex: search, $options: 'i' } },
+      { fullName: { $regex: escapedSearch, $options: 'i' } },
+      { email: { $regex: escapedSearch, $options: 'i' } },
+      { designation: { $regex: escapedSearch, $options: 'i' } },
     ];
   }
 
-  const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  const safePage = Math.max(parseInt(page, 10) || 1, 1);
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  const skip = (safePage - 1) * safeLimit;
+
   const [users, total] = await Promise.all([
     User.find(query)
       .select('-passwordHash -refreshTokenHash')
@@ -219,15 +223,15 @@ export const handleGetUsers = asyncHandler(async (req, res) => {
       .populate('townId', 'name code')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit, 10)),
+      .limit(safeLimit),
     User.countDocuments(query),
   ]);
 
   return sendSuccess(res, 200, 'Users retrieved successfully.', {
     users,
     total,
-    page: parseInt(page, 10),
-    totalPages: Math.ceil(total / parseInt(limit, 10)),
+    page: safePage,
+    totalPages: Math.ceil(total / safeLimit),
   });
 });
 
@@ -238,9 +242,13 @@ export const handleGetUsers = asyncHandler(async (req, res) => {
 export const handleGetUserAuditHistory = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
+  if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+    return sendError(res, 400, 'Invalid user ID format.');
+  }
+
   const history = await AuditLog.find({
     $or: [{ targetId: id }, { actorId: id }],
-  }).sort({ createdAt: -1 });
+  }).sort({ createdAt: -1 }).limit(100);
 
   return sendSuccess(res, 200, 'User immutable audit trail retrieved.', { history });
 });

@@ -8,6 +8,9 @@ import {
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeHierarchy } from '../middlewares/authorizeHierarchy.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
+import { authorizeScope } from '../middlewares/authorizeScope.js';
+import { validate } from '../middlewares/validate.js';
+import { assignRoleSchema, updateLifecycleSchema } from '../validations/userSchemas.js';
 import { PERMISSIONS } from '../config/permissions.js';
 
 const router = express.Router();
@@ -20,12 +23,14 @@ router.get(
   handleGetUsers
 );
 
-// ─── Assign Designation, Role & Scope (Hierarchy & Ceiling Protected) ────────
+// ─── Assign Designation, Role & Scope (Hierarchy, Scope & Ceiling Protected) ───
 router.patch(
   '/:id/role-designation',
   authenticate,
   authorizePermissions(PERMISSIONS.USERS_ASSIGN_ROLE),
   authorizeHierarchy,
+  authorizeScope,
+  validate(assignRoleSchema),
   handleAssignRoleAndDesignation
 );
 
@@ -35,14 +40,17 @@ router.patch(
   authenticate,
   authorizePermissions(PERMISSIONS.USERS_SUSPEND),
   authorizeHierarchy,
+  authorizeScope,
+  validate(updateLifecycleSchema),
   handleUpdateUserStatus
 );
 
-// ─── User Immutable Audit History ─────────────────────────────────────────────
+// ─── User Immutable Audit History (Scoped by Jurisdiction) ─────────────────────
 router.get(
   '/:id/audit-history',
   authenticate,
   authorizePermissions(PERMISSIONS.AUDIT_VIEW),
+  authorizeScope,
   handleGetUserAuditHistory
 );
 

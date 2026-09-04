@@ -59,7 +59,6 @@ export const handleCheckGrAvailability = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, 'GR availability check complete.', {
     grNumber: Number(grNumber),
     available: !existing,
-    takenBy: existing ? existing.userId : null,
   });
 });
 

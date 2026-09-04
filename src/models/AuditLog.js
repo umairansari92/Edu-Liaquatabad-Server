@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
 
 const AuditLogSchema = new mongoose.Schema({
-  // WHO (Actor)
-  actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  // WHO (Actor) — supports ObjectId for authenticated users or system/anonymous string ID
+  actorId: { type: mongoose.Schema.Types.Mixed, required: true, index: true },
   actorRole: { type: String, required: true, index: true },
   actorDesignation: { type: String, default: '' },
   actorName: { type: String, default: '' },
@@ -12,7 +12,7 @@ const AuditLogSchema = new mongoose.Schema({
 
   // TARGET (Affected Entity)
   targetModel: { type: String, required: true },
-  targetId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
+  targetId: { type: mongoose.Schema.Types.Mixed, required: true, index: true },
   targetName: { type: String, default: '' },
 
   // WHERE (Context Boundaries)
@@ -40,17 +40,26 @@ const AuditLogSchema = new mongoose.Schema({
   timestamps: { createdAt: true, updatedAt: false }, // Immutable Append-Only
 });
 
-// Explicitly prevent any update or delete operations on audit collection
+// Explicitly prevent ALL update or delete operations on audit collection (100% Immutable)
 AuditLogSchema.pre('updateOne', function () {
   throw new Error('Audit logs are strictly append-only. Modification is forbidden.');
 });
 AuditLogSchema.pre('updateMany', function () {
   throw new Error('Audit logs are strictly append-only. Modification is forbidden.');
 });
+AuditLogSchema.pre('findOneAndUpdate', function () {
+  throw new Error('Audit logs are strictly append-only. Modification is forbidden.');
+});
+AuditLogSchema.pre('findOneAndReplace', function () {
+  throw new Error('Audit logs are strictly append-only. Modification is forbidden.');
+});
 AuditLogSchema.pre('deleteOne', function () {
   throw new Error('Audit logs are strictly append-only. Deletion is forbidden.');
 });
 AuditLogSchema.pre('deleteMany', function () {
+  throw new Error('Audit logs are strictly append-only. Deletion is forbidden.');
+});
+AuditLogSchema.pre('findOneAndDelete', function () {
   throw new Error('Audit logs are strictly append-only. Deletion is forbidden.');
 });
 

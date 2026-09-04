@@ -1,4 +1,6 @@
 import express from 'express';
+import { authenticate } from '../middlewares/authenticate.js';
+import { authorizeScope } from '../middlewares/authorizeScope.js';
 import { authLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { validate, validateQuery } from '../middlewares/validate.js';
 import {
@@ -16,9 +18,11 @@ import {
 const router = express.Router();
 
 /**
- * Student Enrollment Routes
- * All routes require authenticated staff — auth middleware applied at v1/index level.
+ * Student Enrollment & Management Routes
+ * All routes require authentication and jurisdictional scope verification.
  */
+router.use(authenticate);
+router.use(authorizeScope);
 
 // Preview next auto-generated GR No (before form submission)
 router.get('/next-gr/:schoolId', handlePreviewNextGr);
@@ -31,7 +35,7 @@ router.post('/enroll', authLimiter, validate(enrollStudentSchema), handleEnrollS
 
 /**
  * School Code Management
- * PATCH /api/v1/schools/:schoolId/code
+ * PATCH /api/v1/students/schools/:schoolId/code
  * Sets the school code used as prefix for Global Student IDs (e.g. MMHA → MMHA-0001)
  */
 router.patch('/schools/:schoolId/code', authLimiter, validate(setSchoolCodeSchema), handleSetSchoolCode);

@@ -4,24 +4,29 @@ import User from '../models/User.js';
 import { STUDENT_STATUS } from '../../config/constants.js';
 import logger from '../../config/logger.js';
 
-/**
- * Historical Town-Wide Cumulative Alumni Baseline
- * Across all 45+ public schools in Liaquatabad Town Centre
- */
 const HISTORICAL_TOWN_PASSED_OUT_BASELINE = 50000;
+
+// High-Performance In-Memory Cache (Prevents DB Flooding DoS)
+let cachedStats = null;
+let lastComputedAt = 0;
+const STATS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
 
 /**
  * Public Statistics Controller for Landing Page Gateway
- * Returns live counts of active schools, enrolled students, faculty, and passed out graduates.
- * 
- * Note on Alumni / Passed Out metric:
- * When a student in a Primary school completes Class 5th, or in an Elementary school completes Class 8th,
- * or in a Secondary school completes Class 10th, and is issued a Transfer Certificate (TC) / Graduation SLC,
- * they are marked as GRADUATED.
- * This town-wide passed out score accumulates all 45+ schools on top of the 50,000 historical baseline.
+ * Employs 5-minute memory caching to shield database connection pool.
  */
 export const getPublicTownStats = async (req, res, next) => {
   try {
+    const now = Date.now();
+
+    // Serve from cache if fresh
+    if (cachedStats && now - lastComputedAt < STATS_CACHE_TTL_MS) {
+      return res.status(200).json({
+        success: true,
+        data: cachedStats,
+      });
+    }
+
     // Parallel count queries for maximum performance
     const [schoolsCount, studentsCount, teachersCount, digitalGraduatesCount] = await Promise.all([
       School.countDocuments({ status: 'ACTIVE' }).catch(() => 0),
@@ -34,26 +39,24 @@ export const getPublicTownStats = async (req, res, next) => {
     const totalSchools = schoolsCount > 0 ? schoolsCount : 45;
     const enrolledStudents = studentsCount > 0 ? studentsCount : 18500;
     const totalTeachers = teachersCount > 0 ? teachersCount : 650;
-
-    // Cumulative Town-Wide Passed Out Graduates (50,000 baseline + digital graduates)
     const cumulativePassedOut = HISTORICAL_TOWN_PASSED_OUT_BASELINE + (digitalGraduatesCount || 0);
 
-    const digitalAttendanceRate = '100%';
+    cachedStats = {
+      totalSchools: `${totalSchools}+`,
+      enrolledStudents: typeof enrolledStudents === 'number' ? `${enrolledStudents.toLocaleString()}+` : enrolledStudents,
+      totalTeachers: `${totalTeachers}+`,
+      passedOutGraduates: `${cumulativePassedOut.toLocaleString()}+`,
+      digitalAttendanceRate: '100%',
+      syncedAt: new Date().toISOString(),
+    };
+    lastComputedAt = now;
 
     return res.status(200).json({
       success: true,
-      data: {
-        totalSchools: `${totalSchools}+`,
-        enrolledStudents: typeof enrolledStudents === 'number' ? `${enrolledStudents.toLocaleString()}+` : enrolledStudents,
-        totalTeachers: `${totalTeachers}+`,
-        passedOutGraduates: `${cumulativePassedOut.toLocaleString()}+`,
-        digitalAttendanceRate,
-        syncedAt: new Date().toISOString(),
-      },
+      data: cachedStats,
     });
   } catch (error) {
     logger.error(`[PublicStats] Failed to compute live stats: ${error.message}`);
-    // Fallback response so landing page never breaks
     return res.status(200).json({
       success: true,
       data: {

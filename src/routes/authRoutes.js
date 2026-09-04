@@ -29,7 +29,7 @@ import {
 const router = express.Router();
 
 // ─── CAPTCHA ──────────────────────────────────────────────────────────────────
-router.get('/captcha', handleGetCaptcha);
+router.get('/captcha', authLimiter, handleGetCaptcha);
 
 // ─── Sign In / Sign Out / Session ─────────────────────────────────────────────
 router.post(
@@ -40,7 +40,7 @@ router.post(
   handleLogin
 );
 
-router.post('/refresh-token', handleRefreshToken);
+router.post('/refresh-token', authLimiter, handleRefreshToken);
 
 router.post('/logout', authenticate, handleLogout);
 
