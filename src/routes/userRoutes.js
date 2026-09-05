@@ -9,6 +9,7 @@ import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeHierarchy } from '../middlewares/authorizeHierarchy.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
+import { blockRootAdminCreation } from '../middlewares/blockRootAdminCreation.js';
 import { validate } from '../middlewares/validate.js';
 import { assignRoleSchema, updateLifecycleSchema } from '../validations/userSchemas.js';
 import { PERMISSIONS } from '../config/permissions.js';
@@ -24,10 +25,12 @@ router.get(
 );
 
 // ─── Assign Designation, Role & Scope (Hierarchy, Scope & Ceiling Protected) ───
+// blockRootAdminCreation: prevents body injection of role: ROOT_ADMIN by non-root actors
 router.patch(
   '/:id/role-designation',
   authenticate,
   authorizePermissions(PERMISSIONS.USERS_ASSIGN_ROLE),
+  blockRootAdminCreation,
   authorizeHierarchy,
   authorizeScope,
   validate(assignRoleSchema),

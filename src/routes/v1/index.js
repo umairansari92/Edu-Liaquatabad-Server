@@ -4,6 +4,7 @@ import authRoutes from '../authRoutes.js';
 import studentRoutes from '../studentRoutes.js';
 import publicRoutes from '../publicRoutes.js';
 import userRoutes from '../userRoutes.js';
+import superAdminRoutes from '../superAdminRoutes.js';
 
 const router = express.Router();
 
@@ -22,4 +23,8 @@ router.use('/students', studentRoutes);
 // Public Gateway & Landing page statistics
 router.use('/public', publicRoutes);
 
+// Super Admin provisioning & management (ROOT_ADMIN / SUPER_ADMIN only)
+router.use('/admin/super-admins', superAdminRoutes);
+
 export default router;
+

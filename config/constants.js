@@ -3,33 +3,37 @@
  * Education Department Liaquatabad Town Centre (DMC)
  *
  * ╔══════════════════════════════════════════════════════════════╗
- * ║  CONSTITUTIONAL LAW (IMMUTABLE):                            ║
- * ║  Designation (Civil Title) ≠ Role (System Authority Level)  ║
- * ║  ≠ Permissions ≠ Scope                                      ║
- * ╠══════════════════════════════════════════════════════════════╣
- * ║  EXAMPLES (Designation → Role):                             ║
- * ║  "Town Chairman"               → SUPER_ADMIN                ║
- * ║  "Vice Chairman"               → SUPER_ADMIN / ADMIN        ║
- * ║  "Deputy Director (DDO)"       → ADMIN                      ║
- * ║  "Education Officer"           → SUPERVISOR                 ║
- * ║  "Head Master"                 → HM                         ║
- * ║  "Assistant Head Master"       → HM                         ║
+ * ║  FINAL AUTHORITY MODEL (IMMUTABLE CONSTITUTIONAL LAW):      ║
  * ║                                                              ║
- * ║  DDO is a DESIGNATION. ADMIN is the ROLE. They are NOT      ║
- * ║  the same. SUPER_ADMIN assigns ADMIN role to the DDO.        ║
- * ║  Chairman is a DESIGNATION. SUPER_ADMIN is the ROLE.        ║
+ * ║  Role  ≠  Designation  ≠  Permission  ≠  Scope              ║
+ * ║                                                              ║
+ * ║  A person's official civil designation (e.g., "Head Master" ║
+ * ║  "Education Officer", "Senior Teacher") is DESCRIPTIVE      ║
+ * ║  institutional metadata only.                               ║
+ * ║                                                              ║
+ * ║  System authority is determined EXCLUSIVELY by the          ║
+ * ║  Role field — explicitly assigned by an authorized          ║
+ * ║  administrator through the role-management system.          ║
+ * ║                                                              ║
+ * ║  Valid examples (ANY combination is possible):              ║
+ * ║    designation: "Teacher"       + role: SUPER_ADMIN         ║
+ * ║    designation: "Head Master"   + role: ADMIN               ║
+ * ║    designation: "Officer"       + role: HM                  ║
+ * ║                                                              ║
+ * ║  PROHIBITED: logic that derives role from designation.      ║
+ * ║  PROHIBITED: DDO / CHAIRMAN / VICE_CHAIRMAN as system roles.║
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
-// ─── System Roles (8 Fixed Roles — NEVER add designations as roles) ───────────
+// ─── System Roles (8 Fixed Roles — NEVER add civil designations as roles) ─────
 
 export const ROLES = Object.freeze({
-  ROOT_ADMIN:  'ROOT_ADMIN',   // Level 100 — Platform technical root. Emergency CLI only.
-  SUPER_ADMIN: 'SUPER_ADMIN',  // Level 90  — e.g., Town Chairman. Town/Global authority.
-  ADMIN:       'ADMIN',        // Level 80  — e.g., DDO. Town administrative governance.
-  SUPERVISOR:  'SUPERVISOR',   // Level 60  — e.g., Education Officer. Multi-school oversight.
-  HM:          'HM',           // Level 50  — e.g., Head Master. School authority.
-  TEACHER:     'TEACHER',      // Level 30  — Class & section authority.
+  ROOT_ADMIN:  'ROOT_ADMIN',   // Level 100 — Protected platform root. Emergency CLI only. Never publicly visible.
+  SUPER_ADMIN: 'SUPER_ADMIN',  // Level 90  — Operational platform admin. Explicitly assigned by ROOT_ADMIN.
+  ADMIN:       'ADMIN',        // Level 80  — Sub-administrative governance. Assigned by SUPER_ADMIN.
+  SUPERVISOR:  'SUPERVISOR',   // Level 60  — Multi-school field oversight.
+  HM:          'HM',           // Level 50  — Single school institutional authority.
+  TEACHER:     'TEACHER',      // Level 30  — Class & section operational authority.
   STUDENT:     'STUDENT',      // Level 10  — Self-scope read access.
   PARENT:      'PARENT',       // Level 10  — Child-scoped read access.
 });

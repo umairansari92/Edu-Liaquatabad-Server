@@ -2,19 +2,18 @@
  * Master Permissions & Capability Registry
  * Education Department Liaquatabad Town Centre (DMC)
  *
- * Role Table (8 Fixed Roles):
+ * FINAL AUTHORITY MODEL:
  *   ROOT_ADMIN(100) > SUPER_ADMIN(90) > ADMIN(80) > SUPERVISOR(60) > HM(50) > TEACHER(30) > STUDENT(10) | PARENT(10)
  *
- * DESIGNATION MAPPING EXAMPLES (Designation → Role):
- *   "Town Chairman"           → SUPER_ADMIN
- *   "Vice Chairman"           → SUPER_ADMIN or ADMIN
- *   "Deputy Director (DDO)"   → ADMIN
- *   "Education Officer"       → SUPERVISOR
- *   "Head Master"             → HM
- *   "Assistant Head Master"   → HM
+ * CONSTITUTIONAL LAW — Role ≠ Designation:
+ *   Designation is purely descriptive institutional metadata (e.g., "Head Master", "Education Officer").
+ *   System authority is determined EXCLUSIVELY by the Role field, which is explicitly assigned
+ *   through the role-management system. ANY designation may hold ANY role.
  *
- * DO NOT add DDO, Chairman, Vice Chairman as roles.
- * They are civil designations assigned at the User level.
+ * PROHIBITED:
+ *   - DDO, CHAIRMAN, VICE_CHAIRMAN as hard-coded system roles
+ *   - Any logic that derives role from designation
+ *   - Designation changes granting system authority
  */
 
 import { ROLES } from '../../config/constants.js';
@@ -71,15 +70,15 @@ export const PERMISSIONS = Object.freeze({
  */
 export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
 
-  // ROOT_ADMIN: Supreme platform authority — all permissions
+  // ROOT_ADMIN: Supreme platform authority — all permissions. Never publicly visible.
   [ROLES.ROOT_ADMIN]: Object.values(PERMISSIONS),
 
-  // SUPER_ADMIN: Town/Global authority — all permissions
-  // e.g., Town Chairman holds SUPER_ADMIN role
+  // SUPER_ADMIN: Full operational platform authority — all permissions.
+  // Role assigned explicitly by ROOT_ADMIN. Designation is separate (can be any civil title).
   [ROLES.SUPER_ADMIN]: Object.values(PERMISSIONS),
 
-  // ADMIN: Town administrative governance
-  // e.g., Deputy Director (DDO) holds ADMIN role
+  // ADMIN: Town administrative governance.
+  // Role assigned explicitly by SUPER_ADMIN. Designation is separate (can be any civil title).
   [ROLES.ADMIN]: [
     PERMISSIONS.USERS_VIEW,
     PERMISSIONS.USERS_CREATE,
