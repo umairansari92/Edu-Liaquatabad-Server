@@ -21,50 +21,50 @@ import { getEffectivePermissions } from '../config/permissions.js';
  * Generate Math Security CAPTCHA
  * GET /api/v1/auth/captcha
  */
-export const handleGetCaptcha = (req, res) => {
+export const handleGetCaptcha = (request, response) => {
   const captcha = generateMathCaptcha();
-  return sendSuccess(res, 200, 'Security CAPTCHA challenge generated.', captcha);
+  return sendSuccess(response, 200, 'Security CAPTCHA challenge generated.', captcha);
 };
 
 /**
  * Request OTP verification code
  * POST /api/v1/auth/send-otp
  */
-export const handleSendOtp = asyncHandler(async (req, res) => {
-  const { email, purpose = 'REGISTRATION' } = req.body;
+export const handleSendOtp = asyncHandler(async (request, response) => {
+  const { email, purpose = 'REGISTRATION' } = request.body;
 
   if (!email) {
-    return sendError(res, 400, 'Official email address is required.');
+    return sendError(response, 400, 'Official email address is required.');
   }
 
   if (isDisposableEmail(email)) {
-    return sendError(res, 400, 'Disposable or temporary email addresses are strictly prohibited.');
+    return sendError(response, 400, 'Disposable or temporary email addresses are strictly prohibited.');
   }
 
   const result = await requestOtp(email, purpose);
-  return sendSuccess(res, 200, `A 6-digit verification code has been dispatched to ${email}.`, result);
+  return sendSuccess(response, 200, `A 6-digit verification code has been dispatched to ${email}.`, result);
 });
 
 /**
  * Verify OTP standalone
  * POST /api/v1/auth/verify-otp
  */
-export const handleVerifyOtp = asyncHandler(async (req, res) => {
-  const { email, otpCode, purpose = 'REGISTRATION' } = req.body;
+export const handleVerifyOtp = asyncHandler(async (request, response) => {
+  const { email, otpCode, purpose = 'REGISTRATION' } = request.body;
 
   if (!email || !otpCode) {
-    return sendError(res, 400, 'Email and 6-digit verification code are required.');
+    return sendError(response, 400, 'Email and 6-digit verification code are required.');
   }
 
   await verifyOtp(email, otpCode, purpose);
-  return sendSuccess(res, 200, 'Verification code validated successfully.', { verified: true });
+  return sendSuccess(response, 200, 'Verification code validated successfully.', { verified: true });
 });
 
 /**
  * Student Self-Registration (Mandatory OTP Verified)
  * POST /api/v1/auth/register-student
  */
-export const handleRegisterStudent = asyncHandler(async (req, res) => {
+export const handleRegisterStudent = asyncHandler(async (request, response) => {
   const {
     fullName,
     fatherOrGuardianName,
@@ -80,17 +80,17 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
     otpCode,
     captchaAnswer,
     captchaChallengeToken,
-  } = req.body;
+  } = request.body;
 
-  const rawGr = (grNumber || rollNumber || '').toString().trim();
-  if (!rawGr) {
-    return sendError(res, 400, 'GR Number is required for student registration.');
+  const rawGrNumber = (grNumber || rollNumber || '').toString().trim();
+  if (!rawGrNumber) {
+    return sendError(response, 400, 'GR Number is required for student registration.');
   }
 
   // 1. Math CAPTCHA validation (if provided)
   if (captchaChallengeToken || captchaAnswer) {
     if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
-      return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed.');
     }
   }
 
@@ -99,7 +99,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
   if (schoolId) {
     validSchool = await School.findById(schoolId);
     if (!validSchool) {
-      return sendError(res, 400, 'The selected school does not exist.');
+      return sendError(response, 400, 'The selected school does not exist.');
     }
   }
 
@@ -125,17 +125,17 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
   let studentEmail = email ? email.toLowerCase().trim() : '';
   if (!studentEmail) {
     const schoolCodeClean = validSchool?.code ? validSchool.code.toLowerCase().replace(/[^a-z0-9]/g, '') : 'dmc';
-    const grClean = rawGr.toLowerCase().replace(/[^a-z0-9]/g, '');
-    studentEmail = `gr-${grClean}.${schoolCodeClean}@student.liaquatabad-schools.gov.pk`;
+    const cleanGrNumber = rawGrNumber.toLowerCase().replace(/[^a-z0-9]/g, '');
+    studentEmail = `gr-${cleanGrNumber}.${schoolCodeClean}@student.liaquatabad-schools.gov.pk`;
   }
 
   // 5. Prevent duplicate email or duplicate GR number in the same school
   const existingUser = await User.findOne({ email: studentEmail });
   if (existingUser) {
-    return sendError(res, 400, 'An account with this GR Number or email already exists.');
+    return sendError(response, 400, 'An account with this GR Number or email already exists.');
   }
 
-  const parsedGrNumber = parseInt(rawGr.replace(/\D/g, ''), 10) || Math.floor(1000 + Math.random() * 9000);
+  const parsedGrNumber = parseInt(rawGrNumber.replace(/\D/g, ''), 10) || Math.floor(1000 + Math.random() * 9000);
 
   if (validSchool) {
     const existingProfile = await StudentProfile.findOne({
@@ -143,7 +143,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
       grNumber: parsedGrNumber,
     });
     if (existingProfile) {
-      return sendError(res, 400, `A student with GR Number ${rawGr} is already registered in this school.`);
+      return sendError(response, 400, `A student with GR Number ${rawGrNumber} is already registered in this school.`);
     }
   }
 
@@ -154,7 +154,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
 
   // 6. Create User in PENDING_APPROVAL status (role locked to STUDENT)
   const passwordHash = await hashPassword(password);
-  const user = await User.create({
+  const enrolledStudentUser = await User.create({
     organizationId: defaultOrg._id,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
@@ -171,7 +171,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
 
   // 7. Create StudentProfile
   await StudentProfile.create({
-    userId: user._id,
+    userId: enrolledStudentUser._id,
     schoolId: validSchool ? validSchool._id : defaultTown._id,
     classId: classId || defaultTown._id,
     sectionId: sectionId || defaultTown._id,
@@ -183,29 +183,29 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
 
   // 8. Immutable Audit Log
   await AuditLog.create({
-    actorId: user._id,
+    actorId: enrolledStudentUser._id,
     actorRole: ROLES.STUDENT,
     actorDesignation: 'Enrolled Student',
-    actorName: user.fullName,
+    actorName: enrolledStudentUser.fullName,
     action: 'STUDENT_REGISTERED_PENDING_APPROVAL',
     targetModel: 'User',
-    targetId: user._id,
-    targetName: user.fullName,
+    targetId: enrolledStudentUser._id,
+    targetName: enrolledStudentUser.fullName,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL, grNumber: rawGr, role: user.role },
+    newState: { status: USER_STATUS.PENDING_APPROVAL, grNumber: rawGrNumber, role: enrolledStudentUser.role },
     result: 'SUCCESS',
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
-    requestId: req.headers['x-request-id'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 201, 'Student registration submitted successfully. Your profile is now awaiting Head Master (HM) approval.', {
-    userId: user._id,
+  return sendSuccess(response, 201, 'Student registration submitted successfully. Your profile is now awaiting Head Master (HM) approval.', {
+    userId: enrolledStudentUser._id,
     email: studentEmail,
-    grNumber: rawGr,
-    role: user.role,
-    status: user.status,
+    grNumber: rawGrNumber,
+    role: enrolledStudentUser.role,
+    status: enrolledStudentUser.status,
   });
 });
 
@@ -213,7 +213,7 @@ export const handleRegisterStudent = asyncHandler(async (req, res) => {
  * Teacher Self-Registration (Mandatory OTP Verified)
  * POST /api/v1/auth/register-teacher
  */
-export const handleRegisterTeacher = asyncHandler(async (req, res) => {
+export const handleRegisterTeacher = asyncHandler(async (request, response) => {
   const {
     fullName,
     email,
@@ -225,18 +225,18 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
     otpCode,
     captchaAnswer,
     captchaChallengeToken,
-  } = req.body;
+  } = request.body;
 
   // 1. Math CAPTCHA validation
   if (captchaChallengeToken || captchaAnswer) {
     if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
-      return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed.');
     }
   }
 
   // 2. Mandatory OTP verification before account creation
   if (!otpCode) {
-    return sendError(res, 400, 'Mandatory 6-digit OTP verification code is required to complete faculty registration.');
+    return sendError(response, 400, 'Mandatory 6-digit OTP verification code is required to complete faculty registration.');
   }
 
   await verifyOtp(email, otpCode, 'REGISTRATION');
@@ -244,7 +244,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
   // 3. Duplicate check
   const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
   if (existingUser) {
-    return sendError(res, 400, 'A faculty account with this official email already exists.');
+    return sendError(response, 400, 'A faculty account with this official email already exists.');
   }
 
   // 4. Validate school exists
@@ -252,7 +252,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
   if (schoolId) {
     validSchool = await School.findById(schoolId);
     if (!validSchool) {
-      return sendError(res, 400, 'The selected municipal school does not exist.');
+      return sendError(response, 400, 'The selected municipal school does not exist.');
     }
   }
 
@@ -276,7 +276,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
 
   // 6. Create User in PENDING_APPROVAL status (role locked to TEACHER)
   const passwordHash = await hashPassword(password);
-  const user = await User.create({
+  const enrolledTeacherUser = await User.create({
     organizationId: defaultOrg._id,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
@@ -293,7 +293,7 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
 
   // 7. Create TeacherProfile
   await TeacherProfile.create({
-    userId: user._id,
+    userId: enrolledTeacherUser._id,
     currentSchoolId: validSchool ? validSchool._id : defaultTown._id,
     designation: designation || 'Teacher',
     qualification: qualification || 'TBD',
@@ -302,28 +302,28 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
 
   // 8. Immutable Audit Log
   await AuditLog.create({
-    actorId: user._id,
+    actorId: enrolledTeacherUser._id,
     actorRole: ROLES.TEACHER,
-    actorDesignation: user.designation,
-    actorName: user.fullName,
+    actorDesignation: enrolledTeacherUser.designation,
+    actorName: enrolledTeacherUser.fullName,
     action: 'TEACHER_REGISTERED_OTP_VERIFIED',
     targetModel: 'User',
-    targetId: user._id,
-    targetName: user.fullName,
+    targetId: enrolledTeacherUser._id,
+    targetName: enrolledTeacherUser.fullName,
     townId: defaultTown._id,
     schoolId: validSchool ? validSchool._id : null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL, email: user.email, role: user.role },
+    newState: { status: USER_STATUS.PENDING_APPROVAL, email: enrolledTeacherUser.email, role: enrolledTeacherUser.role },
     result: 'SUCCESS',
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
-    requestId: req.headers['x-request-id'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 201, 'Faculty registration submitted and email verified. Your profile is now awaiting HM / Admin authorization.', {
-    userId: user._id,
-    email: user.email,
-    role: user.role,
-    status: user.status,
+  return sendSuccess(response, 201, 'Faculty registration submitted and email verified. Your profile is now awaiting HM / Admin authorization.', {
+    userId: enrolledTeacherUser._id,
+    email: enrolledTeacherUser.email,
+    role: enrolledTeacherUser.role,
+    status: enrolledTeacherUser.status,
   });
 });
 
@@ -331,17 +331,17 @@ export const handleRegisterTeacher = asyncHandler(async (req, res) => {
  * Official Account Sign In (Triple-Lock Rate Limited & Password Protected)
  * POST /api/v1/auth/login
  */
-export const handleLogin = asyncHandler(async (req, res) => {
-  const { email, password, captchaAnswer, captchaChallengeToken } = req.body;
+export const handleLogin = asyncHandler(async (request, response) => {
+  const { email, password, captchaAnswer, captchaChallengeToken } = request.body;
 
   const normalizedEmail = email.toLowerCase().trim();
-  const clientIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '0.0.0.0';
+  const clientIp = request.ip || request.headers['x-forwarded-for']?.split(',')[0]?.trim() || '0.0.0.0';
 
   // 1. Check Triple-Lock Account Lockout Status
   const lockoutStatus = await checkEmailLockout(normalizedEmail, clientIp);
   if (lockoutStatus.locked) {
     return sendError(
-      res,
+      response,
       423,
       `Account locked due to excessive failed attempts. Please retry in ${lockoutStatus.minutesRemaining} minute(s).`
     );
@@ -351,7 +351,7 @@ export const handleLogin = asyncHandler(async (req, res) => {
   if (captchaChallengeToken || captchaAnswer) {
     if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
       await recordFailedLogin(normalizedEmail, clientIp);
-      return sendError(res, 400, 'Mathematical security CAPTCHA verification failed.');
+      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed.');
     }
   }
 
@@ -359,24 +359,24 @@ export const handleLogin = asyncHandler(async (req, res) => {
   let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +tokenVersion');
 
   if (!user && !normalizedEmail.includes('@')) {
-    const parsedGr = parseInt(normalizedEmail.replace(/\D/g, ''), 10);
-    const grQuery = parsedGr ? { $in: [parsedGr, normalizedEmail] } : normalizedEmail;
-    const profile = await StudentProfile.findOne({ grNumber: grQuery });
-    if (profile) {
-      user = await User.findById(profile.userId).select('+passwordHash +refreshTokenHash +tokenVersion');
+    const parsedGrNumber = parseInt(normalizedEmail.replace(/\D/g, ''), 10);
+    const grNumberQuery = parsedGrNumber ? { $in: [parsedGrNumber, normalizedEmail] } : normalizedEmail;
+    const studentProfile = await StudentProfile.findOne({ grNumber: grNumberQuery });
+    if (studentProfile) {
+      user = await User.findById(studentProfile.userId).select('+passwordHash +refreshTokenHash +tokenVersion');
     }
   }
 
   if (!user) {
     await recordFailedLogin(normalizedEmail, clientIp);
-    return sendError(res, 401, 'Invalid official email, GR number, or password.');
+    return sendError(response, 401, 'Invalid official email, GR number, or password.');
   }
 
   // 4. Password Verification with Server Pepper (Uniform error message prevents account enumeration)
   const isMatch = await verifyPassword(password, user.passwordHash);
   if (!isMatch) {
     await recordFailedLogin(normalizedEmail, clientIp);
-    return sendError(res, 401, 'Invalid official email or password.');
+    return sendError(response, 401, 'Invalid official email or password.');
   }
 
   // 5. Password Verified — Clear Lockout Counters
@@ -384,24 +384,24 @@ export const handleLogin = asyncHandler(async (req, res) => {
 
   // 6. Account Lifecycle Status Verification
   if (user.status === USER_STATUS.PENDING_APPROVAL) {
-    return sendError(res, 403, 'Your account is awaiting approval by your Head Master or Administration.');
+    return sendError(response, 403, 'Your account is awaiting approval by your Head Master or Administration.');
   }
 
   if (user.status === USER_STATUS.SUSPENDED) {
-    return sendError(res, 403, 'Your account is currently suspended. Please contact the Town Education Directorate.');
+    return sendError(response, 403, 'Your account is currently suspended. Please contact the Town Education Directorate.');
   }
 
   if (user.status === USER_STATUS.TRANSFERRED) {
-    return sendError(res, 403, 'Your account has been transferred. Please report to your destination school Head Master for joining approval.');
+    return sendError(response, 403, 'Your account has been transferred. Please report to your destination school Head Master for joining approval.');
   }
 
   if (user.status === USER_STATUS.REQUIRES_CORRECTION) {
     const remarks = user.approvalDetails?.correctionRemarks ? `: ${user.approvalDetails.correctionRemarks}` : '';
-    return sendError(res, 403, `Your profile requires correction${remarks}. Please contact your school administrator.`);
+    return sendError(response, 403, `Your profile requires correction${remarks}. Please contact your school administrator.`);
   }
 
   if (user.status === USER_STATUS.RETIRED || user.status === USER_STATUS.INACTIVE) {
-    return sendError(res, 403, 'This account is inactive.');
+    return sendError(response, 403, 'This account is inactive.');
   }
 
   // 7. Generate JWT Tokens with Authoritative Claims
@@ -430,7 +430,7 @@ export const handleLogin = asyncHandler(async (req, res) => {
   await user.save();
 
   // 8. Set Secure HttpOnly Refresh Cookie
-  setRefreshCookie(res, refreshToken);
+  setRefreshCookie(response, refreshToken);
 
   // 10. Write Immutable Audit Log
   await AuditLog.create({
@@ -446,12 +446,12 @@ export const handleLogin = asyncHandler(async (req, res) => {
     schoolId: user.schoolId || null,
     newState: { lastLoginAt: user.lastLoginAt },
     result: 'SUCCESS',
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
-    requestId: req.headers['x-request-id'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 200, 'Authentication successful. Welcome to Liaquatabad Education Portal.', {
+  return sendSuccess(response, 200, 'Authentication successful. Welcome to Liaquatabad Education Portal.', {
     user: {
       _id: user._id,
       fullName: user.fullName,
@@ -475,31 +475,31 @@ export const handleLogin = asyncHandler(async (req, res) => {
  * Rotate Access Token via HttpOnly Refresh Cookie
  * POST /api/v1/auth/refresh-token
  */
-export const handleRefreshToken = asyncHandler(async (req, res) => {
-  const token = req.cookies?.refreshToken || req.body?.refreshToken;
+export const handleRefreshToken = asyncHandler(async (request, response) => {
+  const token = request.cookies?.refreshToken || request.body?.refreshToken;
 
   if (!token) {
-    return sendError(res, 401, 'No active refresh session found. Please sign in again.');
+    return sendError(response, 401, 'No active refresh session found. Please sign in again.');
   }
 
   let decoded;
   try {
     decoded = verifyRefreshToken(token);
   } catch {
-    clearRefreshCookie(res);
-    return sendError(res, 401, 'Session token expired or invalid. Please sign in again.');
+    clearRefreshCookie(response);
+    return sendError(response, 401, 'Session token expired or invalid. Please sign in again.');
   }
 
   const user = await User.findById(decoded.userId).select('+refreshTokenHash +tokenVersion');
   if (!user || user.status !== USER_STATUS.ACTIVE) {
-    clearRefreshCookie(res);
-    return sendError(res, 401, 'Account session revoked or account is no longer active.');
+    clearRefreshCookie(response);
+    return sendError(response, 401, 'Account session revoked or account is no longer active.');
   }
 
   // Verify tokenVersion to reject revoked tokens
   if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
-    clearRefreshCookie(res);
-    return sendError(res, 401, 'Session has been invalidated due to a security update. Please sign in again.');
+    clearRefreshCookie(response);
+    return sendError(response, 401, 'Session has been invalidated due to a security update. Please sign in again.');
   }
 
   // Refresh Token Reuse Detection
@@ -509,7 +509,7 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     user.refreshTokenHash = null;
     await user.save();
-    clearRefreshCookie(res);
+    clearRefreshCookie(response);
 
     await AuditLog.create({
       actorId: user._id,
@@ -524,12 +524,12 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
       schoolId: user.schoolId || null,
       result: 'DENIED',
       reason: 'Refresh token reuse detected. All user sessions invalidated immediately.',
-      ipAddress: req.ip || '',
-      userAgent: req.headers['user-agent'] || '',
-      requestId: req.headers['x-request-id'] || '',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+      requestId: request.headers['x-request-id'] || '',
     });
 
-    return sendError(res, 401, 'Security alert: Token reuse detected. All active sessions have been invalidated.');
+    return sendError(response, 401, 'Security alert: Token reuse detected. All active sessions have been invalidated.');
   }
 
   // Generate fresh token pair (Rotation)
@@ -556,9 +556,9 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
   user.refreshTokenHash = hashToken(newRefreshToken);
   await user.save();
 
-  setRefreshCookie(res, newRefreshToken);
+  setRefreshCookie(response, newRefreshToken);
 
-  return sendSuccess(res, 200, 'Session token refreshed.', {
+  return sendSuccess(response, 200, 'Session token refreshed.', {
     accessToken: newAccessToken,
     user: {
       _id: user._id,
@@ -581,11 +581,11 @@ export const handleRefreshToken = asyncHandler(async (req, res) => {
  * User Logout & Active Database Session Revocation
  * POST /api/v1/auth/logout
  */
-export const handleLogout = asyncHandler(async (req, res) => {
-  clearRefreshCookie(res);
+export const handleLogout = asyncHandler(async (request, response) => {
+  clearRefreshCookie(response);
 
-  if (req.user && (req.user.userId || req.user._id)) {
-    const targetUserId = req.user.userId || req.user._id;
+  if (request.user && (request.user.userId || request.user._id)) {
+    const targetUserId = request.user.userId || request.user._id;
 
     // Immediately revoke server-side sessions by incrementing tokenVersion and wiping token hash
     await User.findByIdAndUpdate(targetUserId, {
@@ -595,42 +595,42 @@ export const handleLogout = asyncHandler(async (req, res) => {
 
     await AuditLog.create({
       actorId: targetUserId,
-      actorRole: req.user.role,
-      actorDesignation: req.user.designation || '',
-      actorName: req.user.fullName || '',
+      actorRole: request.user.role,
+      actorDesignation: request.user.designation || '',
+      actorName: request.user.fullName || '',
       action: 'USER_LOGOUT',
       targetModel: 'User',
       targetId: targetUserId,
-      targetName: req.user.fullName,
-      townId: req.user.townId,
-      schoolId: req.user.schoolId || null,
+      targetName: request.user.fullName,
+      townId: request.user.townId,
+      schoolId: request.user.schoolId || null,
       result: 'SUCCESS',
-      ipAddress: req.ip || '',
-      userAgent: req.headers['user-agent'] || '',
-      requestId: req.headers['x-request-id'] || '',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+      requestId: request.headers['x-request-id'] || '',
     });
   }
 
-  return sendSuccess(res, 200, 'Signed out successfully.');
+  return sendSuccess(response, 200, 'Signed out successfully.');
 });
 
 /**
  * Get Authenticated User Profile (Hydrate Redux on App Load)
  * GET /api/v1/auth/me
  */
-export const handleGetMe = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.userId)
+export const handleGetMe = asyncHandler(async (request, response) => {
+  const user = await User.findById(request.user.userId)
     .populate('schoolId', 'name schoolCode emisCode')
     .populate('townId', 'name code');
 
   if (!user) {
-    return sendError(res, 404, 'User profile not found.');
+    return sendError(response, 404, 'User profile not found.');
   }
 
   const permissions = getEffectivePermissions(user);
   const roleLevel = ROLE_HIERARCHY[user.role] || 0;
 
-  return sendSuccess(res, 200, 'Active user session profile retrieved.', {
+  return sendSuccess(response, 200, 'Active user session profile retrieved.', {
     user: {
       _id: user._id,
       fullName: user.fullName,
@@ -654,25 +654,25 @@ export const handleGetMe = asyncHandler(async (req, res) => {
  * Request Password Reset OTP
  * POST /api/v1/auth/forgot-password
  */
-export const handleForgotPassword = asyncHandler(async (req, res) => {
-  const { email } = req.body;
+export const handleForgotPassword = asyncHandler(async (request, response) => {
+  const { email } = request.body;
   const normalizedEmail = email.toLowerCase().trim();
 
   const user = await User.findOne({ email: normalizedEmail });
   if (!user || user.status !== USER_STATUS.ACTIVE) {
-    return sendSuccess(res, 200, `If an active account exists for ${normalizedEmail}, a 6-digit password reset code has been sent.`);
+    return sendSuccess(response, 200, `If an active account exists for ${normalizedEmail}, a 6-digit password reset code has been sent.`);
   }
 
   await requestOtp(normalizedEmail, 'PASSWORD_RESET');
-  return sendSuccess(res, 200, `A 6-digit password reset code has been sent to ${normalizedEmail}.`);
+  return sendSuccess(response, 200, `A 6-digit password reset code has been sent to ${normalizedEmail}.`);
 });
 
 /**
  * Confirm Password Reset with OTP
  * POST /api/v1/auth/reset-password
  */
-export const handleResetPassword = asyncHandler(async (req, res) => {
-  const { email, otpCode, newPassword } = req.body;
+export const handleResetPassword = asyncHandler(async (request, response) => {
+  const { email, otpCode, newPassword } = request.body;
   const normalizedEmail = email.toLowerCase().trim();
 
   // 1. Verify OTP
@@ -681,7 +681,7 @@ export const handleResetPassword = asyncHandler(async (req, res) => {
   // 2. Find User & Update Password
   const user = await User.findOne({ email: normalizedEmail });
   if (!user) {
-    return sendError(res, 404, 'User account not found.');
+    return sendError(response, 404, 'User account not found.');
   }
 
   user.passwordHash = await hashPassword(newPassword);
@@ -701,10 +701,10 @@ export const handleResetPassword = asyncHandler(async (req, res) => {
     townId: user.townId,
     schoolId: user.schoolId || null,
     result: 'SUCCESS',
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
-    requestId: req.headers['x-request-id'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 200, 'Password has been successfully updated. You may now sign in with your new password.');
+  return sendSuccess(response, 200, 'Password has been successfully updated. You may now sign in with your new password.');
 });

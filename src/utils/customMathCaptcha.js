@@ -22,19 +22,19 @@ setInterval(() => {
  * @returns {Object} { question: "7 + 4 = ?", challengeToken: "signed_token" }
  */
 export const generateMathCaptcha = () => {
-  const num1 = Math.floor(Math.random() * 9) + 1; // 1 to 9
-  const num2 = Math.floor(Math.random() * 9) + 1; // 1 to 9
-  const answer = num1 + num2;
-  const expiry = Date.now() + 5 * 60 * 1000; // 5 minutes validity
+  const firstOperand = Math.floor(Math.random() * 9) + 1; // 1 to 9
+  const secondOperand = Math.floor(Math.random() * 9) + 1; // 1 to 9
+  const correctAnswer = firstOperand + secondOperand;
+  const expiresAtTimestamp = Date.now() + 5 * 60 * 1000; // 5 minutes validity
   const nonce = crypto.randomBytes(16).toString('hex');
 
   // Cryptographically hash the answer with the salt/nonce and expiry (No plaintext leak)
   const answerHash = crypto
     .createHmac('sha256', CAPTCHA_SECRET)
-    .update(`${answer}:${nonce}:${expiry}`)
+    .update(`${correctAnswer}:${nonce}:${expiresAtTimestamp}`)
     .digest('hex');
 
-  const payload = `${nonce}:${expiry}:${answerHash}`;
+  const payload = `${nonce}:${expiresAtTimestamp}:${answerHash}`;
   const signature = crypto
     .createHmac('sha256', CAPTCHA_SECRET)
     .update(payload)
@@ -43,7 +43,7 @@ export const generateMathCaptcha = () => {
   const challengeToken = Buffer.from(`${payload}:${signature}`).toString('base64');
 
   return {
-    question: `What is ${num1} + ${num2}?`,
+    question: `What is ${firstOperand} + ${secondOperand}?`,
     challengeToken,
   };
 };

@@ -38,11 +38,11 @@ const SCHOOL_CODE_ALLOWED_ROLES = new Set([
  * GET /api/v1/students/next-gr/:schoolId
  * Preview the next auto-generated GR No for a school — shown in HM form
  */
-export const handlePreviewNextGr = asyncHandler(async (req, res) => {
-  const { schoolId } = req.params;
+export const handlePreviewNextGr = asyncHandler(async (request, response) => {
+  const { schoolId } = request.params;
   const nextGr = await previewNextGrNumber(schoolId);
 
-  return sendSuccess(res, 200, 'Next GR number preview.', {
+  return sendSuccess(response, 200, 'Next GR number preview.', {
     suggestedGrNumber: nextGr,
     note: 'This will be auto-assigned for NEW_ADMISSION. For EXISTING_ENTRY, provide the original GR from school records.',
   });
@@ -52,13 +52,13 @@ export const handlePreviewNextGr = asyncHandler(async (req, res) => {
  * GET /api/v1/students/check-gr?schoolId=...&grNumber=...
  * Check if a specific GR number is available in a school (for old student entry)
  */
-export const handleCheckGrAvailability = asyncHandler(async (req, res) => {
-  const { schoolId, grNumber } = req.query;
-  const existing = await StudentProfile.findOne({ schoolId, grNumber: Number(grNumber) });
+export const handleCheckGrAvailability = asyncHandler(async (request, response) => {
+  const { schoolId, grNumber } = request.query;
+  const existingRecord = await StudentProfile.findOne({ schoolId, grNumber: Number(grNumber) });
 
-  return sendSuccess(res, 200, 'GR availability check complete.', {
+  return sendSuccess(response, 200, 'GR availability check complete.', {
     grNumber: Number(grNumber),
-    available: !existing,
+    available: !existingRecord,
   });
 });
 
@@ -68,16 +68,16 @@ export const handleCheckGrAvailability = asyncHandler(async (req, res) => {
  * Assigns GR No and Global Student ID automatically.
  * Role-protected: ENROLLMENT_ALLOWED_ROLES only.
  */
-export const handleEnrollStudent = asyncHandler(async (req, res) => {
-  const actorRole = req.user?.role;
+export const handleEnrollStudent = asyncHandler(async (request, response) => {
+  const actorRole = request.user?.role;
 
   if (!ENROLLMENT_ALLOWED_ROLES.has(actorRole)) {
-    return sendError(res, 403, 'Access denied. Only authorized staff can enroll students.');
+    return sendError(response, 403, 'Access denied. Only authorized staff can enroll students.');
   }
 
-  const actorSchoolId = req.user?.schoolId;
+  const actorSchoolId = request.user?.schoolId;
   if (!actorSchoolId) {
-    return sendError(res, 400, 'Your account is not linked to a school.');
+    return sendError(response, 400, 'Your account is not linked to a school.');
   }
 
   const {
@@ -92,7 +92,7 @@ export const handleEnrollStudent = asyncHandler(async (req, res) => {
     sectionId,
     admissionDate,
     manualGrNumber,
-  } = req.body;
+  } = request.body;
 
   // ── Step 1: Determine GR No ────────────────────────────────────────────────
   let assignedGrNumber;
@@ -114,14 +114,14 @@ export const handleEnrollStudent = asyncHandler(async (req, res) => {
 
   // ── Step 3: Create a system-managed User account for the student ───────────
   // A minimal account — no password needed yet (HM enrolls, student logs in later)
-  const tempPasswordHash = await hashPassword(`Student@${assignedGrNumber}`);
-  const user = await User.create({
-    organizationId: req.user?.organizationId,
-    townId: req.user?.townId,
+  const temporaryPasswordHash = await hashPassword(`Student@${assignedGrNumber}`);
+  const enrolledUser = await User.create({
+    organizationId: request.user?.organizationId,
+    townId: request.user?.townId,
     schoolId: actorSchoolId,
     fullName: fullName.trim(),
     email: null, // Email optional at enrollment — can be added later
-    passwordHash: tempPasswordHash,
+    passwordHash: temporaryPasswordHash,
     phoneNumber: guardianContact,
     role: ROLES.STUDENT,
     scope: SCOPES.SELF_CHILD,
@@ -129,8 +129,8 @@ export const handleEnrollStudent = asyncHandler(async (req, res) => {
   });
 
   // ── Step 4: Create StudentProfile with dual numbers ─────────────────────────
-  const profile = await StudentProfile.create({
-    userId: user._id,
+  const studentProfile = await StudentProfile.create({
+    userId: enrolledUser._id,
     schoolId: actorSchoolId,
     classId,
     sectionId,
@@ -144,18 +144,18 @@ export const handleEnrollStudent = asyncHandler(async (req, res) => {
     residentialAddress: residentialAddress || '',
     admissionDate: admissionDate ? new Date(admissionDate) : new Date(),
     lifecycleStatus: STUDENT_STATUS.ACTIVE,
-    enrolledBy: req.user?._id,
+    enrolledBy: request.user?._id,
     enrolledAt: new Date(),
   });
 
   // ── Step 5: Audit Log ───────────────────────────────────────────────────────
   await AuditLog.create({
-    actorId: req.user?._id,
+    actorId: request.user?._id,
     actorRole,
     action: admissionType === 'NEW_ADMISSION' ? 'STUDENT_NEW_ADMISSION' : 'STUDENT_EXISTING_ENTRY',
     targetModel: 'StudentProfile',
-    targetId: profile._id,
-    townId: req.user?.townId,
+    targetId: studentProfile._id,
+    townId: request.user?.townId,
     schoolId: actorSchoolId,
     newState: {
       grNumber: assignedGrNumber,
@@ -163,16 +163,16 @@ export const handleEnrollStudent = asyncHandler(async (req, res) => {
       admissionType,
       lifecycleStatus: STUDENT_STATUS.ACTIVE,
     },
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
   });
 
-  return sendSuccess(res, 201, 'Student enrolled successfully.', {
-    studentId: profile._id,
+  return sendSuccess(response, 201, 'Student enrolled successfully.', {
+    studentId: studentProfile._id,
     grNumber: assignedGrNumber,
     globalStudentId: globalStudentId || 'Pending (school code not yet configured)',
     admissionType,
-    fullName: user.fullName,
+    fullName: enrolledUser.fullName,
   });
 });
 
@@ -181,25 +181,25 @@ export const handleEnrollStudent = asyncHandler(async (req, res) => {
  * Set or update school code — authorized roles only.
  * This triggers backfill of Global Student IDs for existing students.
  */
-export const handleSetSchoolCode = asyncHandler(async (req, res) => {
-  const actorRole = req.user?.role;
+export const handleSetSchoolCode = asyncHandler(async (request, response) => {
+  const actorRole = request.user?.role;
 
   if (!SCHOOL_CODE_ALLOWED_ROLES.has(actorRole)) {
-    return sendError(res, 403, 'Access denied. Only HM, Supervisor, or Admin can set the school code.');
+    return sendError(response, 403, 'Access denied. Only HM, Supervisor, or Admin can set the school code.');
   }
 
-  const { schoolId } = req.params;
-  const { schoolCode } = req.body;
+  const { schoolId } = request.params;
+  const { schoolCode } = request.body;
 
   // Check uniqueness across all schools
-  const codeConflict = await School.findOne({ schoolCode: schoolCode.toUpperCase(), _id: { $ne: schoolId } });
-  if (codeConflict) {
-    return sendError(res, 409, `School code '${schoolCode.toUpperCase()}' is already in use by another school.`);
+  const conflictingSchoolRecord = await School.findOne({ schoolCode: schoolCode.toUpperCase(), _id: { $ne: schoolId } });
+  if (conflictingSchoolRecord) {
+    return sendError(response, 409, `School code '${schoolCode.toUpperCase()}' is already in use by another school.`);
   }
 
   await School.findByIdAndUpdate(schoolId, {
     schoolCode: schoolCode.toUpperCase(),
-    schoolCodeSetBy: req.user?._id,
+    schoolCodeSetBy: request.user?._id,
     schoolCodeSetAt: new Date(),
   });
 
@@ -207,17 +207,17 @@ export const handleSetSchoolCode = asyncHandler(async (req, res) => {
   const backfilledCount = await backfillGlobalStudentIds(schoolId);
 
   await AuditLog.create({
-    actorId: req.user?._id,
+    actorId: request.user?._id,
     actorRole,
     action: 'SCHOOL_CODE_SET',
     targetModel: 'School',
     targetId: schoolId,
     newState: { schoolCode: schoolCode.toUpperCase(), backfilledStudents: backfilledCount },
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
   });
 
-  return sendSuccess(res, 200, `School code '${schoolCode.toUpperCase()}' set successfully.`, {
+  return sendSuccess(response, 200, `School code '${schoolCode.toUpperCase()}' set successfully.`, {
     schoolCode: schoolCode.toUpperCase(),
     backfilledStudents: backfilledCount,
   });

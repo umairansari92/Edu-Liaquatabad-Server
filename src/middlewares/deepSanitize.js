@@ -23,81 +23,81 @@ const DANGEROUS_PATTERNS = [
 
 /**
  * Sanitizes a single string value
- * @param {string} val 
+ * @param {string} inputString 
  * @returns {string}
  */
-const sanitizeString = (val) => {
-  if (typeof val !== 'string') return val;
+const sanitizeString = (inputString) => {
+  if (typeof inputString !== 'string') return inputString;
 
-  let cleaned = val;
-  for (const pattern of DANGEROUS_PATTERNS) {
-    cleaned = cleaned.replace(pattern, '');
+  let cleanedString = inputString;
+  for (const dangerousPattern of DANGEROUS_PATTERNS) {
+    cleanedString = cleanedString.replace(dangerousPattern, '');
   }
 
   // Strip null bytes and control chars
-  cleaned = cleaned.replace(/\0/g, '');
+  cleanedString = cleanedString.replace(/\0/g, '');
 
-  return cleaned.trim();
+  return cleanedString.trim();
 };
 
 /**
  * Recursively scrubs objects and arrays
- * @param {any} target 
+ * @param {any} targetPayload 
  * @returns {any}
  */
-const deepClean = (target) => {
-  if (target === null || target === undefined) return target;
+const deepClean = (targetPayload) => {
+  if (targetPayload === null || targetPayload === undefined) return targetPayload;
 
-  if (typeof target === 'string') {
-    return sanitizeString(target);
+  if (typeof targetPayload === 'string') {
+    return sanitizeString(targetPayload);
   }
 
-  if (Array.isArray(target)) {
-    return target.map((item) => deepClean(item));
+  if (Array.isArray(targetPayload)) {
+    return targetPayload.map((arrayElement) => deepClean(arrayElement));
   }
 
-  if (typeof target === 'object') {
-    const cleanedObj = {};
+  if (typeof targetPayload === 'object') {
+    const cleanedObject = {};
 
-    for (const [key, value] of Object.entries(target)) {
+    for (const [propertyKey, propertyValue] of Object.entries(targetPayload)) {
       // 1. Block Prototype Pollution keys
-      if (PROTOTYPE_POLLUTION_KEYS.has(key)) {
-        console.warn(`🚨 [SECURITY BREACH ATTEMPT] Prototype pollution key [${key}] blocked.`);
+      if (PROTOTYPE_POLLUTION_KEYS.has(propertyKey)) {
+        console.warn(`🚨 [SECURITY BREACH ATTEMPT] Prototype pollution key [${propertyKey}] blocked.`);
         continue;
       }
 
       // 2. Block NoSQL operator injection keys (keys starting with $)
-      if (key.startsWith('$')) {
-        console.warn(`🚨 [SECURITY BREACH ATTEMPT] NoSQL operator injection key [${key}] stripped.`);
+      if (propertyKey.startsWith('$')) {
+        console.warn(`🚨 [SECURITY BREACH ATTEMPT] NoSQL operator injection key [${propertyKey}] stripped.`);
         continue;
       }
 
       // 3. Strip dot-notation keys from top-level body to prevent arbitrary path overwrite
-      const safeKey = key.replace(/[$\.]/g, '_');
-      cleanedObj[safeKey] = deepClean(value);
+      const safeKey = propertyKey.replace(/[$\.]/g, '_');
+      cleanedObject[safeKey] = deepClean(propertyValue);
     }
 
-    return cleanedObj;
+    return cleanedObject;
   }
 
-  return target;
+  return targetPayload;
 };
 
 /**
  * Deep Sanitizer Middleware
  */
-export const deepSanitize = (req, res, next) => {
-  if (req.body) {
-    req.body = deepClean(req.body);
+export const deepSanitize = (request, response, nextFunction) => {
+  if (request.body) {
+    request.body = deepClean(request.body);
   }
 
-  if (req.query) {
-    req.query = deepClean(req.query);
+  if (request.query) {
+    request.query = deepClean(request.query);
   }
 
-  if (req.params) {
-    req.params = deepClean(req.params);
+  if (request.params) {
+    request.params = deepClean(request.params);
   }
 
-  next();
+  nextFunction();
 };

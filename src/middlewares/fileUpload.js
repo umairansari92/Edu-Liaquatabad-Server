@@ -31,25 +31,25 @@ export const sanitizeFilename = (filename) => {
     .slice(0, 100);
 };
 
-const fileFilter = (req, file, cb) => {
-  const ext = path.extname(file.originalname || '').toLowerCase();
+const fileFilter = (request, uploadedFile, callbackFunction) => {
+  const fileExtension = path.extname(uploadedFile.originalname || '').toLowerCase();
 
   // 1. Explicitly reject dangerous or scriptable file extensions
-  if (FORBIDDEN_EXTENSIONS.has(ext)) {
-    return cb(new Error(`Security rejection: File extension [${ext}] is strictly prohibited.`), false);
+  if (FORBIDDEN_EXTENSIONS.has(fileExtension)) {
+    return callbackFunction(new Error(`Security rejection: File extension [${fileExtension}] is strictly prohibited.`), false);
   }
 
   // 2. Assert MIME-type in allowed set
-  if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
-    return cb(
-      new Error(`Unsupported file format (${file.mimetype}). Permitted types: PDF, JPEG, PNG, WEBP, DOC, DOCX`),
+  if (!ALLOWED_MIME_TYPES.has(uploadedFile.mimetype)) {
+    return callbackFunction(
+      new Error(`Unsupported file format (${uploadedFile.mimetype}). Permitted types: PDF, JPEG, PNG, WEBP, DOC, DOCX`),
       false
     );
   }
 
   // Sanitize filename on the file object
-  file.sanitizedFilename = sanitizeFilename(file.originalname);
-  cb(null, true);
+  uploadedFile.sanitizedFilename = sanitizeFilename(uploadedFile.originalname);
+  callbackFunction(null, true);
 };
 
 export const uploadInMemory = multer({
@@ -65,61 +65,61 @@ export const uploadInMemory = multer({
  * Binary Magic-Byte File Signature Validator Middleware
  * Inspects raw buffer bytes to prevent MIME-type spoofing
  */
-export const validateFileMagicBytes = (req, res, next) => {
-  const file = req.file;
-  if (!file || !file.buffer || file.buffer.length < 4) {
-    return next();
+export const validateFileMagicBytes = (request, response, nextFunction) => {
+  const uploadedFile = request.file;
+  if (!uploadedFile || !uploadedFile.buffer || uploadedFile.buffer.length < 4) {
+    return nextFunction();
   }
 
-  const buf = file.buffer;
-  let isValid = false;
-  const mime = file.mimetype;
+  const fileBuffer = uploadedFile.buffer;
+  let isSignatureValid = false;
+  const declaredMimeType = uploadedFile.mimetype;
 
   // PDF: %PDF- (0x25 0x50 0x44 0x46)
-  if (mime === 'application/pdf' && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) {
-    isValid = true;
+  if (declaredMimeType === 'application/pdf' && fileBuffer[0] === 0x25 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x44 && fileBuffer[3] === 0x46) {
+    isSignatureValid = true;
   }
   // JPEG: FF D8 FF
-  else if (mime === 'image/jpeg' && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
-    isValid = true;
+  else if (declaredMimeType === 'image/jpeg' && fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff) {
+    isSignatureValid = true;
   }
   // PNG: 89 50 4E 47 0D 0A 1A 0A
   else if (
-    mime === 'image/png' &&
-    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47
+    declaredMimeType === 'image/png' &&
+    fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x4e && fileBuffer[3] === 0x47
   ) {
-    isValid = true;
+    isSignatureValid = true;
   }
   // WebP: RIFF at 0, WEBP at 8
   else if (
-    mime === 'image/webp' &&
-    buf.slice(0, 4).toString('ascii') === 'RIFF' &&
-    buf.slice(8, 12).toString('ascii') === 'WEBP'
+    declaredMimeType === 'image/webp' &&
+    fileBuffer.slice(0, 4).toString('ascii') === 'RIFF' &&
+    fileBuffer.slice(8, 12).toString('ascii') === 'WEBP'
   ) {
-    isValid = true;
+    isSignatureValid = true;
   }
   // DOCX / Office Open XML (ZIP): PK (0x50 0x4B 0x03 0x04)
   else if (
-    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' &&
-    buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04
+    declaredMimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' &&
+    fileBuffer[0] === 0x50 && fileBuffer[1] === 0x4b && fileBuffer[2] === 0x03 && fileBuffer[3] === 0x04
   ) {
-    isValid = true;
+    isSignatureValid = true;
   }
   // Legacy DOC: 0xD0 0xCF 0x11 0xE0
   else if (
-    mime === 'application/msword' &&
-    buf[0] === 0xd0 && buf[1] === 0xcf && buf[2] === 0x11 && buf[3] === 0xe0
+    declaredMimeType === 'application/msword' &&
+    fileBuffer[0] === 0xd0 && fileBuffer[1] === 0xcf && fileBuffer[2] === 0x11 && fileBuffer[3] === 0xe0
   ) {
-    isValid = true;
+    isSignatureValid = true;
   }
 
-  if (!isValid) {
-    return res.status(400).json({
+  if (!isSignatureValid) {
+    return response.status(400).json({
       success: false,
       statusCode: 400,
-      message: `File content verification failed: binary signature does not match declared type (${mime}).`,
+      message: `File content verification failed: binary signature does not match declared type (${declaredMimeType}).`,
     });
   }
 
-  next();
+  nextFunction();
 };

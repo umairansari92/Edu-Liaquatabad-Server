@@ -23,16 +23,16 @@ const BLOCKED_IPS = new Set([
   '127.0.0.2', // Placeholder for demonstration
 ]);
 
-export const ipReputationCheck = (req, res, next) => {
-  const rawIp =
-    req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '';
+export const ipReputationCheck = (request, response, nextFunction) => {
+  const rawIpAddress =
+    request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.ip || '';
 
   // Strip IPv6 prefix
-  const ip = rawIp.replace('::ffff:', '');
+  const sanitizedIpAddress = rawIpAddress.replace('::ffff:', '');
 
-  if (BLOCKED_IPS.has(ip)) {
-    console.warn(`[IPReputation] Blocked IP: ${ip}`);
-    return res.status(403).json({
+  if (BLOCKED_IPS.has(sanitizedIpAddress)) {
+    console.warn(`[IPReputation] Blocked IP: ${sanitizedIpAddress}`);
+    return response.status(403).json({
       success: false,
       statusCode: 403,
       message: 'Access denied. Your IP address has been flagged.',
@@ -40,9 +40,9 @@ export const ipReputationCheck = (req, res, next) => {
   }
 
   for (const prefix of BLOCKED_IP_PREFIXES) {
-    if (ip.startsWith(prefix)) {
-      console.warn(`[IPReputation] Blocked prefix match: ${ip} (${prefix})`);
-      return res.status(403).json({
+    if (sanitizedIpAddress.startsWith(prefix)) {
+      console.warn(`[IPReputation] Blocked prefix match: ${sanitizedIpAddress} (${prefix})`);
+      return response.status(403).json({
         success: false,
         statusCode: 403,
         message: 'Access denied. Your network has been flagged.',
@@ -50,5 +50,5 @@ export const ipReputationCheck = (req, res, next) => {
     }
   }
 
-  next();
+  nextFunction();
 };

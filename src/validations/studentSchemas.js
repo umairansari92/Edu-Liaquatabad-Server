@@ -4,12 +4,12 @@ import { z } from 'zod';
 const SCRIPT_INJECTION_REGEX = /<[^>]*>|javascript:|on\w+\s*=|\$where|\$expr/i;
 const SPECIAL_CHARS_STRICT_REGEX = /[<>{}()\[\]\\\/]/;
 
-const safeString = (maxLen = 200, minLen = 0, minMsg = '') => {
-  let schema = z.string().trim().max(maxLen, `Must be ${maxLen} characters or fewer`);
-  if (minLen > 0) {
-    schema = schema.min(minLen, minMsg || `Must be at least ${minLen} characters`);
+const safeString = (maximumLength = 200, minimumLength = 0, minimumLengthErrorMessage = '') => {
+  let schema = z.string().trim().max(maximumLength, `Must be ${maximumLength} characters or fewer`);
+  if (minimumLength > 0) {
+    schema = schema.min(minimumLength, minimumLengthErrorMessage || `Must be at least ${minimumLength} characters`);
   }
-  return schema.refine((v) => !SCRIPT_INJECTION_REGEX.test(v), {
+  return schema.refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
     message: 'Input contains disallowed characters.',
   });
 };
@@ -20,10 +20,10 @@ const nameField = (label = 'Name') =>
     .trim()
     .min(2, `${label} must be at least 2 characters`)
     .max(100, `${label} must be 100 characters or fewer`)
-    .refine((v) => !SCRIPT_INJECTION_REGEX.test(v), {
+    .refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
       message: 'Input contains disallowed characters.',
     })
-    .refine((v) => !SPECIAL_CHARS_STRICT_REGEX.test(v), {
+    .refine((inputValue) => !SPECIAL_CHARS_STRICT_REGEX.test(inputValue), {
       message: `${label} must not contain special characters.`,
     });
 
@@ -82,9 +82,9 @@ export const enrollStudentSchema = z
     manualGrNumber: z.number().int().positive().optional(),
   })
   .refine(
-    (data) => {
-      if (data.admissionType === 'EXISTING_ENTRY') {
-        return data.manualGrNumber !== undefined && data.manualGrNumber > 0;
+    (enrollmentData) => {
+      if (enrollmentData.admissionType === 'EXISTING_ENTRY') {
+        return enrollmentData.manualGrNumber !== undefined && enrollmentData.manualGrNumber > 0;
       }
       return true;
     },

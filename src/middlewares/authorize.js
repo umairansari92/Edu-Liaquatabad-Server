@@ -9,51 +9,51 @@ export { authorizePermissions } from './authorizePermissions.js';
  * @param  {...string} allowedRoles
  */
 export const authorizeRoles = (...allowedRoles) => {
-  return (req, res, next) => {
-    if (!req.user || !req.user.role) {
-      return sendError(res, 401, 'Unauthorized: User not authenticated.');
+  return (request, response, nextFunction) => {
+    if (!request.user || !request.user.role) {
+      return sendError(response, 401, 'Unauthorized: User not authenticated.');
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
-      return sendError(res, 403, `Access denied. Requires one of: ${allowedRoles.join(', ')}`);
+    if (!allowedRoles.includes(request.user.role)) {
+      return sendError(response, 403, `Access denied. Requires one of: ${allowedRoles.join(', ')}`);
     }
 
-    next();
+    nextFunction();
   };
 };
 
 /**
  * Enforces organizational scope boundaries on target school resources
  */
-export const enforceSchoolScope = (req, res, next) => {
-  if (!req.user) {
-    return sendError(res, 401, 'Unauthorized.');
+export const enforceSchoolScope = (request, response, nextFunction) => {
+  if (!request.user) {
+    return sendError(response, 401, 'Unauthorized.');
   }
 
   // ROOT_ADMIN, SUPER_ADMIN, and ADMIN have Global/Town scope — bypass school boundary checks
-  if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(req.user.role)) {
-    return next();
+  if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(request.user.role)) {
+    return nextFunction();
   }
 
   // Supervisor must have target school in assignedSchools
-  if (req.user.role === ROLES.SUPERVISOR) {
-    const targetSchoolId = req.params.schoolId || req.body.schoolId || req.query.schoolId;
+  if (request.user.role === ROLES.SUPERVISOR) {
+    const targetSchoolId = request.params.schoolId || request.body.schoolId || request.query.schoolId;
     if (targetSchoolId) {
-      const isAssigned = (req.user.assignedSchools || []).some(
-        (id) => String(id) === String(targetSchoolId)
+      const isAssigned = (request.user.assignedSchools || []).some(
+        (assignedSchoolId) => String(assignedSchoolId) === String(targetSchoolId)
       );
       if (!isAssigned) {
-        return sendError(res, 403, 'Access denied: Target school is not in your assigned inspection cluster.');
+        return sendError(response, 403, 'Access denied: Target school is not in your assigned inspection cluster.');
       }
     }
-    return next();
+    return nextFunction();
   }
 
   // HM, Assistant HM, Teacher must match their own school
-  const targetSchoolId = req.params.schoolId || req.body.schoolId || req.query.schoolId;
-  if (targetSchoolId && String(req.user.schoolId) !== String(targetSchoolId)) {
-    return sendError(res, 403, 'Access denied: Cross-school operation is strictly prohibited.');
+  const targetSchoolId = request.params.schoolId || request.body.schoolId || request.query.schoolId;
+  if (targetSchoolId && String(request.user.schoolId) !== String(targetSchoolId)) {
+    return sendError(response, 403, 'Access denied: Cross-school operation is strictly prohibited.');
   }
 
-  next();
+  nextFunction();
 };

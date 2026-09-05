@@ -12,49 +12,49 @@ import AuditLog from '../models/AuditLog.js';
  * - CLASS_SECTION scope (TEACHER): Strictly restricted to assigned classes/sections
  * - SELF_CHILD scope (STUDENT, PARENT): Strictly restricted to self / linked children
  */
-export const authorizeScope = async (req, res, next) => {
+export const authorizeScope = async (request, response, nextFunction) => {
   try {
-    const actor = req.user;
-    if (!actor) {
-      return sendError(res, 401, 'Unauthorized: User authentication required.');
+    const requestingActor = request.user;
+    if (!requestingActor) {
+      return sendError(response, 401, 'Unauthorized: User authentication required.');
     }
 
     // 1. Supreme ROOT_ADMIN bypasses all geographical/institutional scope boundaries
-    if (actor.role === ROLES.ROOT_ADMIN) {
-      return next();
+    if (requestingActor.role === ROLES.ROOT_ADMIN) {
+      return nextFunction();
     }
 
     // 2. Resolve Target School ID from Route Parameters, Query, or Body
     const targetSchoolId =
-      req.params.schoolId ||
-      req.query.schoolId ||
-      req.body.schoolId ||
+      request.params.schoolId ||
+      request.query.schoolId ||
+      request.body.schoolId ||
       null;
 
     // 3. Resolve Target User (if an account is being accessed or modified)
-    const targetUserId = req.params.id || req.params.userId || req.body.userId || req.body.targetId;
-    let targetUser = req.targetUser;
+    const targetUserId = request.params.id || request.params.userId || request.body.userId || request.body.targetId;
+    let targetUser = request.targetUser;
 
     if (!targetUser && targetUserId) {
       targetUser = await User.findById(targetUserId);
       if (targetUser) {
-        req.targetUser = targetUser;
+        request.targetUser = targetUser;
       }
     }
 
     // ── Check A: Target School Boundary ──────────────────────────────────────────
     if (targetSchoolId) {
-      const targetSchoolStr = String(targetSchoolId);
+      const targetSchoolString = String(targetSchoolId);
 
       // A1. If actor is restricted to SCHOOL scope (HM, Teacher)
-      if (actor.scope === SCOPES.SCHOOL || [ROLES.HM, ROLES.TEACHER].includes(actor.role)) {
-        if (!actor.schoolId || String(actor.schoolId) !== targetSchoolStr) {
-          await logScopeViolation(req, actor, 'TARGET_SCHOOL_SCOPE_VIOLATION', {
-            attemptedSchoolId: targetSchoolStr,
-            allowedSchoolId: String(actor.schoolId || 'none'),
+      if (requestingActor.scope === SCOPES.SCHOOL || [ROLES.HM, ROLES.TEACHER].includes(requestingActor.role)) {
+        if (!requestingActor.schoolId || String(requestingActor.schoolId) !== targetSchoolString) {
+          await logScopeViolation(request, requestingActor, 'TARGET_SCHOOL_SCOPE_VIOLATION', {
+            attemptedSchoolId: targetSchoolString,
+            allowedSchoolId: String(requestingActor.schoolId || 'none'),
           });
           return sendError(
-            res,
+            response,
             403,
             'Access denied. You do not have jurisdictional authority over this municipal school.'
           );
@@ -62,15 +62,17 @@ export const authorizeScope = async (req, res, next) => {
       }
 
       // A2. If actor is a Supervisor with assignedSchools list
-      if (actor.role === ROLES.SUPERVISOR && actor.assignedSchools?.length > 0) {
-        const isAssigned = actor.assignedSchools.some((s) => String(s) === targetSchoolStr);
+      if (requestingActor.role === ROLES.SUPERVISOR && requestingActor.assignedSchools?.length > 0) {
+        const isAssigned = requestingActor.assignedSchools.some(
+          (assignedSchoolId) => String(assignedSchoolId) === targetSchoolString
+        );
         if (!isAssigned) {
-          await logScopeViolation(req, actor, 'SUPERVISOR_UNASSIGNED_SCHOOL_VIOLATION', {
-            attemptedSchoolId: targetSchoolStr,
-            assignedSchools: actor.assignedSchools.map(String),
+          await logScopeViolation(request, requestingActor, 'SUPERVISOR_UNASSIGNED_SCHOOL_VIOLATION', {
+            attemptedSchoolId: targetSchoolString,
+            assignedSchools: requestingActor.assignedSchools.map(String),
           });
           return sendError(
-            res,
+            response,
             403,
             'Access denied. This municipal school is not assigned to your supervisory roster.'
           );
@@ -81,19 +83,19 @@ export const authorizeScope = async (req, res, next) => {
     // ── Check B: Target User Boundary ────────────────────────────────────────────
     if (targetUser) {
       // B1. If actor is restricted to SCHOOL scope (HM managing staff/students)
-      if (actor.scope === SCOPES.SCHOOL || actor.role === ROLES.HM) {
+      if (requestingActor.scope === SCOPES.SCHOOL || requestingActor.role === ROLES.HM) {
         if (
           targetUser.schoolId &&
-          actor.schoolId &&
-          String(targetUser.schoolId) !== String(actor.schoolId)
+          requestingActor.schoolId &&
+          String(targetUser.schoolId) !== String(requestingActor.schoolId)
         ) {
-          await logScopeViolation(req, actor, 'CROSS_SCHOOL_USER_MUTATION_VIOLATION', {
+          await logScopeViolation(request, requestingActor, 'CROSS_SCHOOL_USER_MUTATION_VIOLATION', {
             targetUserId: targetUser._id,
             targetSchoolId: String(targetUser.schoolId),
-            actorSchoolId: String(actor.schoolId),
+            actorSchoolId: String(requestingActor.schoolId),
           });
           return sendError(
-            res,
+            response,
             403,
             'Access denied. You cannot inspect or modify personnel belonging to another school.'
           );
@@ -101,15 +103,15 @@ export const authorizeScope = async (req, res, next) => {
       }
 
       // B2. If actor has TOWN scope (ADMIN, SUPER_ADMIN), ensure target belongs to same town
-      if (actor.scope === SCOPES.TOWN && actor.townId && targetUser.townId) {
-        if (String(actor.townId) !== String(targetUser.townId)) {
-          await logScopeViolation(req, actor, 'CROSS_TOWN_MUTATION_VIOLATION', {
+      if (requestingActor.scope === SCOPES.TOWN && requestingActor.townId && targetUser.townId) {
+        if (String(requestingActor.townId) !== String(targetUser.townId)) {
+          await logScopeViolation(request, requestingActor, 'CROSS_TOWN_MUTATION_VIOLATION', {
             targetUserId: targetUser._id,
             targetTownId: String(targetUser.townId),
-            actorTownId: String(actor.townId),
+            actorTownId: String(requestingActor.townId),
           });
           return sendError(
-            res,
+            response,
             403,
             'Access denied. Target user belongs to another administrative town directorate.'
           );
@@ -117,36 +119,36 @@ export const authorizeScope = async (req, res, next) => {
       }
     }
 
-    next();
+    nextFunction();
   } catch (error) {
-    return sendError(res, 500, 'Jurisdictional scope evaluation failed.', [{ message: error.message }]);
+    return sendError(response, 500, 'Jurisdictional scope evaluation failed.', [{ message: error.message }]);
   }
 };
 
 /**
  * Writes an immutable security audit event whenever a scope breach is intercepted
  */
-const logScopeViolation = async (req, actor, violationType, metadata) => {
+const logScopeViolation = async (request, requestingActor, violationType, metadata) => {
   try {
     await AuditLog.create({
-      actorId: actor._id || actor.userId,
-      actorRole: actor.role,
-      actorDesignation: actor.designation || '',
-      actorName: actor.fullName || '',
+      actorId: requestingActor._id || requestingActor.userId,
+      actorRole: requestingActor.role,
+      actorDesignation: requestingActor.designation || '',
+      actorName: requestingActor.fullName || '',
       action: violationType,
       targetModel: 'ScopeGuard',
-      targetId: actor._id || actor.userId,
-      targetName: req.originalUrl,
-      townId: actor.townId,
-      schoolId: actor.schoolId || null,
+      targetId: requestingActor._id || requestingActor.userId,
+      targetName: request.originalUrl,
+      townId: requestingActor.townId,
+      schoolId: requestingActor.schoolId || null,
       previousState: metadata,
       result: 'DENIED',
       reason: `BOLA/Scope Boundary Breach Blocked: Actor attempted unauthorized out-of-jurisdiction operation.`,
-      ipAddress: req.ip || '',
-      userAgent: req.headers['user-agent'] || '',
-      requestId: req.headers['x-request-id'] || '',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+      requestId: request.headers['x-request-id'] || '',
     });
-  } catch (err) {
-    console.error('[ScopeGuard Audit Error]', err.message);
+  } catch (loggingError) {
+    console.error('[ScopeGuard Audit Error]', loggingError.message);
   }
 };

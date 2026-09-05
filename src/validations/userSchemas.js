@@ -3,12 +3,12 @@ import { ROLES, SCOPES, USER_STATUS } from '../../config/constants.js';
 
 const SCRIPT_INJECTION_REGEX = /<[^>]*>|javascript:|on\w+\s*=|\$where|\$expr/i;
 
-const safeString = (maxLen = 200, minLen = 0, minMsg = '') => {
-  let schema = z.string().trim().max(maxLen, `Must be ${maxLen} characters or fewer`);
-  if (minLen > 0) {
-    schema = schema.min(minLen, minMsg || `Must be at least ${minLen} characters`);
+const safeString = (maximumLength = 200, minimumLength = 0, minimumLengthErrorMessage = '') => {
+  let schema = z.string().trim().max(maximumLength, `Must be ${maximumLength} characters or fewer`);
+  if (minimumLength > 0) {
+    schema = schema.min(minimumLength, minimumLengthErrorMessage || `Must be at least ${minimumLength} characters`);
   }
-  return schema.refine((val) => !SCRIPT_INJECTION_REGEX.test(val), {
+  return schema.refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
     message: 'Input contains disallowed characters or code patterns.',
   });
 };

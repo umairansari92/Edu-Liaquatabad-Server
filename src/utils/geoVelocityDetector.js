@@ -12,21 +12,28 @@ const EARTH_RADIUS_KM = 6371;
 /**
  * Calculates Great-Circle Distance between two coordinates using Haversine formula
  */
-export const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
+export const calculateHaversineDistance = (
+  startLatitude,
+  startLongitude,
+  endLatitude,
+  endLongitude
+) => {
   const toRadians = (degrees) => (degrees * Math.PI) / 180;
 
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
+  const deltaLatitude = toRadians(endLatitude - startLatitude);
+  const deltaLongitude = toRadians(endLongitude - startLongitude);
 
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(lat1)) *
-      Math.cos(toRadians(lat2)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+  const squareOfHalfChordLength =
+    Math.sin(deltaLatitude / 2) * Math.sin(deltaLatitude / 2) +
+    Math.cos(toRadians(startLatitude)) *
+      Math.cos(toRadians(endLatitude)) *
+      Math.sin(deltaLongitude / 2) *
+      Math.sin(deltaLongitude / 2);
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return EARTH_RADIUS_KM * c;
+  const angularDistanceRadians =
+    2 * Math.atan2(Math.sqrt(squareOfHalfChordLength), Math.sqrt(1 - squareOfHalfChordLength));
+
+  return EARTH_RADIUS_KM * angularDistanceRadians;
 };
 
 /**

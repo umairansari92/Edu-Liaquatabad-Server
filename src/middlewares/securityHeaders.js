@@ -37,9 +37,9 @@ export const configureSecurityHeaders = helmet({
 /**
  * Custom permissions & response headers cleanup
  */
-export const customSecurityHeaders = (req, res, next) => {
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
-  res.removeHeader('X-Powered-By');
-  res.removeHeader('Server');
-  next();
+export const customSecurityHeaders = (request, response, nextFunction) => {
+  response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  response.removeHeader('X-Powered-By');
+  response.removeHeader('Server');
+  nextFunction();
 };

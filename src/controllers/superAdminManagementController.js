@@ -60,8 +60,8 @@ const writeAudit = async ({
  *   - Actor must be ROOT_ADMIN or SUPER_ADMIN (enforced by authorizeRoles middleware on route)
  *   - Immutable audit record written on every attempt (success or failure)
  */
-export const handleCreateSuperAdmin = asyncHandler(async (req, res) => {
-  const actor = req.user;
+export const handleCreateSuperAdmin = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
 
   const {
     fullName,
@@ -70,33 +70,33 @@ export const handleCreateSuperAdmin = asyncHandler(async (req, res) => {
     designation = '',
     townId,
     reason = 'SUPER_ADMIN provisioning by authorized administrator',
-  } = req.body;
+  } = request.body;
 
   // ── Validate required fields ──────────────────────────────────────────────
 
   if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
-    return sendError(res, 400, 'Full name is required (minimum 2 characters).');
+    return sendError(response, 400, 'Full name is required (minimum 2 characters).');
   }
 
   if (!email || typeof email !== 'string') {
-    return sendError(res, 400, 'A valid email address is required.');
+    return sendError(response, 400, 'A valid email address is required.');
   }
 
   if (!password || typeof password !== 'string' || password.length < 8) {
-    return sendError(res, 400, 'Password must be at least 8 characters.');
+    return sendError(response, 400, 'Password must be at least 8 characters.');
   }
 
   // ── Prevent duplicate accounts ────────────────────────────────────────────
 
   const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
   if (existingUser) {
-    return sendError(res, 409, 'An account with this email address already exists.');
+    return sendError(response, 409, 'An account with this email address already exists.');
   }
 
   // ── Security check: actor cannot create ROOT_ADMIN via this endpoint ──────
   // (Belt-and-suspenders — also enforced by blockRootAdminCreation middleware)
 
-  if (actor.role !== ROLES.ROOT_ADMIN) {
+  if (requestingActor.role !== ROLES.ROOT_ADMIN) {
     // A SUPER_ADMIN cannot create ROOT_ADMIN — hard-code role to SUPER_ADMIN only
   }
 
@@ -106,17 +106,17 @@ export const handleCreateSuperAdmin = asyncHandler(async (req, res) => {
 
   // ── Derive organizationId and townId from the actor if not explicitly provided ──
 
-  const resolvedTownId = townId || actor.townId || null;
-  const resolvedOrgId  = actor.organizationId;
+  const resolvedTownId = townId || requestingActor.townId || null;
+  const resolvedOrganizationId = requestingActor.organizationId;
 
-  if (!resolvedOrgId) {
-    return sendError(res, 400, 'Cannot resolve organizationId from the requesting actor. Ensure actor has organizationId set.');
+  if (!resolvedOrganizationId) {
+    return sendError(response, 400, 'Cannot resolve organizationId from the requesting actor. Ensure actor has organizationId set.');
   }
 
   // ── Create the new SUPER_ADMIN ────────────────────────────────────────────
 
   const newSuperAdmin = await User.create({
-    organizationId:   resolvedOrgId,
+    organizationId:   resolvedOrganizationId,
     townId:           resolvedTownId,
     fullName:         fullName.trim(),
     email:            email.toLowerCase().trim(),
@@ -132,10 +132,10 @@ export const handleCreateSuperAdmin = asyncHandler(async (req, res) => {
   // ── Write immutable audit record ──────────────────────────────────────────
 
   await writeAudit({
-    actorId:          actor._id || actor.userId,
-    actorRole:        actor.role,
-    actorDesignation: actor.designation || '',
-    actorName:        actor.fullName || '',
+    actorId:          requestingActor._id || requestingActor.userId,
+    actorRole:        requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName:        requestingActor.fullName || '',
     action:           'SUPER_ADMIN_CREATED',
     targetId:         newSuperAdmin._id,
     targetName:       newSuperAdmin.fullName,
@@ -152,12 +152,12 @@ export const handleCreateSuperAdmin = asyncHandler(async (req, res) => {
     },
     result:    'SUCCESS',
     reason,
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
-    requestId: req.headers['x-request-id'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 201, 'SUPER_ADMIN account created successfully.', {
+  return sendSuccess(response, 201, 'SUPER_ADMIN account created successfully.', {
     user: {
       _id:         newSuperAdmin._id,
       fullName:    newSuperAdmin.fullName,
@@ -187,62 +187,62 @@ export const handleCreateSuperAdmin = asyncHandler(async (req, res) => {
  *   5. Immutable audit record written on EVERY attempt (including denied attempts)
  *   6. On success: tokenVersion incremented to revoke all active sessions immediately
  */
-export const handleDisableSuperAdmin = asyncHandler(async (req, res) => {
-  const actor = req.user;
-  const { id: targetId } = req.params;
-  const { reason } = req.body;
+export const handleDisableSuperAdmin = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: targetUserId } = request.params;
+  const { reason } = request.body;
 
   // ── Validate reason ───────────────────────────────────────────────────────
 
   if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
-    return sendError(res, 400, 'A mandatory justification reason is required (minimum 10 characters).');
+    return sendError(response, 400, 'A mandatory justification reason is required (minimum 10 characters).');
   }
 
   // ── Fetch target ──────────────────────────────────────────────────────────
 
-  const targetUser = req.targetUser || await User.findById(targetId);
+  const targetUser = request.targetUser || await User.findById(targetUserId);
   if (!targetUser) {
-    return sendError(res, 404, 'Target SUPER_ADMIN account not found.');
+    return sendError(response, 404, 'Target SUPER_ADMIN account not found.');
   }
 
   // ── Ensure target is actually a SUPER_ADMIN ───────────────────────────────
 
   if (targetUser.role !== ROLES.SUPER_ADMIN) {
-    return sendError(res, 400, `This endpoint is exclusively for disabling SUPER_ADMIN accounts. Target role is ${targetUser.role}.`);
+    return sendError(response, 400, `This endpoint is exclusively for disabling SUPER_ADMIN accounts. Target role is ${targetUser.role}.`);
   }
 
   // ── SAFEGUARD 1: Self-disable prevention ──────────────────────────────────
 
-  const actorId = String(actor._id || actor.userId);
-  const targetIdStr = String(targetUser._id);
+  const actorIdString = String(requestingActor._id || requestingActor.userId);
+  const targetUserIdString = String(targetUser._id);
 
-  if (actorId === targetIdStr) {
+  if (actorIdString === targetUserIdString) {
     await writeAudit({
-      actorId:          actor._id || actor.userId,
-      actorRole:        actor.role,
-      actorDesignation: actor.designation || '',
-      actorName:        actor.fullName || '',
+      actorId:          requestingActor._id || requestingActor.userId,
+      actorRole:        requestingActor.role,
+      actorDesignation: requestingActor.designation || '',
+      actorName:        requestingActor.fullName || '',
       action:           'SUPER_ADMIN_SELF_DISABLE_BLOCKED',
       targetId:         targetUser._id,
       targetName:       targetUser.fullName,
-      townId:           actor.townId,
+      townId:           requestingActor.townId,
       schoolId:         null,
       previousState:    { status: targetUser.status },
       newState:         { attemptedStatus: USER_STATUS.SUSPENDED },
       result:           'DENIED',
       reason:           'FORBIDDEN: Actor attempted to disable their own SUPER_ADMIN account.',
-      ipAddress:        req.ip || '',
-      userAgent:        req.headers['user-agent'] || '',
-      requestId:        req.headers['x-request-id'] || '',
+      ipAddress:        request.ip || '',
+      userAgent:        request.headers['user-agent'] || '',
+      requestId:        request.headers['x-request-id'] || '',
     });
 
-    return sendError(res, 403, 'Forbidden: You cannot disable your own Super Admin account.');
+    return sendError(response, 403, 'Forbidden: You cannot disable your own Super Admin account.');
   }
 
   // ── SAFEGUARD 2: Final active SUPER_ADMIN protection ─────────────────────
   // ROOT_ADMIN is exempt from this check — they can always recover the system
 
-  if (actor.role !== ROLES.ROOT_ADMIN) {
+  if (requestingActor.role !== ROLES.ROOT_ADMIN) {
     const activeSuperAdminCount = await User.countDocuments({
       role:   ROLES.SUPER_ADMIN,
       status: USER_STATUS.ACTIVE,
@@ -250,26 +250,26 @@ export const handleDisableSuperAdmin = asyncHandler(async (req, res) => {
 
     if (activeSuperAdminCount <= 1) {
       await writeAudit({
-        actorId:          actor._id || actor.userId,
-        actorRole:        actor.role,
-        actorDesignation: actor.designation || '',
-        actorName:        actor.fullName || '',
+        actorId:          requestingActor._id || requestingActor.userId,
+        actorRole:        requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName:        requestingActor.fullName || '',
         action:           'SUPER_ADMIN_LAST_ACTIVE_DISABLE_BLOCKED',
         targetId:         targetUser._id,
         targetName:       targetUser.fullName,
-        townId:           actor.townId,
+        townId:           requestingActor.townId,
         schoolId:         null,
         previousState:    { status: targetUser.status, activeSuperAdminCount },
         newState:         { attemptedStatus: USER_STATUS.SUSPENDED },
         result:           'DENIED',
         reason:           'FORBIDDEN: Disabling the final active Super Admin would eliminate all administrative recovery paths.',
-        ipAddress:        req.ip || '',
-        userAgent:        req.headers['user-agent'] || '',
-        requestId:        req.headers['x-request-id'] || '',
+        ipAddress:        request.ip || '',
+        userAgent:        request.headers['user-agent'] || '',
+        requestId:        request.headers['x-request-id'] || '',
       });
 
       return sendError(
-        res,
+        response,
         409,
         'Cannot disable the final active Super Admin account. Ensure at least one other Super Admin remains active before proceeding.'
       );
@@ -291,14 +291,14 @@ export const handleDisableSuperAdmin = asyncHandler(async (req, res) => {
   // ── Write success audit record ────────────────────────────────────────────
 
   await writeAudit({
-    actorId:          actor._id || actor.userId,
-    actorRole:        actor.role,
-    actorDesignation: actor.designation || '',
-    actorName:        actor.fullName || '',
+    actorId:          requestingActor._id || requestingActor.userId,
+    actorRole:        requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName:        requestingActor.fullName || '',
     action:           'SUPER_ADMIN_DISABLED',
     targetId:         targetUser._id,
     targetName:       targetUser.fullName,
-    townId:           actor.townId,
+    townId:           requestingActor.townId,
     schoolId:         null,
     previousState,
     newState: {
@@ -307,12 +307,12 @@ export const handleDisableSuperAdmin = asyncHandler(async (req, res) => {
     },
     result:    'SUCCESS',
     reason:    reason.trim(),
-    ipAddress: req.ip || '',
-    userAgent: req.headers['user-agent'] || '',
-    requestId: req.headers['x-request-id'] || '',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(res, 200, 'Super Admin account disabled. All active sessions have been revoked.', {
+  return sendSuccess(response, 200, 'Super Admin account disabled. All active sessions have been revoked.', {
     userId:       targetUser._id,
     status:       targetUser.status,
     tokenVersion: targetUser.tokenVersion,
@@ -326,12 +326,12 @@ export const handleDisableSuperAdmin = asyncHandler(async (req, res) => {
  * Permitted actors: ROOT_ADMIN, existing SUPER_ADMIN
  * Returns: id, fullName, email, designation, status, scope, createdAt — NO credentials
  */
-export const handleListSuperAdmins = asyncHandler(async (req, res) => {
+export const handleListSuperAdmins = asyncHandler(async (request, response) => {
   const superAdmins = await User.find({ role: ROLES.SUPER_ADMIN })
     .select('_id fullName email designation status scope createdAt lastLoginAt')
     .sort({ createdAt: -1 });
 
-  return sendSuccess(res, 200, 'Super Admin accounts retrieved successfully.', {
+  return sendSuccess(response, 200, 'Super Admin accounts retrieved successfully.', {
     superAdmins,
     total: superAdmins.length,
   });

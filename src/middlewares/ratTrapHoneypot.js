@@ -15,28 +15,28 @@ const HONEYPOT_TRAP_FIELDS = [
 /**
  * Traps bot submissions that auto-fill hidden input fields
  */
-export const ratTrapHoneypotCheck = async (req, res, next) => {
-  const body = req.body || {};
+export const ratTrapHoneypotCheck = async (request, response, nextFunction) => {
+  const requestBody = request.body || {};
   let triggeredField = null;
 
   for (const field of HONEYPOT_TRAP_FIELDS) {
-    if (body[field] !== undefined && body[field] !== '' && body[field] !== null) {
+    if (requestBody[field] !== undefined && requestBody[field] !== '' && requestBody[field] !== null) {
       triggeredField = field;
       break;
     }
   }
 
   if (triggeredField) {
-    const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
-    const deviceFingerprint = generateDeviceFingerprint(req);
+    const rawIpAddress = request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.ip || '0.0.0.0';
+    const deviceFingerprint = generateDeviceFingerprint(request);
 
-    console.warn(`🚨 [RAT TRAP TRIGGERED] Bot honeypot field [${triggeredField}] filled by IP: ${rawIp}`);
+    console.warn(`🚨 [RAT TRAP TRIGGERED] Bot honeypot field [${triggeredField}] filled by IP: ${rawIpAddress}`);
 
     // Quarantine IP in MongoDB SecurityLockout for 24 hours
     try {
       const lockExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       await SecurityLockout.findOneAndUpdate(
-        { targetKey: `ip:${rawIp}` },
+        { targetKey: `ip:${rawIpAddress}` },
         {
           $inc: { failedAttempts: 10 },
           $set: { isLocked: true, lockExpiresAt, lastAttemptAt: new Date() },
@@ -53,22 +53,22 @@ export const ratTrapHoneypotCheck = async (req, res, next) => {
         action: 'SECURITY_RAT_TRAP_HONEYPOT_TRIGGERED',
         targetModel: 'HoneypotTrap',
         targetId: '000000000000000000000000',
-        targetName: req.originalUrl,
-        previousState: { field: triggeredField, value: body[triggeredField] },
-        newState: { quarantined: true, durationHours: 24, ip: rawIp },
+        targetName: request.originalUrl,
+        previousState: { field: triggeredField, value: requestBody[triggeredField] },
+        newState: { quarantined: true, durationHours: 24, ip: rawIpAddress },
         result: 'DENIED',
         reason: `Automated Bot Trap Triggered: Hidden honeypot field [${triggeredField}] filled.`,
-        ipAddress: rawIp,
-        userAgent: req.headers['user-agent'] || '',
-        requestId: req.headers['x-request-id'] || '',
+        ipAddress: rawIpAddress,
+        userAgent: request.headers['user-agent'] || '',
+        requestId: request.headers['x-request-id'] || '',
       });
-    } catch (err) {
-      console.error('[RatTrap Error]', err.message);
+    } catch (auditError) {
+      console.error('[RatTrap Error]', auditError.message);
     }
 
     // Deceptive delayed response to waste bot compute threads (Tarpit)
     return setTimeout(() => {
-      res.status(418).json({
+      response.status(418).json({
         success: false,
         statusCode: 418,
         message: 'Security breach detected. Trap engaged. IP quarantined.',
@@ -76,7 +76,7 @@ export const ratTrapHoneypotCheck = async (req, res, next) => {
     }, 2000);
   }
 
-  next();
+  nextFunction();
 };
 
 /**
@@ -101,16 +101,16 @@ const BAIT_PATHS = [
   '/config.env',
 ];
 
-BAIT_PATHS.forEach((path) => {
-  ratTrapBaitRouter.all(path, async (req, res) => {
-    const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
+BAIT_PATHS.forEach((baitPath) => {
+  ratTrapBaitRouter.all(baitPath, async (request, response) => {
+    const rawIpAddress = request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.ip || '0.0.0.0';
 
-    console.warn(`🚨 [RAT TRAP PROBE CAUGHT] Malicious URL crawler probe at [${path}] from IP: ${rawIp}`);
+    console.warn(`🚨 [RAT TRAP PROBE CAUGHT] Malicious URL crawler probe at [${baitPath}] from IP: ${rawIpAddress}`);
 
     try {
       const lockExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
       await SecurityLockout.findOneAndUpdate(
-        { targetKey: `ip:${rawIp}` },
+        { targetKey: `ip:${rawIpAddress}` },
         {
           $inc: { failedAttempts: 20 },
           $set: { isLocked: true, lockExpiresAt, lastAttemptAt: new Date() },
@@ -126,20 +126,20 @@ BAIT_PATHS.forEach((path) => {
         action: 'SECURITY_RAT_TRAP_PROBE_CAUGHT',
         targetModel: 'BaitEndpoint',
         targetId: '000000000000000000000000',
-        targetName: path,
-        newState: { quarantined: true, durationHours: 48, probedPath: path, ip: rawIp },
+        targetName: baitPath,
+        newState: { quarantined: true, durationHours: 48, probedPath: baitPath, ip: rawIpAddress },
         result: 'DENIED',
-        reason: `Vulnerability scanning probe caught on decoy honeypot path [${path}].`,
-        ipAddress: rawIp,
-        userAgent: req.headers['user-agent'] || '',
-        requestId: req.headers['x-request-id'] || '',
+        reason: `Vulnerability scanning probe caught on decoy honeypot path [${baitPath}].`,
+        ipAddress: rawIpAddress,
+        userAgent: request.headers['user-agent'] || '',
+        requestId: request.headers['x-request-id'] || '',
       });
-    } catch (err) {
-      console.error('[RatTrap Probe Error]', err.message);
+    } catch (auditError) {
+      console.error('[RatTrap Probe Error]', auditError.message);
     }
 
     return setTimeout(() => {
-      res.status(418).json({
+      response.status(418).json({
         success: false,
         statusCode: 418,
         message: 'Decoy path triggered. Your network has been blacklisted and forensic telemetry recorded.',

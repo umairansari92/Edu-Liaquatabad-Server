@@ -15,13 +15,13 @@ const STATS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
  * Public Statistics Controller for Landing Page Gateway
  * Employs 5-minute memory caching to shield database connection pool.
  */
-export const getPublicTownStats = async (req, res, next) => {
+export const getPublicTownStats = async (request, response, nextFunction) => {
   try {
-    const now = Date.now();
+    const currentTimestampMs = Date.now();
 
     // Serve from cache if fresh
-    if (cachedStats && now - lastComputedAt < STATS_CACHE_TTL_MS) {
-      return res.status(200).json({
+    if (cachedStats && currentTimestampMs - lastComputedAt < STATS_CACHE_TTL_MS) {
+      return response.status(200).json({
         success: true,
         data: cachedStats,
       });
@@ -49,15 +49,15 @@ export const getPublicTownStats = async (req, res, next) => {
       digitalAttendanceRate: '100%',
       syncedAt: new Date().toISOString(),
     };
-    lastComputedAt = now;
+    lastComputedAt = currentTimestampMs;
 
-    return res.status(200).json({
+    return response.status(200).json({
       success: true,
       data: cachedStats,
     });
   } catch (error) {
     logger.error(`[PublicStats] Failed to compute live stats: ${error.message}`);
-    return res.status(200).json({
+    return response.status(200).json({
       success: true,
       data: {
         totalSchools: '45+',

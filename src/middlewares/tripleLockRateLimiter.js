@@ -32,15 +32,15 @@ export const authLimiter = rateLimit({
  * Lock 3: Account-Centric Global Brute-Force Lockout (MongoDB-Backed)
  * Survives Serverless Cold Starts on Vercel
  */
-export const checkEmailLockout = async (email, ip) => {
-  const targetKey = `email:${email.toLowerCase().trim()}`;
+export const checkEmailLockout = async (emailAddress, clientIpAddress) => {
+  const targetKey = `email:${emailAddress.toLowerCase().trim()}`;
   try {
-    const record = await SecurityLockout.findOne({ targetKey });
+    const lockoutRecord = await SecurityLockout.findOne({ targetKey });
 
-    if (record && record.isLocked && record.lockExpiresAt) {
-      const now = new Date();
-      if (now < record.lockExpiresAt) {
-        const remainingMinutes = Math.max(1, Math.ceil((record.lockExpiresAt.getTime() - now.getTime()) / 60000));
+    if (lockoutRecord && lockoutRecord.isLocked && lockoutRecord.lockExpiresAt) {
+      const currentDate = new Date();
+      if (currentDate < lockoutRecord.lockExpiresAt) {
+        const remainingMinutes = Math.max(1, Math.ceil((lockoutRecord.lockExpiresAt.getTime() - currentDate.getTime()) / 60000));
         return {
           locked: true,
           minutesRemaining: remainingMinutes,
@@ -51,8 +51,8 @@ export const checkEmailLockout = async (email, ip) => {
         await SecurityLockout.deleteOne({ targetKey });
       }
     }
-  } catch (err) {
-    console.error('[SecurityLockout Error]', err.message);
+  } catch (databaseError) {
+    console.error('[SecurityLockout Error]', databaseError.message);
   }
 
   return { locked: false, minutesRemaining: 0 };
@@ -61,50 +61,50 @@ export const checkEmailLockout = async (email, ip) => {
 /**
  * Records failed login across rotating IPs in MongoDB
  */
-export const recordFailedLogin = async (email, ip, deviceFingerprint = '') => {
-  const targetKey = `email:${email.toLowerCase().trim()}`;
-  const ipStr = typeof ip === 'string' ? ip : (ip?.ip || '0.0.0.0');
+export const recordFailedLogin = async (emailAddress, clientIpAddress, deviceFingerprint = '') => {
+  const targetKey = `email:${emailAddress.toLowerCase().trim()}`;
+  const resolvedIpString = typeof clientIpAddress === 'string' ? clientIpAddress : (clientIpAddress?.ip || '0.0.0.0');
 
   try {
-    let record = await SecurityLockout.findOne({ targetKey });
-    const now = new Date();
+    let lockoutRecord = await SecurityLockout.findOne({ targetKey });
+    const currentDate = new Date();
 
-    if (!record) {
-      record = await SecurityLockout.create({
+    if (!lockoutRecord) {
+      lockoutRecord = await SecurityLockout.create({
         targetKey,
         lockType: 'EMAIL',
         failedAttempts: 1,
         isLocked: false,
-        lastAttemptAt: now,
-        ipAddresses: [ipStr],
+        lastAttemptAt: currentDate,
+        ipAddresses: [resolvedIpString],
         deviceFingerprints: deviceFingerprint ? [deviceFingerprint] : [],
       });
     } else {
-      record.failedAttempts += 1;
-      record.lastAttemptAt = now;
-      if (ipStr && !record.ipAddresses.includes(ipStr)) {
-        record.ipAddresses.push(ipStr);
+      lockoutRecord.failedAttempts += 1;
+      lockoutRecord.lastAttemptAt = currentDate;
+      if (resolvedIpString && !lockoutRecord.ipAddresses.includes(resolvedIpString)) {
+        lockoutRecord.ipAddresses.push(resolvedIpString);
       }
-      if (deviceFingerprint && !record.deviceFingerprints.includes(deviceFingerprint)) {
-        record.deviceFingerprints.push(deviceFingerprint);
+      if (deviceFingerprint && !lockoutRecord.deviceFingerprints.includes(deviceFingerprint)) {
+        lockoutRecord.deviceFingerprints.push(deviceFingerprint);
       }
 
       // If threshold reached, lock for 15 minutes
-      if (record.failedAttempts >= 5) {
-        record.isLocked = true;
-        record.lockExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      if (lockoutRecord.failedAttempts >= 5) {
+        lockoutRecord.isLocked = true;
+        lockoutRecord.lockExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
       }
 
-      await record.save();
+      await lockoutRecord.save();
     }
 
     return {
-      failedAttempts: record.failedAttempts,
-      isLocked: record.isLocked,
-      lockExpiresAt: record.lockExpiresAt,
+      failedAttempts: lockoutRecord.failedAttempts,
+      isLocked: lockoutRecord.isLocked,
+      lockExpiresAt: lockoutRecord.lockExpiresAt,
     };
-  } catch (err) {
-    console.error('[RecordFailedLogin Error]', err.message);
+  } catch (databaseError) {
+    console.error('[RecordFailedLogin Error]', databaseError.message);
     return { failedAttempts: 1, isLocked: false };
   }
 };
@@ -112,12 +112,12 @@ export const recordFailedLogin = async (email, ip, deviceFingerprint = '') => {
 /**
  * Clears lockout upon verified successful login
  */
-export const clearLoginLockout = async (email, ip) => {
-  const targetKey = `email:${email.toLowerCase().trim()}`;
+export const clearLoginLockout = async (emailAddress, clientIpAddress) => {
+  const targetKey = `email:${emailAddress.toLowerCase().trim()}`;
   try {
     await SecurityLockout.deleteOne({ targetKey });
-  } catch (err) {
-    console.error('[ClearLoginLockout Error]', err.message);
+  } catch (databaseError) {
+    console.error('[ClearLoginLockout Error]', databaseError.message);
   }
 };
 

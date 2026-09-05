@@ -2,23 +2,23 @@ import crypto from 'crypto';
 
 /**
  * Constant-time string comparison to prevent timing side-channel attacks.
- * @param {string} a 
- * @param {string} b 
+ * @param {string} knownString 
+ * @param {string} candidateString 
  * @returns {boolean}
  */
-export const timingSafeStringCompare = (a, b) => {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
+export const timingSafeStringCompare = (knownString, candidateString) => {
+  if (typeof knownString !== 'string' || typeof candidateString !== 'string') return false;
   
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
+  const knownBuffer = Buffer.from(knownString);
+  const candidateBuffer = Buffer.from(candidateString);
   
-  if (bufA.length !== bufB.length) {
+  if (knownBuffer.length !== candidateBuffer.length) {
     // Perform dummy constant-time comparison to prevent length-leak timing
-    crypto.timingSafeEqual(bufA, bufA);
+    crypto.timingSafeEqual(knownBuffer, knownBuffer);
     return false;
   }
   
-  return crypto.timingSafeEqual(bufA, bufB);
+  return crypto.timingSafeEqual(knownBuffer, candidateBuffer);
 };
 
 /**

@@ -7,59 +7,59 @@ import User from '../models/User.js';
 /**
  * Validates JWT Access Token and hydrates authoritative user context from DB
  */
-export const authenticate = async (req, res, next) => {
+export const authenticate = async (request, response, nextFunction) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return sendError(res, 401, 'Authentication token is required.');
+    const authorizationHeader = request.headers.authorization;
+    if (!authorizationHeader || !authorizationHeader.startsWith('Bearer ')) {
+      return sendError(response, 401, 'Authentication token is required.');
     }
 
-    const token = authHeader.split(' ')[1];
-    const decoded = verifyAccessToken(token);
+    const bearerToken = authorizationHeader.split(' ')[1];
+    const decodedTokenPayload = verifyAccessToken(bearerToken);
 
-    if (!decoded || !decoded.userId) {
-      return sendError(res, 401, 'Invalid or expired session token.');
+    if (!decodedTokenPayload || !decodedTokenPayload.userId) {
+      return sendError(response, 401, 'Invalid or expired session token.');
     }
 
     // Verify current authoritative user status & token version in MongoDB
-    const user = await User.findById(decoded.userId).select('+tokenVersion');
-    if (!user) {
-      return sendError(res, 401, 'User account not found.');
+    const authenticatedUser = await User.findById(decodedTokenPayload.userId).select('+tokenVersion');
+    if (!authenticatedUser) {
+      return sendError(response, 401, 'User account not found.');
     }
 
     // Check account lifecycle status
-    if (user.status !== USER_STATUS.ACTIVE) {
-      return sendError(res, 403, `Account session unavailable (Status: ${user.status}).`);
+    if (authenticatedUser.status !== USER_STATUS.ACTIVE) {
+      return sendError(response, 403, `Account session unavailable (Status: ${authenticatedUser.status}).`);
     }
 
     // Check if token was invalidated by tokenVersion increment (session revocation)
-    if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
-      return sendError(res, 401, 'Session has been invalidated due to a security or role update. Please sign in again.');
+    if (decodedTokenPayload.tokenVersion !== undefined && decodedTokenPayload.tokenVersion !== authenticatedUser.tokenVersion) {
+      return sendError(response, 401, 'Session has been invalidated due to a security or role update. Please sign in again.');
     }
 
-    const roleLevel = ROLE_HIERARCHY[user.role] || 0;
-    const permissions = getEffectivePermissions(user);
+    const actorRoleLevel = ROLE_HIERARCHY[authenticatedUser.role] || 0;
+    const effectivePermissions = getEffectivePermissions(authenticatedUser);
 
-    // Attach full authoritative claims to req.user
-    req.user = {
-      _id: user._id,
-      userId: user._id,
-      fullName: user.fullName,
-      email: user.email,
-      designation: user.designation || '',
-      role: user.role,
-      roleLevel,
-      scope: user.scope,
-      organizationId: user.organizationId,
-      townId: user.townId,
-      schoolId: user.schoolId,
-      assignedSchools: user.assignedSchools || [],
-      permissions,
-      tokenVersion: user.tokenVersion,
+    // Attach full authoritative claims to request.user
+    request.user = {
+      _id: authenticatedUser._id,
+      userId: authenticatedUser._id,
+      fullName: authenticatedUser.fullName,
+      email: authenticatedUser.email,
+      designation: authenticatedUser.designation || '',
+      role: authenticatedUser.role,
+      roleLevel: actorRoleLevel,
+      scope: authenticatedUser.scope,
+      organizationId: authenticatedUser.organizationId,
+      townId: authenticatedUser.townId,
+      schoolId: authenticatedUser.schoolId,
+      assignedSchools: authenticatedUser.assignedSchools || [],
+      permissions: effectivePermissions,
+      tokenVersion: authenticatedUser.tokenVersion,
     };
 
-    next();
-  } catch (error) {
-    return sendError(res, 401, 'Session expired or token invalid.', [{ message: error.message }]);
+    nextFunction();
+  } catch (authenticationError) {
+    return sendError(response, 401, 'Session expired or token invalid.', [{ message: authenticationError.message }]);
   }
 };

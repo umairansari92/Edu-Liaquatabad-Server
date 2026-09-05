@@ -16,42 +16,42 @@ import { sendError } from '../utils/apiResponse.js';
 import { ROLES } from '../../config/constants.js';
 import AuditLog from '../models/AuditLog.js';
 
-export const blockRootAdminCreation = async (req, res, next) => {
-  const actor = req.user;
+export const blockRootAdminCreation = async (request, response, nextFunction) => {
+  const requestingActor = request.user;
 
-  if (!actor) {
-    return sendError(res, 401, 'Unauthorized: Authentication required.');
+  if (!requestingActor) {
+    return sendError(response, 401, 'Unauthorized: Authentication required.');
   }
 
   // ROOT_ADMIN is permitted to perform ROOT_ADMIN operations (emergency recovery only)
-  if (actor.role === ROLES.ROOT_ADMIN) {
-    return next();
+  if (requestingActor.role === ROLES.ROOT_ADMIN) {
+    return nextFunction();
   }
 
   // Inspect every possible field that could carry a role value
-  const proposedRole = req.body?.role || req.body?.newRole || null;
+  const proposedRole = request.body?.role || request.body?.newRole || null;
 
   if (proposedRole === ROLES.ROOT_ADMIN) {
     // Write immutable audit event — even failed attempts must be recorded
     try {
       await AuditLog.create({
-        actorId:          actor._id || actor.userId,
-        actorRole:        actor.role,
-        actorDesignation: actor.designation || '',
-        actorName:        actor.fullName || '',
+        actorId:          requestingActor._id || requestingActor.userId,
+        actorRole:        requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName:        requestingActor.fullName || '',
         action:           'ROOT_ADMIN_CREATION_ATTEMPT_BLOCKED',
         targetModel:      'User',
-        targetId:         actor._id || actor.userId,
-        targetName:       actor.fullName || '',
-        townId:           actor.townId || null,
-        schoolId:         actor.schoolId || null,
+        targetId:         requestingActor._id || requestingActor.userId,
+        targetName:       requestingActor.fullName || '',
+        townId:           requestingActor.townId || null,
+        schoolId:         requestingActor.schoolId || null,
         previousState:    {},
         newState:         { attemptedRole: ROLES.ROOT_ADMIN },
         result:           'DENIED',
         reason:           'FORBIDDEN: Attempt to assign ROOT_ADMIN role by non-root actor. Request blocked by blockRootAdminCreation middleware.',
-        ipAddress:        req.ip || '',
-        userAgent:        req.headers['user-agent'] || '',
-        requestId:        req.headers['x-request-id'] || '',
+        ipAddress:        request.ip || '',
+        userAgent:        request.headers['user-agent'] || '',
+        requestId:        request.headers['x-request-id'] || '',
       });
     } catch (auditError) {
       // Audit write failure must not suppress the security block
@@ -59,11 +59,11 @@ export const blockRootAdminCreation = async (req, res, next) => {
     }
 
     return sendError(
-      res,
+      response,
       403,
       'Forbidden: ROOT_ADMIN role cannot be assigned through standard administrative workflows.'
     );
   }
 
-  next();
+  nextFunction();
 };

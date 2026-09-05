@@ -9,12 +9,12 @@ import { z } from 'zod';
 const SCRIPT_INJECTION_REGEX = /<[^>]*>|javascript:|on\w+\s*=|\$where|\$expr/i;
 const SPECIAL_CHARS_STRICT_REGEX = /[<>{}()\[\]\\\/]/;
 
-const safeString = (maxLen = 200, minLen = 0, minMsg = '') => {
-  let schema = z.string().trim().max(maxLen, `Must be ${maxLen} characters or fewer`);
-  if (minLen > 0) {
-    schema = schema.min(minLen, minMsg || `Must be at least ${minLen} characters`);
+const safeString = (maximumLength = 200, minimumLength = 0, minimumLengthErrorMessage = '') => {
+  let schema = z.string().trim().max(maximumLength, `Must be ${maximumLength} characters or fewer`);
+  if (minimumLength > 0) {
+    schema = schema.min(minimumLength, minimumLengthErrorMessage || `Must be at least ${minimumLength} characters`);
   }
-  return schema.refine((val) => !SCRIPT_INJECTION_REGEX.test(val), {
+  return schema.refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
     message: 'Input contains disallowed characters or code patterns.',
   });
 };
@@ -25,10 +25,10 @@ const nameField = (label = 'Name') =>
     .trim()
     .min(2, `${label} must be at least 2 characters`)
     .max(100, `${label} must be 100 characters or fewer`)
-    .refine((val) => !SCRIPT_INJECTION_REGEX.test(val), {
+    .refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
       message: 'Input contains disallowed characters or code patterns.',
     })
-    .refine((val) => !SPECIAL_CHARS_STRICT_REGEX.test(val), {
+    .refine((inputValue) => !SPECIAL_CHARS_STRICT_REGEX.test(inputValue), {
       message: `${label} must not contain special characters.`,
     });
 
@@ -39,7 +39,7 @@ const emailField = z
   .min(5, 'Email is required')
   .max(254, 'Email address is too long')
   .email('Please enter a valid email address')
-  .refine((val) => !SCRIPT_INJECTION_REGEX.test(val), {
+  .refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
     message: 'Email contains disallowed patterns.',
   });
 
@@ -47,9 +47,9 @@ const passwordField = z
   .string()
   .min(8, 'Password must be at least 8 characters')
   .max(128, 'Password must not exceed 128 characters')
-  .refine((val) => /[A-Z]/.test(val), { message: 'Password must contain at least one uppercase letter.' })
-  .refine((val) => /[0-9]/.test(val), { message: 'Password must contain at least one number.' })
-  .refine((val) => !SCRIPT_INJECTION_REGEX.test(val), { message: 'Password contains disallowed patterns.' });
+  .refine((inputValue) => /[A-Z]/.test(inputValue), { message: 'Password must contain at least one uppercase letter.' })
+  .refine((inputValue) => /[0-9]/.test(inputValue), { message: 'Password must contain at least one number.' })
+  .refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), { message: 'Password contains disallowed patterns.' });
 
 const phoneField = z
   .string()
@@ -74,7 +74,7 @@ const loginIdentifierField = z
   .trim()
   .min(1, 'Email or GR Number is required')
   .max(254, 'Identifier is too long')
-  .refine((val) => !SCRIPT_INJECTION_REGEX.test(val), {
+  .refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
     message: 'Identifier contains disallowed patterns.',
   });
 
@@ -147,7 +147,7 @@ export const passwordResetConfirmSchema = z
     newPassword: passwordField,
     confirmPassword: z.string().min(1, 'Confirm password is required'),
   })
-  .refine((data) => data.newPassword === data.confirmPassword, {
+  .refine((formValues) => formValues.newPassword === formValues.confirmPassword, {
     message: 'Passwords do not match.',
     path: ['confirmPassword'],
   });

@@ -9,41 +9,41 @@ import { sendError } from '../utils/apiResponse.js';
  * - On failure: returns 422 with structured error details
  * - On success: replaces req.body with safe, parsed, trimmed values
  */
-export const validate = (schema) => (req, res, next) => {
-  const result = schema.safeParse(req.body);
+export const validate = (schema) => (request, response, nextFunction) => {
+  const result = schema.safeParse(request.body);
 
   if (!result.success) {
     // Extract the first error message per field for clear UX feedback
-    const errors = result.error.errors.reduce((acc, err) => {
-      const field = err.path.join('.');
-      if (!acc[field]) {
-        acc[field] = err.message;
+    const formattedErrors = result.error.errors.reduce((accumulatedErrors, validationIssue) => {
+      const fieldPath = validationIssue.path.join('.');
+      if (!accumulatedErrors[fieldPath]) {
+        accumulatedErrors[fieldPath] = validationIssue.message;
       }
-      return acc;
+      return accumulatedErrors;
     }, {});
 
-    const firstMessage = result.error.errors[0]?.message || 'Validation failed.';
+    const firstErrorMessage = result.error.errors[0]?.message || 'Validation failed.';
 
-    return sendError(res, 422, firstMessage, { fields: errors });
+    return sendError(response, 422, firstErrorMessage, { fields: formattedErrors });
   }
 
-  // Replace req.body with Zod-parsed (trimmed, coerced, safe) output
-  req.body = result.data;
-  next();
+  // Replace request.body with Zod-parsed (trimmed, coerced, safe) output
+  request.body = result.data;
+  nextFunction();
 };
 
 /**
  * Zod Query Params Validator Middleware
  * Usage: router.get('/path', validateQuery(schema), handler)
  */
-export const validateQuery = (schema) => (req, res, next) => {
-  const result = schema.safeParse(req.query);
+export const validateQuery = (schema) => (request, response, nextFunction) => {
+  const result = schema.safeParse(request.query);
 
   if (!result.success) {
-    const firstMessage = result.error.errors[0]?.message || 'Invalid query parameters.';
-    return sendError(res, 422, firstMessage);
+    const firstErrorMessage = result.error.errors[0]?.message || 'Invalid query parameters.';
+    return sendError(response, 422, firstErrorMessage);
   }
 
-  req.query = result.data;
-  next();
+  request.query = result.data;
+  nextFunction();
 };

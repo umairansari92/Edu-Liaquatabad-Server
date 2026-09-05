@@ -6,40 +6,40 @@ import AuditLog from '../models/AuditLog.js';
  * @param  {...string} requiredPermissions
  */
 export const authorizePermissions = (...requiredPermissions) => {
-  return async (req, res, next) => {
-    if (!req.user) {
-      return sendError(res, 401, 'Unauthorized: User not authenticated.');
+  return async (request, response, nextFunction) => {
+    if (!request.user) {
+      return sendError(response, 401, 'Unauthorized: User not authenticated.');
     }
 
-    const userPermissions = new Set(req.user.permissions || []);
-    const missingPermissions = requiredPermissions.filter((p) => !userPermissions.has(p));
+    const userPermissions = new Set(request.user.permissions || []);
+    const missingPermissions = requiredPermissions.filter((permission) => !userPermissions.has(permission));
 
     if (missingPermissions.length > 0) {
       // Record DENIED audit log for permission deficit
       await AuditLog.create({
-        actorId: req.user._id || req.user.userId,
-        actorRole: req.user.role,
-        actorDesignation: req.user.designation || '',
-        actorName: req.user.fullName || '',
-        action: req.body.action || 'UNAUTHORIZED_PERMISSION_ATTEMPT',
+        actorId: request.user._id || request.user.userId,
+        actorRole: request.user.role,
+        actorDesignation: request.user.designation || '',
+        actorName: request.user.fullName || '',
+        action: request.body.action || 'UNAUTHORIZED_PERMISSION_ATTEMPT',
         targetModel: 'Endpoint',
-        targetId: req.user._id,
-        townId: req.user.townId,
-        schoolId: req.user.schoolId || null,
+        targetId: request.user._id,
+        townId: request.user.townId,
+        schoolId: request.user.schoolId || null,
         result: 'DENIED',
         reason: `MISSING_PERMISSIONS: Required [${missingPermissions.join(', ')}]`,
-        ipAddress: req.ip || '',
-        userAgent: req.headers['user-agent'] || '',
-        requestId: req.headers['x-request-id'] || '',
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+        requestId: request.headers['x-request-id'] || '',
       });
 
       return sendError(
-        res,
+        response,
         403,
         `Access denied. Missing required permission(s): ${missingPermissions.join(', ')}`
       );
     }
 
-    next();
+    nextFunction();
   };
 };
