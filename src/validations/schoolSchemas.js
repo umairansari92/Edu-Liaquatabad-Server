@@ -30,7 +30,7 @@ export const createSchoolSchema = z.object({
   address: safeString(300, 5, 'School address must be at least 5 characters.'),
   contactPhone: safeString(30).optional(),
   contactEmail: z.string().trim().email('Invalid contact email address.').optional().or(z.literal('')),
-  status: z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE']).optional(),
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE', 'ARCHIVED']).optional(),
 }).strict();
 
 /**
@@ -52,6 +52,7 @@ export const updateSchoolSchema = z.object({
   address: safeString(300, 5).optional(),
   contactPhone: safeString(30).optional(),
   contactEmail: z.string().trim().email('Invalid contact email address.').optional().or(z.literal('')),
-  status: z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE']).optional(),
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE', 'ARCHIVED']).optional(),
   reason: safeString(500, 3, 'A mandatory reason is required for updating municipal school records.').optional(),
 }).strict();
+

@@ -49,3 +49,19 @@ export const updateLifecycleSchema = z.object({
   reason: safeString(500, 3, 'A mandatory justification reason of at least 3 characters is required.'),
   correctionRemarks: safeString(500).optional(),
 }).strict();
+
+/**
+ * Bulk User Action Schema
+ * Supports APPROVE (sets status to ACTIVE) and SUSPEND.
+ */
+export const bulkUserActionSchema = z.object({
+  userIds: z
+    .array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid user ID format.'))
+    .min(1, 'At least one user ID must be provided.')
+    .max(100, 'Cannot process more than 100 users at once.'),
+  action: z.enum(['APPROVE', 'SUSPEND', 'ACTIVATE'], {
+    errorMap: () => ({ message: 'Action must be one of: APPROVE, SUSPEND, ACTIVATE' }),
+  }),
+  reason: safeString(500, 3, 'A mandatory justification reason of at least 3 characters is required.'),
+}).strict();
+

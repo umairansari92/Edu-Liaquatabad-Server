@@ -50,7 +50,7 @@ const SchoolSchema = new mongoose.Schema({
   contactEmail: { type: String, default: '' },
   status: {
     type: String,
-    enum: ['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE'],
+    enum: ['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE', 'ARCHIVED'],
     default: 'ACTIVE',
   },
 }, { timestamps: true });

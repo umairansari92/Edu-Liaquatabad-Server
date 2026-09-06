@@ -337,3 +337,125 @@ export const handleGetUserAuditHistory = asyncHandler(async (request, response) 
 
   return sendSuccess(response, 200, 'User immutable audit trail retrieved.', { history: auditHistory });
 });
+
+/**
+ * Bulk User Status Update (SEC-CRIT-01 hardened)
+ * POST /api/v1/users/bulk
+ * Supports bulk APPROVE (status: ACTIVE) and bulk SUSPEND (status: SUSPENDED).
+ * Invariant: Never allows mutation or suspension of ROOT_ADMIN accounts.
+ */
+export const handleBulkUserAction = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { userIds, action, reason } = request.body;
+
+  const targetStatus = (action === 'APPROVE' || action === 'ACTIVATE') 
+    ? USER_STATUS.ACTIVE 
+    : USER_STATUS.SUSPENDED;
+
+  const results = {
+    totalRequested: userIds.length,
+    succeeded: 0,
+    failed: 0,
+    details: [],
+  };
+
+  const actorRank = ROLE_HIERARCHY[requestingActor.role] || 0;
+  const isRootAdminActor = requestingActor.role === ROLES.ROOT_ADMIN;
+
+  for (const targetId of userIds) {
+    try {
+      const targetUser = await User.findById(targetId);
+      if (!targetUser) {
+        results.failed++;
+        results.details.push({ id: targetId, success: false, reason: 'User not found' });
+        continue;
+      }
+
+      // Invariant 1: ROOT_ADMIN accounts are completely immutable via bulk operations
+      if (targetUser.role === ROLES.ROOT_ADMIN) {
+        await writeControllerDeniedAudit(
+          request,
+          requestingActor,
+          targetUser,
+          'ROOT_ADMIN_BULK_MUTATION_BLOCKED',
+          'CONTROLLER_GUARD: ROOT_ADMIN accounts cannot be modified or suspended via bulk operations.'
+        );
+        results.failed++;
+        results.details.push({ id: targetId, success: false, reason: 'ROOT_ADMIN accounts cannot be modified.' });
+        continue;
+      }
+
+      // Invariant 2: Self-suspension is strictly prohibited
+      if (targetUser._id.toString() === requestingActor._id.toString() && targetStatus === USER_STATUS.SUSPENDED) {
+        await writeControllerDeniedAudit(
+          request,
+          requestingActor,
+          targetUser,
+          'SELF_SUSPENSION_BULK_BLOCKED',
+          'CONTROLLER_GUARD: Actors cannot suspend their own account via bulk operations.'
+        );
+        results.failed++;
+        results.details.push({ id: targetId, success: false, reason: 'Self-suspension is strictly prohibited.' });
+        continue;
+      }
+
+      // Invariant 3: Hierarchy authority check
+      const targetRank = ROLE_HIERARCHY[targetUser.role] || 0;
+      if (!isRootAdminActor && targetRank <= actorRank) {
+        await writeControllerDeniedAudit(
+          request,
+          requestingActor,
+          targetUser,
+          'HIERARCHY_VIOLATION_BULK_BLOCKED',
+          `CONTROLLER_GUARD: Cannot modify user of equal or higher authority (${targetUser.role}).`
+        );
+        results.failed++;
+        results.details.push({ id: targetId, success: false, reason: 'Insufficient hierarchical authority.' });
+        continue;
+      }
+
+      // Invariant 4: Town scope containment for town-scoped actors
+      if (requestingActor.scope === SCOPES.TOWN && targetUser.townId && requestingActor.townId) {
+        if (targetUser.townId.toString() !== requestingActor.townId.toString()) {
+          results.failed++;
+          results.details.push({ id: targetId, success: false, reason: 'Cross-town mutation prohibited.' });
+          continue;
+        }
+      }
+
+      const previousStatus = targetUser.status;
+      targetUser.status = targetStatus;
+      await targetUser.save();
+
+      // Immutable Audit Log
+      await AuditLog.create({
+        actorId:          requestingActor._id || requestingActor.userId,
+        actorRole:        requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName:        requestingActor.fullName || '',
+        action:           `BULK_USER_${action}`,
+        targetModel:      'User',
+        targetId:         targetUser._id,
+        targetName:       targetUser.fullName,
+        townId:           targetUser.townId || requestingActor.townId,
+        schoolId:         targetUser.schoolId || null,
+        previousState:    { status: previousStatus },
+        newState:         { status: targetStatus },
+        result:           'SUCCESS',
+        reason:           reason || `Bulk ${action} executed by ${requestingActor.role}`,
+        ipAddress:        request.ip || '',
+        userAgent:        request.headers['user-agent'] || '',
+        requestId:        request.headers['x-request-id'] || '',
+      });
+
+      results.succeeded++;
+      results.details.push({ id: targetId, name: targetUser.fullName, success: true, status: targetStatus });
+    } catch (itemError) {
+      results.failed++;
+      results.details.push({ id: targetId, success: false, reason: itemError.message });
+    }
+  }
+
+  return sendSuccess(response, 200, `Bulk operation completed: ${results.succeeded} succeeded, ${results.failed} failed.`, results);
+});
+

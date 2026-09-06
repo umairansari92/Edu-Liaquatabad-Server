@@ -6,6 +6,9 @@ import publicRoutes from '../publicRoutes.js';
 import userRoutes from '../userRoutes.js';
 import superAdminRoutes from '../superAdminRoutes.js';
 import schoolRoutes from '../schoolRoutes.js';
+import academicRoutes from '../academicRoutes.js';
+import transferRoutes from '../transferRoutes.js';
+import exportRoutes from '../exportRoutes.js';
 
 const router = express.Router();
 
@@ -30,5 +33,15 @@ router.use('/public', publicRoutes);
 // Super Admin provisioning & management (ROOT_ADMIN / SUPER_ADMIN only)
 router.use('/admin/super-admins', superAdminRoutes);
 
+// Academic management (Classes, Sections, Subjects)
+router.use('/academic', academicRoutes);
+
+// Teacher transfers & staff reassignments
+router.use('/transfers', transferRoutes);
+
+// Export operations (CSV streaming)
+router.use('/exports', exportRoutes);
+
 export default router;
+
 
