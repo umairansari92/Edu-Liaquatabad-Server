@@ -282,6 +282,12 @@ export const handleGetSchoolById = asyncHandler(async (request, response) => {
 export const handleUpdateSchool = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
   const { id: targetSchoolId } = request.params;
+
+  // ── SEC-CRIT-02: ObjectId format validation ───────────────────────────────────
+  if (!targetSchoolId || !/^[0-9a-fA-F]{24}$/.test(targetSchoolId)) {
+    return sendError(response, 400, 'Invalid school ID format. Must be a valid 24-character hexadecimal MongoDB ObjectId.');
+  }
+
   const {
     name,
     schoolCode,
@@ -298,6 +304,57 @@ export const handleUpdateSchool = asyncHandler(async (request, response) => {
   const schoolRecord = await School.findById(targetSchoolId);
   if (!schoolRecord) {
     return sendError(response, 404, 'Municipal school not found.');
+  }
+
+  // ── SEC-CRIT-02: Controller-level jurisdictional assertion (defense-in-depth) ─
+  // Even if authorizeScope middleware were somehow bypassed, the controller
+  // independently enforces the ADMIN town boundary.
+  if (requestingActor.role === ROLES.ADMIN) {
+    if (!requestingActor.townId) {
+      await writeSchoolAuditLog({
+        actorId: requestingActor._id || requestingActor.userId,
+        actorRole: requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName: requestingActor.fullName || '',
+        action: 'ADMIN_NO_TOWN_SCHOOL_UPDATE_BLOCKED',
+        targetSchoolId: schoolRecord._id,
+        targetSchoolName: schoolRecord.name,
+        townId: null,
+        previousState: { townId: String(schoolRecord.townId) },
+        newState: {},
+        result: 'DENIED',
+        reason: 'CONTROLLER_GUARD: ADMIN actor has no townId assigned — cannot update any school.',
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+        requestId: request.headers['x-request-id'] || '',
+      });
+      return sendError(response, 403, 'Access denied. Your administrative account has no town assignment.');
+    }
+
+    if (String(schoolRecord.townId) !== String(requestingActor.townId)) {
+      await writeSchoolAuditLog({
+        actorId: requestingActor._id || requestingActor.userId,
+        actorRole: requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName: requestingActor.fullName || '',
+        action: 'ADMIN_CROSS_TOWN_SCHOOL_UPDATE_BLOCKED',
+        targetSchoolId: schoolRecord._id,
+        targetSchoolName: schoolRecord.name,
+        townId: requestingActor.townId,
+        previousState: { schoolTownId: String(schoolRecord.townId), actorTownId: String(requestingActor.townId) },
+        newState: {},
+        result: 'DENIED',
+        reason: `CONTROLLER_GUARD: ADMIN cannot update a school outside their administrative jurisdiction. School town: ${schoolRecord.townId}, Actor town: ${requestingActor.townId}.`,
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+        requestId: request.headers['x-request-id'] || '',
+      });
+      return sendError(
+        response,
+        403,
+        'Access denied. You do not have jurisdictional authority over schools in another administrative town.'
+      );
+    }
   }
 
   const previousState = {

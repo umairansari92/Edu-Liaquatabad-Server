@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "test": "node tests/auth_suite.test.js && node tests/authority_model_suite.test.js && node tests/auth_hierarchy_suite.test.js && node tests/security_suite.test.js"
+    "test": "node tests/auth_suite.test.js && node tests/authority_model_suite.test.js && node tests/auth_hierarchy_suite.test.js && node tests/security_suite.test.js && node tests/security_remediation_wave1.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

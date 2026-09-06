@@ -31,8 +31,13 @@ export const createSchoolSchema = z.object({
   contactPhone: safeString(30).optional(),
   contactEmail: z.string().trim().email('Invalid contact email address.').optional().or(z.literal('')),
   status: z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE']).optional(),
-});
+}).strict();
 
+/**
+ * Update School Schema (SEC-CRIT-02 hardened)
+ * .strict() blocks injection of immutable identifiers (townId, organizationId, _id, etc.)
+ * through the request body. Only allowed update fields can pass validation.
+ */
 export const updateSchoolSchema = z.object({
   name: safeString(150, 3).optional(),
   schoolCode: z
@@ -49,4 +54,4 @@ export const updateSchoolSchema = z.object({
   contactEmail: z.string().trim().email('Invalid contact email address.').optional().or(z.literal('')),
   status: z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE']).optional(),
   reason: safeString(500, 3, 'A mandatory reason is required for updating municipal school records.').optional(),
-});
+}).strict();

@@ -6,6 +6,36 @@ import { ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constan
 import { validatePermissionCeiling } from '../config/permissions.js';
 
 /**
+ * Writes a DENIED audit record for SEC-CRIT-01 controller-level blocks.
+ * Intentionally excludes passwords, tokens, or other secrets.
+ */
+const writeControllerDeniedAudit = async (request, requestingActor, targetUser, action, reason) => {
+  try {
+    await AuditLog.create({
+      actorId:          requestingActor._id || requestingActor.userId,
+      actorRole:        requestingActor.role,
+      actorDesignation: requestingActor.designation || '',
+      actorName:        requestingActor.fullName || '',
+      action,
+      targetModel:      'User',
+      targetId:         targetUser._id,
+      targetName:       targetUser.fullName,
+      townId:           requestingActor.townId,
+      schoolId:         targetUser.schoolId || null,
+      previousState:    { role: targetUser.role, status: targetUser.status },
+      newState:         {},
+      result:           'DENIED',
+      reason,
+      ipAddress:        request.ip || '',
+      userAgent:        request.headers['user-agent'] || '',
+      requestId:        request.headers['x-request-id'] || '',
+    });
+  } catch (auditError) {
+    console.error('[ControllerGuard Audit Error]', auditError.message);
+  }
+};
+
+/**
  * Assign Designation, Role, Scope, and Custom Permissions to a User
  * PATCH /api/v1/users/:id/role-designation
  */
@@ -15,7 +45,35 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
     return sendError(response, 404, 'Target user account not found.');
   }
 
+  const requestingActor = request.user;
   const { designation, role, scope, customPermissions, reason = 'Administrative role/designation adjustment' } = request.body;
+
+  // ── SEC-CRIT-01 Defense-in-Depth: Controller-level invariant checks ──────────
+  // These guards fire even if authorizeHierarchy middleware was somehow bypassed.
+
+  // Guard A: ROOT_ADMIN accounts are immutable via web APIs
+  const isMutationRequest = !!(role || scope || customPermissions);
+  if (targetUser.role === ROLES.ROOT_ADMIN && isMutationRequest) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'ROOT_ADMIN_ROLE_MUTATION_ATTEMPT_BLOCKED',
+      'CONTROLLER_GUARD: ROOT_ADMIN accounts cannot have role, scope, or permissions changed via web APIs.'
+    );
+    return sendError(response, 403, 'Forbidden: ROOT_ADMIN accounts are immutable via web APIs.');
+  }
+
+  // Guard B: Self-demotion prohibition
+  const actorId    = String(requestingActor._id || requestingActor.userId);
+  const targetId   = String(targetUser._id);
+  const isSelfOp   = actorId === targetId;
+  if (isSelfOp && (role || scope)) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'SELF_ROLE_MUTATION_ATTEMPT_BLOCKED',
+      'CONTROLLER_GUARD: Actors cannot change their own role or scope via web APIs.'
+    );
+    return sendError(response, 403, 'Forbidden: You cannot change your own role or scope.');
+  }
 
   // 1. Validate Proposed Role
   if (role && !Object.values(ROLES).includes(role)) {
@@ -116,7 +174,34 @@ export const handleUpdateUserStatus = asyncHandler(async (request, response) => 
     return sendError(response, 404, 'Target user account not found.');
   }
 
+  const requestingActor = request.user;
   const { status, reason, correctionRemarks } = request.body;
+
+  // ── SEC-CRIT-01 Defense-in-Depth: Controller-level invariant checks ──────────
+
+  // Guard A: ROOT_ADMIN accounts cannot be suspended/deactivated via web APIs
+  const isDeactivation = status && status !== USER_STATUS.ACTIVE;
+  if (targetUser.role === ROLES.ROOT_ADMIN && isDeactivation) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'ROOT_ADMIN_SUSPENSION_ATTEMPT_BLOCKED',
+      `CONTROLLER_GUARD: ROOT_ADMIN accounts cannot be suspended or deactivated via web APIs. Attempted status: ${status}.`
+    );
+    return sendError(response, 403, 'Forbidden: ROOT_ADMIN accounts cannot be suspended or deactivated through web APIs.');
+  }
+
+  // Guard B: Self-suspension prohibition
+  const actorId       = String(requestingActor._id || requestingActor.userId);
+  const targetId      = String(targetUser._id);
+  const isSelfOp      = actorId === targetId;
+  if (isSelfOp && isDeactivation) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'SELF_SUSPENSION_ATTEMPT_BLOCKED',
+      `CONTROLLER_GUARD: Actors cannot suspend or deactivate their own account via web APIs. Attempted status: ${status}.`
+    );
+    return sendError(response, 403, 'Forbidden: You cannot suspend or deactivate your own account.');
+  }
 
   if (!status || !Object.values(USER_STATUS).includes(status)) {
     return sendError(response, 400, `Invalid lifecycle status. Must be one of: ${Object.values(USER_STATUS).join(', ')}`);
@@ -155,15 +240,15 @@ export const handleUpdateUserStatus = asyncHandler(async (request, response) => 
 
   // Write Git-like Immutable Audit Log
   await AuditLog.create({
-    actorId: request.user._id || request.user.userId,
-    actorRole: request.user.role,
-    actorDesignation: request.user.designation || '',
-    actorName: request.user.fullName || '',
+    actorId: requestingActor._id || requestingActor.userId,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName || '',
     action: `USER_LIFECYCLE_${status}`,
     targetModel: 'User',
     targetId: targetUser._id,
     targetName: targetUser.fullName,
-    townId: request.user.townId,
+    townId: requestingActor.townId,
     schoolId: targetUser.schoolId || null,
     previousState,
     newState,
