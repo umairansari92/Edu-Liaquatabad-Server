@@ -12,7 +12,14 @@ import {
   handleForgotPassword,
   handleResetPassword,
 } from '../controllers/authController.js';
-import { authLimiter } from '../middlewares/tripleLockRateLimiter.js';
+import {
+  authLimiter,
+  loginLimiter,
+  captchaLimiter,
+  otpLimiter,
+  registrationLimiter,
+  refreshTokenLimiter,
+} from '../middlewares/tripleLockRateLimiter.js';
 import { honeypotCheck } from '../middlewares/honeypot.js';
 import { validate } from '../middlewares/validate.js';
 import { authenticate } from '../middlewares/authenticate.js';
@@ -29,18 +36,18 @@ import {
 const router = express.Router();
 
 // ─── CAPTCHA ──────────────────────────────────────────────────────────────────
-router.get('/captcha', authLimiter, handleGetCaptcha);
+router.get('/captcha', captchaLimiter, handleGetCaptcha);
 
 // ─── Sign In / Sign Out / Session ─────────────────────────────────────────────
 router.post(
   '/login',
-  authLimiter,
+  loginLimiter,
   honeypotCheck,
   validate(loginSchema),
   handleLogin
 );
 
-router.post('/refresh-token', authLimiter, handleRefreshToken);
+router.post('/refresh-token', refreshTokenLimiter, handleRefreshToken);
 
 router.post('/logout', authenticate, handleLogout);
 
@@ -49,7 +56,7 @@ router.get('/me', authenticate, handleGetMe);
 // ─── OTP Operations ───────────────────────────────────────────────────────────
 router.post(
   '/send-otp',
-  authLimiter,
+  otpLimiter,
   honeypotCheck,
   validate(sendOtpSchema),
   handleSendOtp
@@ -57,7 +64,7 @@ router.post(
 
 router.post(
   '/verify-otp',
-  authLimiter,
+  otpLimiter,
   honeypotCheck,
   validate(verifyOtpSchema),
   handleVerifyOtp
@@ -66,7 +73,7 @@ router.post(
 // ─── Registration Endpoints (Public Onboarding) ───────────────────────────────
 router.post(
   '/register-student',
-  authLimiter,
+  registrationLimiter,
   honeypotCheck,
   validate(registerStudentSchema),
   handleRegisterStudent
@@ -74,7 +81,7 @@ router.post(
 
 router.post(
   '/register-teacher',
-  authLimiter,
+  registrationLimiter,
   honeypotCheck,
   validate(registerTeacherSchema),
   handleRegisterTeacher

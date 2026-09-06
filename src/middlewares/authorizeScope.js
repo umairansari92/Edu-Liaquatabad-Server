@@ -102,10 +102,14 @@ export const authorizeScope = async (request, response, nextFunction) => {
         }
       }
 
-      // B2. If actor has TOWN scope (ADMIN, SUPER_ADMIN), ensure target belongs to same town
-      if (requestingActor.scope === SCOPES.TOWN && requestingActor.townId && targetUser.townId) {
+      // B2. If actor has ADMINISTRATIVE scope (ADMIN, SUPER_ADMIN), ensure target belongs to same administrative jurisdiction
+      if (
+        (requestingActor.scope === SCOPES.ADMINISTRATIVE || requestingActor.scope === 'TOWN') &&
+        requestingActor.townId &&
+        targetUser.townId
+      ) {
         if (String(requestingActor.townId) !== String(targetUser.townId)) {
-          await logScopeViolation(request, requestingActor, 'CROSS_TOWN_MUTATION_VIOLATION', {
+          await logScopeViolation(request, requestingActor, 'CROSS_ADMINISTRATIVE_MUTATION_VIOLATION', {
             targetUserId: targetUser._id,
             targetTownId: String(targetUser.townId),
             actorTownId: String(requestingActor.townId),
@@ -113,7 +117,7 @@ export const authorizeScope = async (request, response, nextFunction) => {
           return sendError(
             response,
             403,
-            'Access denied. Target user belongs to another administrative town directorate.'
+            'Access denied. Target user belongs to another administrative jurisdiction.'
           );
         }
       }

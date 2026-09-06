@@ -18,6 +18,12 @@ import {
   handleCreateSuperAdmin,
   handleDisableSuperAdmin,
   handleListSuperAdmins,
+  handleGetPlatformOverview,
+  handleGetSystemAuditLogs,
+  handleGetPendingUsers,
+  handleFlushSecurityLockouts,
+  handleGetPlatformAnalytics,
+  handleBroadcastAlert,
 } from '../controllers/superAdminManagementController.js';
 
 const router = express.Router();
@@ -25,6 +31,42 @@ const router = express.Router();
 // All routes in this file require authentication and minimum SUPER_ADMIN authority
 router.use(authenticate);
 router.use(authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN));
+
+/**
+ * GET /api/v1/admin/super-admins/overview
+ * Platform Governance Overview metrics
+ */
+router.get('/overview', handleGetPlatformOverview);
+
+/**
+ * GET /api/v1/admin/super-admins/analytics
+ * Real-time 2026 Telemetry & Analytics Hub
+ */
+router.get('/analytics', handleGetPlatformAnalytics);
+
+/**
+ * GET /api/v1/admin/super-admins/audit-logs
+ * System immutable audit trail feed
+ */
+router.get('/audit-logs', handleGetSystemAuditLogs);
+
+/**
+ * GET /api/v1/admin/super-admins/pending-users
+ * Pending user approval queue
+ */
+router.get('/pending-users', handleGetPendingUsers);
+
+/**
+ * POST /api/v1/admin/super-admins/flush-lockouts
+ * Clear security IP lockouts and failed login strikes
+ */
+router.post('/flush-lockouts', handleFlushSecurityLockouts);
+
+/**
+ * POST /api/v1/admin/super-admins/broadcast
+ * Broadcast emergency alert across all portal instances
+ */
+router.post('/broadcast', handleBroadcastAlert);
 
 /**
  * GET /api/v1/admin/super-admins

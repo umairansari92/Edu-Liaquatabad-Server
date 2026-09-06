@@ -5,6 +5,7 @@ import studentRoutes from '../studentRoutes.js';
 import publicRoutes from '../publicRoutes.js';
 import userRoutes from '../userRoutes.js';
 import superAdminRoutes from '../superAdminRoutes.js';
+import schoolRoutes from '../schoolRoutes.js';
 
 const router = express.Router();
 
@@ -16,6 +17,9 @@ router.use('/auth', authRoutes);
 
 // User & Role Management endpoints
 router.use('/users', userRoutes);
+
+// Municipal School infrastructure endpoints
+router.use('/schools', schoolRoutes);
 
 // Student enrollment & numbering endpoints
 router.use('/students', studentRoutes);

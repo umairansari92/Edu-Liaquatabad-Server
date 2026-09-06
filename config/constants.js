@@ -58,7 +58,8 @@ export const ROLE_HIERARCHY = Object.freeze({
  */
 export const SCOPES = Object.freeze({
   GLOBAL:           'GLOBAL',           // Cross-organization (ROOT_ADMIN only)
-  TOWN:             'TOWN',             // All schools in this town (SUPER_ADMIN, ADMIN)
+  ADMINISTRATIVE:   'ADMINISTRATIVE',   // Operational administrative scope across all schools (SUPER_ADMIN, ADMIN)
+  TOWN:             'ADMINISTRATIVE',   // Backwards-compatibility alias for transition
   ASSIGNED_SCHOOLS: 'ASSIGNED_SCHOOLS', // Multiple assigned schools (SUPERVISOR field)
   SCHOOL:           'SCHOOL',           // Single school (HM)
   CLASS_SECTION:    'CLASS_SECTION',    // Specific class/section (TEACHER)
@@ -72,8 +73,8 @@ export const SCOPES = Object.freeze({
  */
 export const ROLE_DEFAULT_SCOPE = Object.freeze({
   [ROLES.ROOT_ADMIN]:  SCOPES.GLOBAL,
-  [ROLES.SUPER_ADMIN]: SCOPES.TOWN,
-  [ROLES.ADMIN]:       SCOPES.TOWN,
+  [ROLES.SUPER_ADMIN]: SCOPES.ADMINISTRATIVE,
+  [ROLES.ADMIN]:       SCOPES.ADMINISTRATIVE,
   [ROLES.SUPERVISOR]:  SCOPES.ASSIGNED_SCHOOLS,
   [ROLES.HM]:          SCOPES.SCHOOL,
   [ROLES.TEACHER]:     SCOPES.CLASS_SECTION,

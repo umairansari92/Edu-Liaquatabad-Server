@@ -2,12 +2,22 @@ import rateLimit from 'express-rate-limit';
 import SecurityLockout from '../models/SecurityLockout.js';
 import { evaluateImpossibleTravel } from '../utils/geoVelocityDetector.js';
 
+const isDevelopmentEnvironment = process.env.NODE_ENV !== 'production';
+
+// Helper to determine if the request is from local machine in development
+const isLocalhostRequest = (incomingRequest) => {
+  if (!isDevelopmentEnvironment) return false;
+  const clientIpAddress = incomingRequest.ip || incomingRequest.socket?.remoteAddress || '';
+  return clientIpAddress === '::1' || clientIpAddress === '127.0.0.1' || clientIpAddress === '::ffff:127.0.0.1';
+};
+
 // Lock 1: IP-Level Global Rate Limiter
 export const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per IP
+  max: isDevelopmentEnvironment ? 2000 : 300, // 2000 in dev, 300 in prod
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
   message: {
     success: false,
     statusCode: 429,
@@ -15,16 +25,87 @@ export const globalLimiter = rateLimit({
   },
 });
 
-// Lock 2: Auth Endpoints Rate Limiter
+// Lock 2: General Auth Rate Limiter (legacy/general fallback)
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10, // 10 auth attempts per IP
+  max: isDevelopmentEnvironment ? 500 : 30, // 500 in dev, 30 in prod
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
   message: {
     success: false,
     statusCode: 429,
     message: 'Too many authentication attempts from this IP. Please try again after 15 minutes.',
+  },
+});
+
+// Dedicated Login Limiter (prevents brute-forcing credentials)
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 200 : 15, // 15 failed logins per 15 min in prod
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many login attempts from this IP. Please try again after 15 minutes.',
+  },
+});
+
+// Dedicated Captcha Limiter (allows frequent refresh without choking logins)
+export const captchaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 1000 : 120, // 120 captchas per 15 min in prod
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many CAPTCHA requests. Please try again in a few moments.',
+  },
+});
+
+// Dedicated OTP Limiter
+export const otpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: isDevelopmentEnvironment ? 100 : 10, // 10 OTP dispatches per 10 min
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many OTP requests. Please wait a few minutes before requesting another code.',
+  },
+});
+
+// Dedicated Registration Limiter
+export const registrationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 100 : 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many registration attempts. Please try again after 15 minutes.',
+  },
+});
+
+// Dedicated Silent Refresh Token Limiter
+export const refreshTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 1000 : 150,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many session refresh attempts. Please re-authenticate.',
   },
 });
 
