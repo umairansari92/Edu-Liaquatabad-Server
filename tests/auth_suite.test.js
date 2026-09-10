@@ -103,9 +103,9 @@ async function runAuthSuite() {
   const invalidEmail = loginSchema.safeParse({ email: '<script>alert(1)</script>', password: 'Password123' });
   assert(!invalidEmail.success, 'Script injection in email is strictly rejected by schema');
 
-  // 6. Role Matrix & Scope Completeness Check
-  console.log('\n--- 6. 8-Role Definitive System Hierarchy (Designation ≠ Role) ---');
-  // CORRECT final 8 roles — DDO is a designation, ADMIN is the role
+  // 6. 9-Role Definitive System Hierarchy (Designation ≠ Role)
+  console.log('\n--- 6. 9-Role Definitive System Hierarchy (Designation ≠ Role) ---');
+  // CORRECT final 9 roles — DDO is a designation, ADMIN is the role
   const expectedRoles = [
     ROLES.ROOT_ADMIN,   // Level 100 — CLI-only emergency
     ROLES.SUPER_ADMIN,  // Level 90  — e.g., Town Chairman designation
@@ -113,10 +113,11 @@ async function runAuthSuite() {
     ROLES.SUPERVISOR,   // Level 60  — e.g., Education Officer designation
     ROLES.HM,           // Level 50  — e.g., Head Master / Asst. Head Master designation
     ROLES.TEACHER,      // Level 30
+    ROLES.PEON,         // Level 20  — non-teaching support staff
     ROLES.STUDENT,      // Level 10
     ROLES.PARENT,       // Level 10
   ];
-  assert(Object.values(ROLES).length === 8, 'Exact 8 system roles codified in constants');
+  assert(Object.values(ROLES).length === 9, 'Exact 9 system roles codified in constants');
   expectedRoles.forEach((role) => {
     assert(Object.values(ROLES).includes(role), `Role ${role} is verified in constants`);
   });

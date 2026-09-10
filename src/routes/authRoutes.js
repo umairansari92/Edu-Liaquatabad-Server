@@ -28,6 +28,7 @@ import {
   verifyOtpSchema,
   registerStudentSchema,
   registerTeacherSchema,
+  registerStaffSchema,
   loginSchema,
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
@@ -85,6 +86,14 @@ router.post(
   honeypotCheck,
   validate(registerTeacherSchema),
   handleRegisterTeacher
+);
+
+router.post(
+  '/register-staff',
+  registrationLimiter,
+  honeypotCheck,
+  validate(registerStaffSchema),
+  handleRegisterStaff
 );
 
 // ─── Password Recovery ────────────────────────────────────────────────────────

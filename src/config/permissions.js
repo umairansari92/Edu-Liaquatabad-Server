@@ -148,6 +148,11 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_VIEW,
   ],
 
+  // PEON: Operational support staff — documents view
+  [ROLES.PEON]: [
+    PERMISSIONS.DOCUMENTS_VIEW,
+  ],
+
   // STUDENT: Read-only access to own records
   [ROLES.STUDENT]: [
     PERMISSIONS.ATTENDANCE_VIEW,
@@ -202,6 +207,10 @@ export const ROLE_PERMISSION_CEILING = Object.freeze({
     PERMISSIONS.SCHOOLS_UPDATE,
     PERMISSIONS.SCHOOLS_SET_CODE,
   ],
+
+  [ROLES.PEON]: Object.values(PERMISSIONS).filter(
+    (p) => ![PERMISSIONS.DOCUMENTS_VIEW, PERMISSIONS.ATTENDANCE_VIEW].includes(p)
+  ),
 
   [ROLES.STUDENT]: Object.values(PERMISSIONS).filter(
     (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)

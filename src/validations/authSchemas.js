@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BASE_ROLES, ROLES } from '../../config/constants.js';
 
 // ─── Reusable Primitives ───────────────────────────────────────────────────────
 
@@ -116,11 +117,16 @@ export const registerStudentSchema = z.object({
   guardianContactNumber: phoneField.optional().or(z.literal('')),
   classId: z.string().trim().max(100).optional(),
   sectionId: z.string().trim().max(100).optional(),
+  baseRole: z.literal(BASE_ROLES.STUDENT).optional().default(BASE_ROLES.STUDENT),
+  role: z.string().optional(),
   otpCode: otpField.optional().or(z.literal('')),
   captchaAnswer: z.string().trim().optional(),
   captchaChallengeToken: z.string().trim().optional(),
   _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
-});
+}).refine(
+  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
+  { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
+);
 
 export const registerTeacherSchema = z.object({
   fullName: nameField('Full Name'),
@@ -130,11 +136,35 @@ export const registerTeacherSchema = z.object({
   designation: safeString(100, 2, 'Designation is required'),
   qualification: safeString(100, 2, 'Qualification is required'),
   schoolId: z.string().trim().max(100).optional(),
+  baseRole: z.enum([BASE_ROLES.TEACHER, BASE_ROLES.PEON, BASE_ROLES.SUPERVISOR]).optional().default(BASE_ROLES.TEACHER),
+  role: z.string().optional(),
   otpCode: otpField,
   captchaAnswer: z.string().trim().optional(),
   captchaChallengeToken: z.string().trim().optional(),
   _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
-});
+}).refine(
+  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
+  { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
+);
+
+export const registerStaffSchema = z.object({
+  fullName: nameField('Full Name'),
+  email: emailField,
+  password: passwordField,
+  phoneNumber: phoneField,
+  designation: safeString(100, 2, 'Designation is required'),
+  qualification: safeString(100, 0).optional(),
+  schoolId: z.string().trim().max(100).optional(),
+  baseRole: z.enum([BASE_ROLES.PEON, BASE_ROLES.TEACHER, BASE_ROLES.SUPERVISOR]),
+  role: z.string().optional(),
+  otpCode: otpField,
+  captchaAnswer: z.string().trim().optional(),
+  captchaChallengeToken: z.string().trim().optional(),
+  _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
+}).refine(
+  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
+  { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
+);
 
 export const passwordResetRequestSchema = z.object({
   email: emailField,

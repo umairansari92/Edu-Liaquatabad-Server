@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 
 const UserSchema = new mongoose.Schema({
   organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
@@ -12,10 +12,26 @@ const UserSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true, select: false },
   phoneNumber: { type: String, trim: true, default: '' },
 
-  // Civil Service Title (e.g., "Town Chairman", "Deputy Director of Education", "Head Master")
+  // Civil Service Title (e.g., "DDO", "Senior Clerk", "Accountant", "Head Master", "Teacher")
+  // MANDATE: Designation has ZERO authorization power. Free-text metadata only.
   designation: { type: String, trim: true, default: '' },
 
-  // System Authority Role
+  // Controlled Base Role at Onboarding (PEON, TEACHER, SUPERVISOR, STUDENT, PARENT)
+  baseRole: {
+    type: String,
+    enum: Object.values(BASE_ROLES),
+    default: function () {
+      if (this.role && Object.values(BASE_ROLES).includes(this.role)) {
+        return this.role;
+      }
+      if ([ROLES.HM, ROLES.TEACHER].includes(this.role)) return BASE_ROLES.TEACHER;
+      if (this.role === ROLES.SUPERVISOR) return BASE_ROLES.SUPERVISOR;
+      return BASE_ROLES.TEACHER;
+    },
+    index: true,
+  },
+
+  // System Authority Role (Technical Authorization Boundary)
   role: {
     type: String,
     enum: Object.values(ROLES),
@@ -23,7 +39,7 @@ const UserSchema = new mongoose.Schema({
     index: true,
   },
 
-  // Operational Scope
+  // Operational Jurisdictional Scope (GLOBAL, TOWN, ASSIGNED_SCHOOLS, SCHOOL, CLASS_SECTION, SELF, CHILD)
   scope: {
     type: String,
     enum: Object.values(SCOPES),
@@ -57,6 +73,11 @@ const UserSchema = new mongoose.Schema({
 // Virtual to easily read numerical hierarchy level
 UserSchema.virtual('roleLevel').get(function () {
   return ROLE_HIERARCHY[this.role] || 0;
+});
+
+// Virtual alias: grantedAuthority maps to technical system role
+UserSchema.virtual('grantedAuthority').get(function () {
+  return this.role;
 });
 
 UserSchema.set('toJSON', { virtuals: true });

@@ -75,6 +75,28 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
     return sendError(response, 403, 'Forbidden: You cannot change your own role or scope.');
   }
 
+  // Guard C: Hierarchy privilege escalation check (actor cannot grant equal or higher authority)
+  const actorRoleLevel = requestingActor.roleLevel || ROLE_HIERARCHY[requestingActor.role] || 0;
+  const targetRoleLevel = ROLE_HIERARCHY[targetUser.role] || 0;
+
+  if (requestingActor.role !== ROLES.ROOT_ADMIN && actorRoleLevel <= targetRoleLevel) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'HIERARCHY_VIOLATION_CONTROLLER_BLOCKED',
+      `CONTROLLER_GUARD: Cannot modify user of equal or higher authority (${targetUser.role}).`
+    );
+    return sendError(response, 403, `Access denied. You cannot manage an account with equal or higher authority (${targetUser.role}).`);
+  }
+
+  if (role && requestingActor.role !== ROLES.ROOT_ADMIN && (ROLE_HIERARCHY[role] || 0) >= actorRoleLevel) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'PRIVILEGE_ESCALATION_CONTROLLER_BLOCKED',
+      `CONTROLLER_GUARD: Actor cannot grant role equal to or higher than their own level (${role}).`
+    );
+    return sendError(response, 403, `Access denied. You cannot assign a role with equal or higher authority (${role}).`);
+  }
+
   // 1. Validate Proposed Role
   if (role && !Object.values(ROLES).includes(role)) {
     return sendError(response, 400, `Invalid role. Must be one of: ${Object.values(ROLES).join(', ')}`);
@@ -155,7 +177,9 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
       fullName: targetUser.fullName,
       email: targetUser.email,
       designation: targetUser.designation,
+      baseRole: targetUser.baseRole,
       role: targetUser.role,
+      grantedAuthority: targetUser.role,
       scope: targetUser.scope,
       customPermissions: targetUser.customPermissions,
       status: targetUser.status,
@@ -280,6 +304,8 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     query.schoolId = { $in: request.user.assignedSchools || [] };
   } else if ([ROLES.HM, ROLES.TEACHER].includes(request.user.role)) {
     query.schoolId = request.user.schoolId;
+  } else if (request.user.role === ROLES.ADMIN && request.user.townId) {
+    query.townId = request.user.townId;
   }
 
   if (role) query.role = role;

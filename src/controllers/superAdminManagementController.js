@@ -22,7 +22,7 @@ import AuditLog from '../models/AuditLog.js';
 import School from '../models/School.js';
 import SecurityLockout from '../models/SecurityLockout.js';
 import Notification from '../models/Notification.js';
-import { ROLES, SCOPES, USER_STATUS, ROLE_DEFAULT_SCOPE } from '../../config/constants.js';
+import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_DEFAULT_SCOPE } from '../../config/constants.js';
 import { hashPassword } from '../utils/passwordUtils.js';
 
 // ─── Helper: write audit record ──────────────────────────────────────────────
@@ -129,6 +129,7 @@ export const handleCreateSuperAdmin = asyncHandler(async (request, response) => 
     email:            email.toLowerCase().trim(),
     passwordHash,
     designation:      String(designation).trim(),
+    baseRole:         request.body.baseRole || BASE_ROLES.SUPERVISOR,
     role:             ROLES.SUPER_ADMIN,          // Hard-coded — cannot be overridden
     scope:            resolvedScope,
     customPermissions: [],

@@ -13,7 +13,7 @@ import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import School from '../models/School.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES, SCOPES, USER_STATUS, STUDENT_STATUS } from '../../config/constants.js';
+import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 import { hashPassword } from '../utils/passwordUtils.js';
 
 // Roles authorized to enroll students
@@ -75,9 +75,21 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     return sendError(response, 403, 'Access denied. Only authorized staff can enroll students.');
   }
 
-  const actorSchoolId = request.user?.schoolId;
-  if (!actorSchoolId) {
-    return sendError(response, 400, 'Your account is not linked to a school.');
+  if (actorRole === ROLES.HM) {
+    if (!request.user.schoolId) {
+      return sendError(response, 400, 'Your Head Master account is not linked to an authorized school.');
+    }
+    if (request.body.schoolId && String(request.body.schoolId) !== String(request.user.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only enroll students in your own assigned school.');
+    }
+  }
+
+  const effectiveSchoolId = (actorRole === ROLES.HM)
+    ? request.user.schoolId
+    : (request.body.schoolId || request.user?.schoolId);
+
+  if (!effectiveSchoolId) {
+    return sendError(response, 400, 'Target school identifier is required for student enrollment.');
   }
 
   const {
@@ -99,18 +111,18 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
 
   if (admissionType === 'NEW_ADMISSION') {
     // Atomically increment and get next GR No
-    assignedGrNumber = await generateNextGrNumber(actorSchoolId);
+    assignedGrNumber = await generateNextGrNumber(effectiveSchoolId);
   } else {
     // EXISTING_ENTRY: validate the manually provided GR is not already taken
-    await validateManualGrNumber(actorSchoolId, manualGrNumber);
+    await validateManualGrNumber(effectiveSchoolId, manualGrNumber);
     assignedGrNumber = manualGrNumber;
     // Sync counter so future auto-GRs don't collide
-    await syncGrCounterIfNeeded(actorSchoolId, manualGrNumber);
+    await syncGrCounterIfNeeded(effectiveSchoolId, manualGrNumber);
   }
 
   // ── Step 2: Generate Global Student ID ─────────────────────────────────────
   // Returns null if schoolCode not yet assigned to this school (deferred)
-  const globalStudentId = await generateGlobalStudentId(actorSchoolId);
+  const globalStudentId = await generateGlobalStudentId(effectiveSchoolId);
 
   // ── Step 3: Create a system-managed User account for the student ───────────
   // A minimal account — no password needed yet (HM enrolls, student logs in later)
@@ -118,20 +130,22 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
   const enrolledUser = await User.create({
     organizationId: request.user?.organizationId,
     townId: request.user?.townId,
-    schoolId: actorSchoolId,
+    schoolId: effectiveSchoolId,
     fullName: fullName.trim(),
     email: null, // Email optional at enrollment — can be added later
     passwordHash: temporaryPasswordHash,
     phoneNumber: guardianContact,
+    designation: 'Enrolled Student',
+    baseRole: BASE_ROLES.STUDENT,
     role: ROLES.STUDENT,
-    scope: SCOPES.SELF_CHILD,
+    scope: SCOPES.SELF,
     status: USER_STATUS.PENDING_APPROVAL,
   });
 
   // ── Step 4: Create StudentProfile with dual numbers ─────────────────────────
   const studentProfile = await StudentProfile.create({
     userId: enrolledUser._id,
-    schoolId: actorSchoolId,
+    schoolId: effectiveSchoolId,
     classId,
     sectionId,
     grNumber: assignedGrNumber,

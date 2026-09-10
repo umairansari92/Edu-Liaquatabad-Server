@@ -25,18 +25,39 @@
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
-// ─── System Roles (8 Fixed Roles — NEVER add civil designations as roles) ─────
+// ─── System Roles (Canonical System Authorities — NEVER add civil designations as roles) ─────
 
 export const ROLES = Object.freeze({
   ROOT_ADMIN:  'ROOT_ADMIN',   // Level 100 — Protected platform root. Emergency CLI only. Never publicly visible.
   SUPER_ADMIN: 'SUPER_ADMIN',  // Level 90  — Operational platform admin. Explicitly assigned by ROOT_ADMIN.
-  ADMIN:       'ADMIN',        // Level 80  — Sub-administrative governance. Assigned by SUPER_ADMIN.
+  ADMIN:       'ADMIN',        // Level 80  — Sub-administrative governance (e.g. Town Education Officer). Assigned by SUPER_ADMIN.
   SUPERVISOR:  'SUPERVISOR',   // Level 60  — Multi-school field oversight.
   HM:          'HM',           // Level 50  — Single school institutional authority.
   TEACHER:     'TEACHER',      // Level 30  — Class & section operational authority.
+  PEON:        'PEON',         // Level 20  — Institutional operational support staff.
   STUDENT:     'STUDENT',      // Level 10  — Self-scope read access.
   PARENT:      'PARENT',       // Level 10  — Child-scoped read access.
 });
+
+/**
+ * Controlled Base Roles available at public onboarding/registration.
+ * Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) are STRICTLY excluded.
+ */
+export const BASE_ROLES = Object.freeze({
+  PEON:       'PEON',
+  TEACHER:    'TEACHER',
+  SUPERVISOR: 'SUPERVISOR',
+  STUDENT:    'STUDENT',
+  PARENT:     'PARENT',
+});
+
+export const PUBLIC_REGISTRATION_ROLES = Object.freeze([
+  BASE_ROLES.PEON,
+  BASE_ROLES.TEACHER,
+  BASE_ROLES.SUPERVISOR,
+  BASE_ROLES.STUDENT,
+  BASE_ROLES.PARENT,
+]);
 
 /**
  * Role Hierarchy Levels — higher number = higher authority.
@@ -49,35 +70,39 @@ export const ROLE_HIERARCHY = Object.freeze({
   [ROLES.SUPERVISOR]:  60,
   [ROLES.HM]:          50,
   [ROLES.TEACHER]:     30,
+  [ROLES.PEON]:        20,
   [ROLES.STUDENT]:     10,
   [ROLES.PARENT]:      10,
 });
 
 /**
- * Data Boundary Scopes — controls how far a role's data visibility extends.
+ * Data Boundary Scopes — controls how far an authority's data visibility extends.
+ * Canonical vocabulary: GLOBAL, TOWN, ASSIGNED_SCHOOLS, SCHOOL, CLASS_SECTION, SELF, CHILD.
  */
 export const SCOPES = Object.freeze({
-  GLOBAL:           'GLOBAL',           // Cross-organization (ROOT_ADMIN only)
-  ADMINISTRATIVE:   'ADMINISTRATIVE',   // Operational administrative scope across all schools (SUPER_ADMIN, ADMIN)
-  TOWN:             'ADMINISTRATIVE',   // Backwards-compatibility alias for transition
+  GLOBAL:           'GLOBAL',           // Cross-organization (ROOT_ADMIN, global SUPER_ADMIN)
+  TOWN:             'TOWN',             // Operational administrative scope across town (ADMIN)
+  ADMINISTRATIVE:   'TOWN',             // Backwards-compatibility alias for transition
   ASSIGNED_SCHOOLS: 'ASSIGNED_SCHOOLS', // Multiple assigned schools (SUPERVISOR field)
-  SCHOOL:           'SCHOOL',           // Single school (HM)
+  SCHOOL:           'SCHOOL',           // Single school (HM, PEON)
   CLASS_SECTION:    'CLASS_SECTION',    // Specific class/section (TEACHER)
   SELF:             'SELF',             // Own record only (STUDENT)
   CHILD:            'CHILD',            // Own child's record only (PARENT)
+  SELF_CHILD:       'SELF',             // Backwards-compatibility alias
 });
 
 /**
  * Default scope assigned per role at account provisioning.
- * SUPER_ADMIN can override scope when assigning a role to a user.
+ * Authorized administrators can set scope within permissible boundaries.
  */
 export const ROLE_DEFAULT_SCOPE = Object.freeze({
   [ROLES.ROOT_ADMIN]:  SCOPES.GLOBAL,
-  [ROLES.SUPER_ADMIN]: SCOPES.ADMINISTRATIVE,
-  [ROLES.ADMIN]:       SCOPES.ADMINISTRATIVE,
+  [ROLES.SUPER_ADMIN]: SCOPES.GLOBAL,
+  [ROLES.ADMIN]:       SCOPES.TOWN,
   [ROLES.SUPERVISOR]:  SCOPES.ASSIGNED_SCHOOLS,
   [ROLES.HM]:          SCOPES.SCHOOL,
   [ROLES.TEACHER]:     SCOPES.CLASS_SECTION,
+  [ROLES.PEON]:        SCOPES.SCHOOL,
   [ROLES.STUDENT]:     SCOPES.SELF,
   [ROLES.PARENT]:      SCOPES.CHILD,
 });

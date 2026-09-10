@@ -14,7 +14,7 @@ import Organization from '../models/Organization.js';
 import Town from '../models/Town.js';
 import School from '../models/School.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import { ROLES, BASE_ROLES, PUBLIC_REGISTRATION_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 import { getEffectivePermissions } from '../config/permissions.js';
 
 /**
@@ -152,6 +152,11 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
     await verifyOtp(email, otpCode, 'REGISTRATION');
   }
 
+  // Privilege escalation defense: reject any attempt to self-assign privileged authorities
+  if (request.body.role && [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(request.body.role)) {
+    return sendError(response, 403, 'Privilege escalation violation: Privileged system authorities cannot be self-assigned at registration.');
+  }
+
   // 6. Create User in PENDING_APPROVAL status (role locked to STUDENT)
   const passwordHash = await hashPassword(password);
   const enrolledStudentUser = await User.create({
@@ -163,6 +168,7 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
     passwordHash,
     phoneNumber: phoneNumber || guardianContactNumber || '',
     designation: 'Enrolled Student',
+    baseRole: BASE_ROLES.STUDENT,
     role: ROLES.STUDENT,
     scope: SCOPES.SELF,
     status: USER_STATUS.PENDING_APPROVAL,
@@ -274,7 +280,28 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
     });
   }
 
-  // 6. Create User in PENDING_APPROVAL status (role locked to TEACHER)
+  // Privilege escalation defense: reject any attempt to self-assign privileged authorities
+  const requestedRole = request.body.role || request.body.grantedAuthority;
+  if (requestedRole && [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(requestedRole)) {
+    return sendError(response, 403, 'Privilege escalation violation: Privileged system authorities cannot be self-assigned at registration.');
+  }
+
+  const requestedBaseRole = request.body.baseRole || BASE_ROLES.TEACHER;
+  const validBaseRole = [BASE_ROLES.PEON, BASE_ROLES.TEACHER, BASE_ROLES.SUPERVISOR].includes(requestedBaseRole)
+    ? requestedBaseRole
+    : BASE_ROLES.TEACHER;
+
+  let assignedRole = ROLES.TEACHER;
+  let assignedScope = SCOPES.CLASS_SECTION;
+  if (validBaseRole === BASE_ROLES.PEON) {
+    assignedRole = ROLES.PEON;
+    assignedScope = SCOPES.SCHOOL;
+  } else if (validBaseRole === BASE_ROLES.SUPERVISOR) {
+    assignedRole = ROLES.SUPERVISOR;
+    assignedScope = SCOPES.ASSIGNED_SCHOOLS;
+  }
+
+  // 6. Create User in PENDING_APPROVAL status (role locked to allowed base role)
   const passwordHash = await hashPassword(password);
   const enrolledTeacherUser = await User.create({
     organizationId: defaultOrg._id,
@@ -285,8 +312,9 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
     passwordHash,
     phoneNumber: phoneNumber || '',
     designation: designation || 'Teacher',
-    role: ROLES.TEACHER,
-    scope: SCOPES.CLASS_SECTION,
+    baseRole: validBaseRole,
+    role: assignedRole,
+    scope: assignedScope,
     status: USER_STATUS.PENDING_APPROVAL,
     tokenVersion: 1,
   });
@@ -319,13 +347,16 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
     requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(response, 201, 'Faculty registration submitted and email verified. Your profile is now awaiting HM / Admin authorization.', {
+  return sendSuccess(response, 201, 'Staff registration submitted and email verified. Your profile is now awaiting HM / Admin authorization.', {
     userId: enrolledTeacherUser._id,
     email: enrolledTeacherUser.email,
     role: enrolledTeacherUser.role,
+    baseRole: enrolledTeacherUser.baseRole,
     status: enrolledTeacherUser.status,
   });
 });
+
+export const handleRegisterStaff = handleRegisterTeacher;
 
 /**
  * Official Account Sign In (Triple-Lock Rate Limited & Password Protected)
@@ -410,7 +441,9 @@ export const handleLogin = asyncHandler(async (request, response) => {
 
   const tokenPayload = {
     userId: user._id,
+    baseRole: user.baseRole,
     role: user.role,
+    grantedAuthority: user.role,
     roleLevel,
     designation: user.designation || '',
     scope: user.scope,
@@ -458,7 +491,9 @@ export const handleLogin = asyncHandler(async (request, response) => {
       email: user.email,
       phoneNumber: user.phoneNumber,
       designation: user.designation || '',
+      baseRole: user.baseRole,
       role: user.role,
+      grantedAuthority: user.role,
       roleLevel,
       scope: user.scope,
       permissions,
@@ -637,7 +672,9 @@ export const handleGetMe = asyncHandler(async (request, response) => {
       email: user.email,
       phoneNumber: user.phoneNumber,
       designation: user.designation || '',
+      baseRole: user.baseRole,
       role: user.role,
+      grantedAuthority: user.role,
       roleLevel,
       scope: user.scope,
       permissions,
