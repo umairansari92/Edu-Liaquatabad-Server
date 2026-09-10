@@ -9,6 +9,7 @@ import schoolRoutes from '../schoolRoutes.js';
 import academicRoutes from '../academicRoutes.js';
 import transferRoutes from '../transferRoutes.js';
 import exportRoutes from '../exportRoutes.js';
+import adminUserRoutes from '../adminUserRoutes.js';
 
 const router = express.Router();
 
@@ -30,8 +31,11 @@ router.use('/students', studentRoutes);
 // Public Gateway & Landing page statistics
 router.use('/public', publicRoutes);
 
-// Super Admin provisioning & management (ROOT_ADMIN / SUPER_ADMIN only)
+// Super Admin management & governance (ROOT_ADMIN / SUPER_ADMIN only)
 router.use('/admin/super-admins', superAdminRoutes);
+
+// Privileged Administrative User Governance (Authority Grant Workflow)
+router.use('/admin/users', adminUserRoutes);
 
 // Academic management (Classes, Sections, Subjects)
 router.use('/academic', academicRoutes);
@@ -43,5 +47,6 @@ router.use('/transfers', transferRoutes);
 router.use('/exports', exportRoutes);
 
 export default router;
+
 
 

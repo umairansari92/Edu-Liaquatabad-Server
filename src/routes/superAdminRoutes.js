@@ -13,6 +13,8 @@ import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { blockRootAdminCreation } from '../middlewares/blockRootAdminCreation.js';
+import { validate } from '../middlewares/validate.js';
+import { flushLockoutsSchema } from '../validations/userSchemas.js';
 import { ROLES } from '../../config/constants.js';
 import {
   handleCreateSuperAdmin,
@@ -59,8 +61,9 @@ router.get('/pending-users', handleGetPendingUsers);
 /**
  * POST /api/v1/admin/super-admins/flush-lockouts
  * Clear security IP lockouts and failed login strikes
+ * Hardened: requires validate(flushLockoutsSchema) with typed reason and explicit confirmation
  */
-router.post('/flush-lockouts', handleFlushSecurityLockouts);
+router.post('/flush-lockouts', validate(flushLockoutsSchema), handleFlushSecurityLockouts);
 
 /**
  * POST /api/v1/admin/super-admins/broadcast

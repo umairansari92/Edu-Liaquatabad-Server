@@ -65,3 +65,31 @@ export const bulkUserActionSchema = z.object({
   reason: safeString(500, 3, 'A mandatory justification reason of at least 3 characters is required.'),
 }).strict();
 
+/**
+ * Privileged Authority Grant Schema
+ * .strict() enforces that only authority, reason, and optional canonical scope are passed.
+ * Passwords, tokens, or credentials are strictly rejected.
+ */
+export const grantAuthoritySchema = z.object({
+  authority: z.enum([ROLES.SUPER_ADMIN, ROLES.ADMIN], {
+    errorMap: () => ({ message: 'Authority must be one of: SUPER_ADMIN, ADMIN' }),
+  }),
+  reason: safeString(500, 5, 'A mandatory justification reason of at least 5 characters is required.'),
+  scope: z.enum([SCOPES.GLOBAL, SCOPES.TOWN], {
+    errorMap: () => ({ message: `Scope must be one of canonical scopes: ${SCOPES.GLOBAL}, ${SCOPES.TOWN}` }),
+  }).optional(),
+}).strict();
+
+/**
+ * Zod Schema: Flush Security Lockouts Payload
+ * High-impact operation: requires mandatory justification reason and explicit confirmation flag.
+ */
+export const flushLockoutsSchema = z.object({
+  reason: safeString(500, 5, 'A mandatory justification reason (minimum 5 characters) is required to flush security lockouts.'),
+  confirmed: z.literal(true, {
+    errorMap: () => ({ message: 'Explicit confirmation flag (confirmed: true) is required to flush security lockouts.' }),
+  }),
+}).strict();
+
+
+

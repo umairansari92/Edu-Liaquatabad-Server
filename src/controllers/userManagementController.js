@@ -485,3 +485,217 @@ export const handleBulkUserAction = asyncHandler(async (request, response) => {
   return sendSuccess(response, 200, `Bulk operation completed: ${results.succeeded} succeeded, ${results.failed} failed.`, results);
 });
 
+/**
+ * Privileged Authority Grant Controller
+ * POST /api/v1/admin/users/:userId/authority
+ *
+ * Core Mandate:
+ *   Designation != Base Role != Granted Authority != Scope != Permission != Account Status
+ *
+ * Explicit Actor-to-Authority Transition Policy Matrix:
+ *   - ROOT_ADMIN: Can grant SUPER_ADMIN only. (ROOT_ADMIN -> ADMIN is rejected).
+ *   - SUPER_ADMIN: Can grant SUPER_ADMIN or ADMIN.
+ *   - ADMIN & operational roles: Cannot grant privileged authority.
+ *   - No actor may grant ROOT_ADMIN.
+ *   - Self-grant prohibited.
+ */
+export const handleGrantUserAuthority = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const targetUserId = request.params.userId || request.params.id;
+
+  if (!targetUserId) {
+    return sendError(response, 400, 'Target user ID is required in route parameter.');
+  }
+
+  const { authority, reason, scope } = request.body;
+
+  // ── 1. Fetch Target User ──────────────────────────────────────────────────
+  const targetUser = request.targetUser || (await User.findById(targetUserId));
+  if (!targetUser) {
+    return sendError(response, 404, 'Target user account not found.');
+  }
+
+  const actorIdString  = String(requestingActor._id || requestingActor.userId);
+  const targetIdString = String(targetUser._id);
+
+  // ── 2. Server-Enforced Guard: Self-grant Prohibition ──────────────────────
+  if (actorIdString === targetIdString) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'SELF_AUTHORITY_GRANT_BLOCKED',
+      'FORBIDDEN: Actor attempted to grant or escalate their own authority.'
+    );
+    return sendError(response, 403, 'Forbidden: You cannot grant or elevate your own authority.');
+  }
+
+  // ── 3. Server-Enforced Guard: ROOT_ADMIN Target Immutability ──────────────
+  if (targetUser.role === ROLES.ROOT_ADMIN) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'ROOT_ADMIN_AUTHORITY_MUTATION_BLOCKED',
+      'FORBIDDEN: ROOT_ADMIN accounts are immutable via web APIs.'
+    );
+    return sendError(response, 403, 'Forbidden: ROOT_ADMIN accounts cannot be modified through web APIs.');
+  }
+
+  // ── 4. Server-Enforced Guard: ROOT_ADMIN Authority Grant Prohibition ──────
+  if (authority === ROLES.ROOT_ADMIN) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'ROOT_ADMIN_GRANT_ATTEMPT_BLOCKED',
+      'FORBIDDEN: ROOT_ADMIN authority cannot be granted via web APIs.'
+    );
+    return sendError(response, 403, 'Forbidden: ROOT_ADMIN authority cannot be granted through web APIs.');
+  }
+
+  // ── 5. Server-Enforced Transition Policy Matrix ───────────────────────────
+  if (requestingActor.role === ROLES.ROOT_ADMIN) {
+    // ROOT_ADMIN can grant SUPER_ADMIN only
+    if (authority !== ROLES.SUPER_ADMIN) {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'ROOT_ADMIN_INVALID_AUTHORITY_DELEGATION',
+        `FORBIDDEN: ROOT_ADMIN can only authorize SUPER_ADMIN. Delegation of ${authority} authority must be performed by a Super Admin.`
+      );
+      return sendError(response, 403, `Access denied. ROOT_ADMIN can only authorize SUPER_ADMIN accounts. Delegation of ${authority} must be performed by an operational Super Admin.`);
+    }
+  } else if (requestingActor.role === ROLES.SUPER_ADMIN) {
+    // SUPER_ADMIN can grant SUPER_ADMIN or ADMIN
+    if (![ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(authority)) {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'SUPER_ADMIN_INVALID_AUTHORITY_DELEGATION',
+        `FORBIDDEN: SUPER_ADMIN can only authorize SUPER_ADMIN or ADMIN. Attempted: ${authority}.`
+      );
+      return sendError(response, 403, `Access denied. Super Admin can only grant SUPER_ADMIN or ADMIN authority.`);
+    }
+  } else {
+    // All other roles (ADMIN, SUPERVISOR, HM, TEACHER, etc.) are strictly forbidden
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'UNAUTHORIZED_AUTHORITY_GRANT_ATTEMPT',
+      `FORBIDDEN: Role ${requestingActor.role} has no authority to grant privileged system roles.`
+    );
+    return sendError(response, 403, 'Access denied. You do not have permission to grant privileged administrative authority.');
+  }
+
+  // ── 6. Hierarchy Check: Target cannot have equal or higher authority ───────
+  const actorRoleLevel  = requestingActor.roleLevel || ROLE_HIERARCHY[requestingActor.role] || 0;
+  const targetRoleLevel = ROLE_HIERARCHY[targetUser.role] || 0;
+
+  if (requestingActor.role !== ROLES.ROOT_ADMIN && actorRoleLevel <= targetRoleLevel) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'HIERARCHY_VIOLATION_AUTHORITY_GRANT_BLOCKED',
+      `FORBIDDEN: Actor cannot grant authority to user of equal or higher authority (${targetUser.role}).`
+    );
+    return sendError(response, 403, `Access denied. You cannot manage an account with equal or higher authority (${targetUser.role}).`);
+  }
+
+  // ── 7. Target Already Authorized Check ─────────────────────────────────────
+  if (targetUser.role === authority) {
+    return sendError(response, 409, `Conflict: Target user "${targetUser.fullName}" already holds ${authority} authority.`);
+  }
+
+  // ── 8. Account Status & Explicit Approval Policy ───────────────────────────
+  // Suspended, retired, or inactive accounts must be remediated first
+  if ([USER_STATUS.SUSPENDED, USER_STATUS.RETIRED, USER_STATUS.INACTIVE].includes(targetUser.status)) {
+    return sendError(response, 400, `Cannot grant authority to an account in '${targetUser.status}' status. Remediate account lifecycle state first.`);
+  }
+
+  // Snapshot before state
+  const previousState = {
+    role:         targetUser.role,
+    scope:        targetUser.scope,
+    status:       targetUser.status,
+    designation:  targetUser.designation,
+    baseRole:     targetUser.baseRole,
+    tokenVersion: targetUser.tokenVersion || 0,
+  };
+
+  // Explicit approval contract: Granting administrative authority to a pending user
+  // constitutes explicit administrative approval and activates the account.
+  let approvalActionTaken = false;
+  if (targetUser.status === USER_STATUS.PENDING_APPROVAL) {
+    targetUser.status = USER_STATUS.ACTIVE;
+    targetUser.approvalDetails = {
+      approvedBy: requestingActor._id || requestingActor.userId,
+      approvedAt: new Date(),
+      correctionRemarks: `Explicit administrative approval granted upon elevation to ${authority}. Justification: ${reason.trim()}`,
+    };
+    approvalActionTaken = true;
+  }
+
+  // ── 9. Resolve Canonical Scope ─────────────────────────────────────────────
+  let resolvedScope = scope;
+  if (!resolvedScope) {
+    resolvedScope = authority === ROLES.SUPER_ADMIN ? SCOPES.GLOBAL : SCOPES.TOWN;
+  }
+
+  // Verify non-root cannot assign GLOBAL scope if they themselves are not global
+  if (resolvedScope === SCOPES.GLOBAL && requestingActor.role !== ROLES.ROOT_ADMIN && requestingActor.scope !== SCOPES.GLOBAL) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'GLOBAL_SCOPE_GRANT_DENIED',
+      'FORBIDDEN: Only global administrators can assign GLOBAL scope.'
+    );
+    return sendError(response, 403, 'Access denied. You do not have authority to grant GLOBAL scope.');
+  }
+
+  // ── 10. Apply Authority & Session Invalidation (Designation & baseRole UNTOUCHED) ─
+  targetUser.role         = authority;
+  targetUser.scope        = resolvedScope;
+  targetUser.tokenVersion = (targetUser.tokenVersion || 0) + 1; // Revokes all active JWT sessions
+
+  await targetUser.save();
+
+  // Snapshot after state
+  const newState = {
+    role:         targetUser.role,
+    scope:        targetUser.scope,
+    status:       targetUser.status,
+    designation:  targetUser.designation,  // Verified unchanged
+    baseRole:     targetUser.baseRole,     // Verified unchanged
+    tokenVersion: targetUser.tokenVersion,
+    approvalActionTaken,
+  };
+
+  // ── 11. Immutable Audit Log ────────────────────────────────────────────────
+  await AuditLog.create({
+    actorId:          requestingActor._id || requestingActor.userId,
+    actorRole:        requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName:        requestingActor.fullName || '',
+    action:           'USER_AUTHORITY_GRANTED',
+    targetModel:      'User',
+    targetId:         targetUser._id,
+    targetName:       targetUser.fullName,
+    townId:           targetUser.townId || requestingActor.townId || null,
+    schoolId:         targetUser.schoolId || null,
+    previousState,
+    newState,
+    result:           'SUCCESS',
+    reason:           reason.trim(),
+    ipAddress:        request.ip || '',
+    userAgent:        request.headers['user-agent'] || '',
+    requestId:        request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, `Authority '${authority}' successfully granted to ${targetUser.fullName}. Active sessions revoked.`, {
+    user: {
+      _id:              targetUser._id,
+      fullName:         targetUser.fullName,
+      email:            targetUser.email,
+      designation:      targetUser.designation,
+      baseRole:         targetUser.baseRole,
+      role:             targetUser.role,
+      grantedAuthority: targetUser.role,
+      scope:            targetUser.scope,
+      status:           targetUser.status,
+      tokenVersion:     targetUser.tokenVersion,
+      approvalActionTaken,
+    },
+  });
+});
+
+

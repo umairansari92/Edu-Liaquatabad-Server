@@ -51,131 +51,19 @@ const writeAudit = async ({
 // ─── POST /api/v1/admin/super-admins ─────────────────────────────────────────
 
 /**
- * Create a new SUPER_ADMIN account.
- * Permitted actors: ROOT_ADMIN, existing SUPER_ADMIN
- *
- * Required body:
- *   fullName, email, password, designation (optional), townId (optional)
- *
- * Security guarantees:
- *   - Role is hard-coded to SUPER_ADMIN — body cannot override to ROOT_ADMIN
- *     (additionally protected by blockRootAdminCreation middleware on the route)
- *   - Actor must be ROOT_ADMIN or SUPER_ADMIN (enforced by authorizeRoles middleware on route)
- *   - Immutable audit record written on every attempt (success or failure)
+ * DEPRECATED: Direct SUPER_ADMIN account creation.
+ * Architecture Mandate:
+ *   Privileged accounts cannot be created from scratch with email/password.
+ *   Users must self-register; Root Admin or Super Admin grants authority
+ *   to an existing eligible account via the canonical endpoint:
+ *   POST /api/v1/admin/users/:userId/authority
  */
 export const handleCreateSuperAdmin = asyncHandler(async (request, response) => {
-  const requestingActor = request.user;
-
-  const {
-    fullName,
-    email,
-    password,
-    designation = '',
-    townId,
-    reason = 'SUPER_ADMIN provisioning by authorized administrator',
-  } = request.body;
-
-  // ── Validate required fields ──────────────────────────────────────────────
-
-  if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
-    return sendError(response, 400, 'Full name is required (minimum 2 characters).');
-  }
-
-  if (!email || typeof email !== 'string') {
-    return sendError(response, 400, 'A valid email address is required.');
-  }
-
-  if (!password || typeof password !== 'string' || password.length < 8) {
-    return sendError(response, 400, 'Password must be at least 8 characters.');
-  }
-
-  // ── Prevent duplicate accounts ────────────────────────────────────────────
-
-  const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-  if (existingUser) {
-    return sendError(response, 409, 'An account with this email address already exists.');
-  }
-
-  // ── Security check: actor cannot create ROOT_ADMIN via this endpoint ──────
-  // (Belt-and-suspenders — also enforced by blockRootAdminCreation middleware)
-
-  if (requestingActor.role !== ROLES.ROOT_ADMIN) {
-    // A SUPER_ADMIN cannot create ROOT_ADMIN — hard-code role to SUPER_ADMIN only
-  }
-
-  // ── Hash password ─────────────────────────────────────────────────────────
-
-  const passwordHash = await hashPassword(password);
-
-  // ── Derive organizationId and townId from the actor if not explicitly provided ──
-
-  const resolvedTownId = townId || requestingActor.townId || null;
-  const resolvedOrganizationId = requestingActor.organizationId;
-
-  if (!resolvedOrganizationId) {
-    return sendError(response, 400, 'Cannot resolve organizationId from the requesting actor. Ensure actor has organizationId set.');
-  }
-
-  // ── Create the new SUPER_ADMIN ────────────────────────────────────────────
-
-  const resolvedScope = (requestingActor.role === ROLES.ROOT_ADMIN && request.body.scope && Object.values(SCOPES).includes(request.body.scope))
-    ? request.body.scope
-    : ROLE_DEFAULT_SCOPE[ROLES.SUPER_ADMIN];
-
-  const newSuperAdmin = await User.create({
-    organizationId:   resolvedOrganizationId,
-    townId:           resolvedTownId,
-    fullName:         fullName.trim(),
-    email:            email.toLowerCase().trim(),
-    passwordHash,
-    designation:      String(designation).trim(),
-    baseRole:         request.body.baseRole || BASE_ROLES.SUPERVISOR,
-    role:             ROLES.SUPER_ADMIN,          // Hard-coded — cannot be overridden
-    scope:            resolvedScope,
-    customPermissions: [],
-    status:           USER_STATUS.ACTIVE,         // Directly ACTIVE — no approval needed
-    tokenVersion:     0,
-  });
-
-  // ── Write immutable audit record ──────────────────────────────────────────
-
-  await writeAudit({
-    actorId:          requestingActor._id || requestingActor.userId,
-    actorRole:        requestingActor.role,
-    actorDesignation: requestingActor.designation || '',
-    actorName:        requestingActor.fullName || '',
-    action:           'SUPER_ADMIN_CREATED',
-    targetId:         newSuperAdmin._id,
-    targetName:       newSuperAdmin.fullName,
-    townId:           resolvedTownId,
-    schoolId:         null,
-    previousState:    {},
-    newState: {
-      fullName:    newSuperAdmin.fullName,
-      email:       newSuperAdmin.email,
-      role:        newSuperAdmin.role,
-      scope:       newSuperAdmin.scope,
-      designation: newSuperAdmin.designation,
-      status:      newSuperAdmin.status,
-    },
-    result:    'SUCCESS',
-    reason,
-    ipAddress: request.ip || '',
-    userAgent: request.headers['user-agent'] || '',
-    requestId: request.headers['x-request-id'] || '',
-  });
-
-  return sendSuccess(response, 201, 'SUPER_ADMIN account created successfully.', {
-    user: {
-      _id:         newSuperAdmin._id,
-      fullName:    newSuperAdmin.fullName,
-      email:       newSuperAdmin.email,
-      role:        newSuperAdmin.role,
-      scope:       newSuperAdmin.scope,
-      designation: newSuperAdmin.designation,
-      status:      newSuperAdmin.status,
-    },
-  });
+  return sendError(
+    response,
+    400,
+    'Account creation via this endpoint is deprecated. Use the existing-user authority grant workflow via POST /api/v1/admin/users/:userId/authority.'
+  );
 });
 
 // ─── PATCH /api/v1/admin/super-admins/:id/disable ───────────────────────────
@@ -455,10 +343,13 @@ export const handleGetPendingUsers = asyncHandler(async (request, response) => {
 
 /**
  * POST /api/v1/admin/super-admins/flush-lockouts
- * 1-Click flush of all active security IP lockouts and rate-limit strikes
+ * Hardened operational endpoint: flushes active security IP lockouts and rate-limit strikes.
+ * Requires explicit administrator justification reason and confirmed flag.
  */
 export const handleFlushSecurityLockouts = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
+  const { reason } = request.body;
+
   const deleteResult = await SecurityLockout.deleteMany({});
 
   await writeAudit({
@@ -469,12 +360,12 @@ export const handleFlushSecurityLockouts = asyncHandler(async (request, response
     action: 'SECURITY_LOCKOUTS_FLUSHED',
     targetId: requestingActor._id,
     targetName: 'Platform Security Lockout Store',
-    townId: requestingActor.townId,
+    townId: requestingActor.townId || null,
     schoolId: null,
     previousState: { deletedCount: deleteResult.deletedCount },
     newState: { activeLockouts: 0 },
     result: 'SUCCESS',
-    reason: 'Administrative manual lockout purge triggered.',
+    reason: String(reason).trim(),
     ipAddress: request.ip || '',
     userAgent: request.headers['user-agent'] || '',
     requestId: request.headers['x-request-id'] || '',
@@ -482,6 +373,7 @@ export const handleFlushSecurityLockouts = asyncHandler(async (request, response
 
   return sendSuccess(response, 200, `Successfully cleared ${deleteResult.deletedCount} security lockout records. All IPs and accounts are unblocked.`, {
     clearedCount: deleteResult.deletedCount,
+    reason: String(reason).trim(),
   });
 });
 
