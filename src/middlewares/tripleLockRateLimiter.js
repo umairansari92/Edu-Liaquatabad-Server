@@ -53,17 +53,17 @@ export const loginLimiter = rateLimit({
   },
 });
 
-// Dedicated Captcha Limiter (allows frequent refresh without choking logins)
+// Dedicated Captcha Limiter — strict per-IP (no localhost skip; enforced in all envs)
 export const captchaLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isDevelopmentEnvironment ? 1000 : 120, // 120 captchas per 15 min in prod
+  windowMs: 5 * 60 * 1000, // 5 minute window
+  max: isDevelopmentEnvironment ? 60 : 30, // 30 captchas per 5 min in prod; 60 in dev
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  // No localhost skip — CAPTCHA endpoint must be rate-limited in ALL environments
   message: {
     success: false,
     statusCode: 429,
-    message: 'Too many CAPTCHA requests. Please try again in a few moments.',
+    message: 'Too many CAPTCHA requests. Please wait a few moments before refreshing.',
   },
 });
 

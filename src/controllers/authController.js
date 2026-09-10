@@ -378,11 +378,13 @@ export const handleLogin = asyncHandler(async (request, response) => {
     );
   }
 
-  // 2. Math CAPTCHA verification
-  if (captchaChallengeToken || captchaAnswer) {
-    if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+  // 2. Math CAPTCHA verification — only validate if BOTH token and a non-empty answer are present
+  const hasCaptchaToken = !!captchaChallengeToken;
+  const hasCaptchaAnswer = captchaAnswer !== undefined && captchaAnswer !== null && String(captchaAnswer).trim() !== '';
+  if (hasCaptchaToken && hasCaptchaAnswer) {
+    if (!verifyMathCaptcha(String(captchaAnswer).trim(), captchaChallengeToken)) {
       await recordFailedLogin(normalizedEmail, clientIp);
-      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed.');
+      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed. Please check your answer.');
     }
   }
 
