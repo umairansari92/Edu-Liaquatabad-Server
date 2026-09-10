@@ -5,6 +5,7 @@ import {
   handleVerifyOtp,
   handleRegisterStudent,
   handleRegisterTeacher,
+  handleRegisterStaff,
   handleLogin,
   handleRefreshToken,
   handleLogout,
