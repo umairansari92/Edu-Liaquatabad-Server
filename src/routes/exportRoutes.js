@@ -9,6 +9,12 @@ const router = express.Router();
 router.use(authenticate);
 
 // ─── Export Municipal Schools CSV ──────────────────────────────────────────────
+// Accepts both /exports/schools and /exports/schools.csv (client compatibility)
+router.get(
+  '/schools',
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
+  handleExportSchoolsCsv
+);
 router.get(
   '/schools.csv',
   authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
@@ -16,6 +22,12 @@ router.get(
 );
 
 // ─── Export Platform Users CSV ─────────────────────────────────────────────────
+// Accepts both /exports/users and /exports/users.csv (client compatibility)
+router.get(
+  '/users',
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN),
+  handleExportUsersCsv
+);
 router.get(
   '/users.csv',
   authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN),
