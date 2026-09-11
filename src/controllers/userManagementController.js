@@ -1,8 +1,10 @@
 import asyncHandler from 'express-async-handler';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import User from '../models/User.js';
+import School from '../models/School.js';
+import TeacherProfile from '../models/TeacherProfile.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 import { validatePermissionCeiling } from '../config/permissions.js';
 
 /**
@@ -46,13 +48,13 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
   }
 
   const requestingActor = request.user;
-  const { designation, role, scope, customPermissions, reason = 'Administrative role/designation adjustment' } = request.body;
+  const { designation, role, scope, schoolId, customPermissions, reason = 'Administrative role/designation adjustment' } = request.body;
 
   // ── SEC-CRIT-01 Defense-in-Depth: Controller-level invariant checks ──────────
   // These guards fire even if authorizeHierarchy middleware was somehow bypassed.
 
   // Guard A: ROOT_ADMIN accounts are immutable via web APIs
-  const isMutationRequest = !!(role || scope || customPermissions);
+  const isMutationRequest = !!(role || scope || customPermissions || schoolId !== undefined);
   if (targetUser.role === ROLES.ROOT_ADMIN && isMutationRequest) {
     await writeControllerDeniedAudit(
       request, requestingActor, targetUser,
@@ -97,6 +99,33 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
     return sendError(response, 403, `Access denied. You cannot assign a role with equal or higher authority (${role}).`);
   }
 
+  // Guard D: Identity Domain Boundary Enforcement (Students and Parents cannot hold staff/administrative authority)
+  const isTargetAcademicEntity =
+    [BASE_ROLES.STUDENT, BASE_ROLES.PARENT].includes(targetUser.baseRole) ||
+    [ROLES.STUDENT, ROLES.PARENT].includes(targetUser.role);
+
+  if (isTargetAcademicEntity && role && ![ROLES.STUDENT, ROLES.PARENT].includes(role)) {
+    await writeControllerDeniedAudit(
+      request, requestingActor, targetUser,
+      'ACADEMIC_ENTITY_PROMOTION_BLOCKED',
+      `FORBIDDEN: Students and Parents cannot be elevated to administrative or staff authority (${role}).`
+    );
+    return sendError(
+      response,
+      403,
+      'Forbidden: Student and Parent accounts are external academic beneficiaries and cannot be granted civil service or institutional administrative authority.'
+    );
+  }
+
+  // Guard E: Staff cannot be mutated into Student or Parent accounts
+  if (!isTargetAcademicEntity && role && [ROLES.STUDENT, ROLES.PARENT].includes(role)) {
+    return sendError(
+      response,
+      400,
+      'Invalid role transition: Institutional staff accounts cannot be converted to Student or Parent accounts.'
+    );
+  }
+
   // 1. Validate Proposed Role
   if (role && !Object.values(ROLES).includes(role)) {
     return sendError(response, 400, `Invalid role. Must be one of: ${Object.values(ROLES).join(', ')}`);
@@ -109,7 +138,15 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
 
   const targetRole = role || targetUser.role;
 
-  // 3. Permission Ceiling Validation
+  // 3. Validate Proposed School (if provided)
+  if (schoolId !== undefined && schoolId !== null) {
+    const schoolExists = await School.findById(schoolId).lean();
+    if (!schoolExists) {
+      return sendError(response, 404, 'Specified school entity not found in municipal registry.');
+    }
+  }
+
+  // 4. Permission Ceiling Validation
   if (customPermissions && Array.isArray(customPermissions)) {
     const ceilingCheck = validatePermissionCeiling(targetRole, customPermissions);
     if (!ceilingCheck.valid) {
@@ -121,36 +158,46 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
     }
   }
 
-  // 4. Capture Before State Snapshot (Git-like Diff)
+  // 5. Capture Before State Snapshot (Git-like Diff)
   const previousState = {
     designation: targetUser.designation || '',
     role: targetUser.role,
     scope: targetUser.scope,
+    schoolId: targetUser.schoolId || null,
     customPermissions: targetUser.customPermissions || [],
     tokenVersion: targetUser.tokenVersion || 0,
   };
 
-  // 5. Apply Updates & Invalidate Existing Sessions
+  // 6. Apply Updates & Invalidate Existing Sessions
   if (designation !== undefined) targetUser.designation = String(designation).trim();
   if (role) targetUser.role = role;
   if (scope) targetUser.scope = scope;
+  if (schoolId !== undefined) {
+    targetUser.schoolId = schoolId || null;
+    await TeacherProfile.findOneAndUpdate(
+      { userId: targetUser._id },
+      { currentSchoolId: schoolId || null }
+    );
+  }
   if (customPermissions) targetUser.customPermissions = customPermissions;
 
   // Atomically increment tokenVersion to revoke previous JWT sessions
   targetUser.tokenVersion = (targetUser.tokenVersion || 0) + 1;
 
   await targetUser.save();
+  await targetUser.populate('schoolId', 'name schoolCode emisCode');
 
-  // 6. Capture After State Snapshot
+  // 7. Capture After State Snapshot
   const newState = {
     designation: targetUser.designation,
     role: targetUser.role,
     scope: targetUser.scope,
+    schoolId: targetUser.schoolId || null,
     customPermissions: targetUser.customPermissions,
     tokenVersion: targetUser.tokenVersion,
   };
 
-  // 7. Write Git-like Immutable Audit Trail
+  // 8. Write Git-like Immutable Audit Trail
   await AuditLog.create({
     actorId: request.user._id || request.user.userId,
     actorRole: request.user.role,
@@ -181,6 +228,7 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
       role: targetUser.role,
       grantedAuthority: targetUser.role,
       scope: targetUser.scope,
+      schoolId: targetUser.schoolId,
       customPermissions: targetUser.customPermissions,
       status: targetUser.status,
       tokenVersion: targetUser.tokenVersion,

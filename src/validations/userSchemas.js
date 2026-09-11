@@ -27,6 +27,7 @@ export const assignRoleSchema = z.object({
   scope: z.enum(Object.values(SCOPES), {
     errorMap: () => ({ message: `Scope must be one of: ${Object.values(SCOPES).join(', ')}` }),
   }).optional(),
+  schoolId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid School ID format.').optional().nullable(),
   customPermissions: z
     .array(
       z.enum(Object.values(PERMISSIONS), {

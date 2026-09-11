@@ -12,6 +12,7 @@ import {
   handleGetMe,
   handleForgotPassword,
   handleResetPassword,
+  handleResubmitCorrection,
 } from '../controllers/authController.js';
 import {
   authLimiter,
@@ -95,6 +96,13 @@ router.post(
   honeypotCheck,
   validate(registerStaffSchema),
   handleRegisterStaff
+);
+
+router.post(
+  '/resubmit-correction',
+  authLimiter,
+  honeypotCheck,
+  handleResubmitCorrection
 );
 
 // ─── Password Recovery ────────────────────────────────────────────────────────

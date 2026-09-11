@@ -113,6 +113,7 @@ export const USER_STATUS = Object.freeze({
   ACTIVE:              'ACTIVE',
   PENDING_APPROVAL:    'PENDING_APPROVAL',
   REQUIRES_CORRECTION: 'REQUIRES_CORRECTION',
+  REJECTED:            'REJECTED',
   SUSPENDED:           'SUSPENDED',
   TRANSFERRED:         'TRANSFERRED',
   RETIRED:             'RETIRED',
@@ -123,6 +124,7 @@ export const STUDENT_STATUS = Object.freeze({
   ACTIVE:              'ACTIVE',
   PENDING_APPROVAL:    'PENDING_APPROVAL',
   REQUIRES_CORRECTION: 'REQUIRES_CORRECTION',
+  REJECTED:            'REJECTED',
   TRANSFERRED:         'TRANSFERRED',
   GRADUATED:           'GRADUATED',
   DROPPED_OUT:         'DROPPED_OUT',
@@ -133,10 +135,18 @@ export const TEACHER_STATUS = Object.freeze({
   ACTIVE:              'ACTIVE',
   PENDING_APPROVAL:    'PENDING_APPROVAL',
   REQUIRES_CORRECTION: 'REQUIRES_CORRECTION',
+  REJECTED:            'REJECTED',
   TRANSFERRED:         'TRANSFERRED',
   RETIRED:             'RETIRED',
   SUSPENDED:           'SUSPENDED',
   INACTIVE:            'INACTIVE',
+});
+
+export const TEACHING_ASSIGNMENT_STATUS = Object.freeze({
+  ACTIVE:      'ACTIVE',
+  INACTIVE:    'INACTIVE',
+  COMPLETED:   'COMPLETED',
+  TRANSFERRED: 'TRANSFERRED',
 });
 
 // ─── Operational Enums ────────────────────────────────────────────────────────

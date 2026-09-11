@@ -14,7 +14,9 @@ import Organization from '../models/Organization.js';
 import Town from '../models/Town.js';
 import School from '../models/School.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES, BASE_ROLES, PUBLIC_REGISTRATION_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import Notification from '../models/Notification.js';
+import TeachingAssignment from '../models/TeachingAssignment.js';
+import { ROLES, BASE_ROLES, PUBLIC_REGISTRATION_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS, TEACHING_ASSIGNMENT_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 import { getEffectivePermissions } from '../config/permissions.js';
 import { getSystemStatus } from '../services/systemControlService.js';
 
@@ -217,18 +219,30 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
 });
 
 /**
- * Teacher Self-Registration (Mandatory OTP Verified)
+ * Teacher & Staff Self-Registration (Mandatory OTP Verified)
  * POST /api/v1/auth/register-teacher
  */
 export const handleRegisterTeacher = asyncHandler(async (request, response) => {
   const {
     fullName,
-    email,
-    password,
-    phoneNumber,
+    fatherName,
+    dateOfBirth,
+    cnic,
+    profilePhoto,
+    employeeId,
     designation = 'Teacher',
-    qualification,
+    appointmentDate,
+    email,
+    phoneNumber,
     schoolId,
+    qualification,
+    isTeachingStaff = true,
+    bankName,
+    branchName,
+    accountNumber,
+    accountTitle,
+    teachingAssignments = [],
+    password,
     otpCode,
     captchaAnswer,
     captchaChallengeToken,
@@ -248,22 +262,47 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
 
   await verifyOtp(email, otpCode, 'REGISTRATION');
 
-  // 3. Duplicate check
-  const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-  if (existingUser) {
-    return sendError(response, 400, 'A faculty account with this official email already exists.');
+  // 3. Strict Invariant: Non-teaching staff must NOT receive teaching assignments
+  const isTeaching = Boolean(isTeachingStaff);
+  if (!isTeaching && Array.isArray(teachingAssignments) && teachingAssignments.length > 0) {
+    return sendError(response, 400, 'Non-teaching staff cannot be assigned teaching assignments.');
   }
 
-  // 4. Validate school exists
+  // 4. Duplicate checks (Email, Employee ID, CNIC)
+  const normalizedEmail = email.toLowerCase().trim();
+  const existingUser = await User.findOne({ email: normalizedEmail });
+  if (existingUser) {
+    return sendError(response, 400, 'An account with this official email already exists.');
+  }
+
+  const normalizedEmployeeId = employeeId ? employeeId.toUpperCase().trim() : '';
+  if (normalizedEmployeeId) {
+    const existingEmployee = await TeacherProfile.findOne({ employeeId: normalizedEmployeeId });
+    if (existingEmployee) {
+      return sendError(response, 400, 'A staff member with this Employee Number already exists.');
+    }
+  }
+
+  const normalizedCnic = cnic ? cnic.trim() : '';
+  if (normalizedCnic) {
+    const existingCnic = await TeacherProfile.findOne({ cnic: normalizedCnic });
+    if (existingCnic) {
+      return sendError(response, 400, 'A staff member with this CNIC already exists.');
+    }
+  }
+
+  // 5. Validate claimed school exists (Claim only until verified by approver)
   let validSchool = null;
   if (schoolId) {
     validSchool = await School.findById(schoolId);
     if (!validSchool) {
       return sendError(response, 400, 'The selected municipal school does not exist.');
     }
+  } else {
+    return sendError(response, 400, 'School selection is required.');
   }
 
-  // 5. Resolve default Organization & Town
+  // 6. Resolve default Organization & Town
   let defaultOrg = await Organization.findOne({ code: 'DMC_LIAQUATABAD' });
   if (!defaultOrg) {
     defaultOrg = await Organization.create({
@@ -287,77 +326,223 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
     return sendError(response, 403, 'Privilege escalation violation: Privileged system authorities cannot be self-assigned at registration.');
   }
 
-  const requestedBaseRole = request.body.baseRole || BASE_ROLES.TEACHER;
-  const validBaseRole = [BASE_ROLES.PEON, BASE_ROLES.TEACHER, BASE_ROLES.SUPERVISOR].includes(requestedBaseRole)
-    ? requestedBaseRole
-    : BASE_ROLES.TEACHER;
+  const requestedBaseRole = isTeaching ? BASE_ROLES.TEACHER : BASE_ROLES.PEON;
+  const assignedRole = isTeaching ? ROLES.TEACHER : ROLES.PEON;
+  const assignedScope = isTeaching ? SCOPES.CLASS_SECTION : SCOPES.SCHOOL;
 
-  let assignedRole = ROLES.TEACHER;
-  let assignedScope = SCOPES.CLASS_SECTION;
-  if (validBaseRole === BASE_ROLES.PEON) {
-    assignedRole = ROLES.PEON;
-    assignedScope = SCOPES.SCHOOL;
-  } else if (validBaseRole === BASE_ROLES.SUPERVISOR) {
-    assignedRole = ROLES.SUPERVISOR;
-    assignedScope = SCOPES.ASSIGNED_SCHOOLS;
-  }
-
-  // 6. Create User in PENDING_APPROVAL status (role locked to allowed base role)
+  // 7. Create User in PENDING_APPROVAL status
+  // Critical invariant: schoolId is NULL at registration; claimedSchoolId records the unverified applicant claim!
   const passwordHash = await hashPassword(password);
-  const enrolledTeacherUser = await User.create({
+  const enrolledStaffUser = await User.create({
     organizationId: defaultOrg._id,
     townId: defaultTown._id,
-    schoolId: validSchool ? validSchool._id : null,
-    fullName,
-    email: email.toLowerCase().trim(),
+    schoolId: null, // Untrusted until verified by authorized approver
+    claimedSchoolId: validSchool._id,
+    fullName: fullName.trim(),
+    email: normalizedEmail,
     passwordHash,
     phoneNumber: phoneNumber || '',
-    designation: designation || 'Teacher',
-    baseRole: validBaseRole,
+    designation: designation ? designation.trim() : (isTeaching ? 'Teacher' : 'Staff'),
+    baseRole: requestedBaseRole,
     role: assignedRole,
     scope: assignedScope,
     status: USER_STATUS.PENDING_APPROVAL,
     tokenVersion: 1,
   });
 
-  // 7. Create TeacherProfile
+  // 8. Create comprehensive TeacherProfile
   await TeacherProfile.create({
-    userId: enrolledTeacherUser._id,
-    currentSchoolId: validSchool ? validSchool._id : defaultTown._id,
-    designation: designation || 'Teacher',
-    qualification: qualification || 'TBD',
+    userId: enrolledStaffUser._id,
+    currentSchoolId: null, // Untrusted until verified
+    claimedSchoolId: validSchool._id,
+    fatherName: (fatherName || '').trim(),
+    dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+    cnic: normalizedCnic,
+    profilePhoto: profilePhoto || { secureUrl: '', publicId: '' },
+    employeeId: normalizedEmployeeId,
+    designation: enrolledStaffUser.designation,
+    appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined,
+    qualification: (qualification || '').trim(),
+    joiningDate: new Date(),
+    isTeachingStaff: isTeaching,
+    specializationSubjects: isTeaching && Array.isArray(request.body.specializationSubjects) ? request.body.specializationSubjects : [],
+    bankName: (bankName || '').trim(),
+    branchName: (branchName || '').trim(),
+    accountNumber: (accountNumber || '').trim(),
+    accountTitle: (accountTitle || '').trim(),
     lifecycleStatus: TEACHER_STATUS.PENDING_APPROVAL,
+    approvalHistory: [{
+      action: 'SUBMITTED',
+      actorId: enrolledStaffUser._id,
+      actorRole: enrolledStaffUser.role,
+      actorName: enrolledStaffUser.fullName,
+      decision: 'SUBMITTED',
+      reason: 'Self-registration submitted with complete professional profile.',
+      timestamp: new Date(),
+    }],
   });
 
-  // 8. Immutable Audit Log
+  // 9. If teaching staff, record initial teaching assignments (in INACTIVE status pending verification)
+  if (isTeaching && Array.isArray(teachingAssignments) && teachingAssignments.length > 0) {
+    for (const assignment of teachingAssignments) {
+      if (assignment.classId && assignment.sectionId && assignment.subjectId && assignment.academicSession) {
+        await TeachingAssignment.create({
+          teacherId: enrolledStaffUser._id,
+          schoolId: validSchool._id,
+          classId: assignment.classId,
+          sectionId: assignment.sectionId,
+          subjectId: assignment.subjectId,
+          academicSession: assignment.academicSession.trim(),
+          effectiveFrom: new Date(),
+          status: TEACHING_ASSIGNMENT_STATUS.INACTIVE, // Pending verification
+          remarks: 'Initial self-registration claim',
+        });
+      }
+    }
+  }
+
+  // 10. Dynamic Multi-Tier Approver Notification Routing
+  try {
+    const approverQueries = [
+      User.find({ schoolId: validSchool._id, role: ROLES.HM, status: USER_STATUS.ACTIVE }).select('_id'),
+      User.find({ assignedSchools: validSchool._id, role: ROLES.SUPERVISOR, status: USER_STATUS.ACTIVE }).select('_id'),
+      User.find({ townId: defaultTown._id, role: ROLES.ADMIN, status: USER_STATUS.ACTIVE }).select('_id'),
+      User.find({ role: { $in: [ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN] }, status: USER_STATUS.ACTIVE }).select('_id'),
+    ];
+    const approverResults = await Promise.all(approverQueries);
+    const recipientIds = new Set();
+    approverResults.forEach((group) => {
+      group.forEach((usr) => recipientIds.add(String(usr._id)));
+    });
+
+    const notificationRecords = Array.from(recipientIds).map((recipientUserId) => ({
+      recipientUserId,
+      title: 'New Staff Registration Pending Verification',
+      message: `${enrolledStaffUser.fullName} (${enrolledStaffUser.designation}) has submitted registration claiming ${validSchool.name}. Verification required.`,
+      notificationType: 'ONBOARDING',
+      actionLink: '/approvals',
+    }));
+
+    if (notificationRecords.length > 0) {
+      await Notification.insertMany(notificationRecords);
+    }
+  } catch (notificationError) {
+    console.error('[Notification Routing Error]', notificationError.message);
+  }
+
+  // 11. Immutable Audit Log (ZERO sensitive fields — no CNIC, no bank details)
   await AuditLog.create({
-    actorId: enrolledTeacherUser._id,
-    actorRole: ROLES.TEACHER,
-    actorDesignation: enrolledTeacherUser.designation,
-    actorName: enrolledTeacherUser.fullName,
-    action: 'TEACHER_REGISTERED_OTP_VERIFIED',
+    actorId: enrolledStaffUser._id,
+    actorRole: enrolledStaffUser.role,
+    actorDesignation: enrolledStaffUser.designation,
+    actorName: enrolledStaffUser.fullName,
+    action: 'STAFF_REGISTERED_PENDING_APPROVAL',
     targetModel: 'User',
-    targetId: enrolledTeacherUser._id,
-    targetName: enrolledTeacherUser.fullName,
+    targetId: enrolledStaffUser._id,
+    targetName: enrolledStaffUser.fullName,
     townId: defaultTown._id,
-    schoolId: validSchool ? validSchool._id : null,
-    newState: { status: USER_STATUS.PENDING_APPROVAL, email: enrolledTeacherUser.email, role: enrolledTeacherUser.role },
+    schoolId: null,
+    newState: {
+      status: USER_STATUS.PENDING_APPROVAL,
+      email: enrolledStaffUser.email,
+      role: enrolledStaffUser.role,
+      employeeId: normalizedEmployeeId,
+      isTeachingStaff: isTeaching,
+      claimedSchoolId: validSchool._id,
+    },
     result: 'SUCCESS',
     ipAddress: request.ip || '',
     userAgent: request.headers['user-agent'] || '',
     requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(response, 201, 'Staff registration submitted and email verified. Your profile is now awaiting HM / Admin authorization.', {
-    userId: enrolledTeacherUser._id,
-    email: enrolledTeacherUser.email,
-    role: enrolledTeacherUser.role,
-    baseRole: enrolledTeacherUser.baseRole,
-    status: enrolledTeacherUser.status,
+  return sendSuccess(response, 201, 'Staff registration submitted and email verified. Your profile is now awaiting institutional authorization.', {
+    userId: enrolledStaffUser._id,
+    email: enrolledStaffUser.email,
+    role: enrolledStaffUser.role,
+    baseRole: enrolledStaffUser.baseRole,
+    status: enrolledStaffUser.status,
   });
 });
 
 export const handleRegisterStaff = handleRegisterTeacher;
+
+/**
+ * Resubmit Profile Corrections
+ * POST /api/v1/auth/resubmit-correction
+ */
+export const handleResubmitCorrection = asyncHandler(async (request, response) => {
+  const { email, password, updatedProfile } = request.body;
+  const normalizedEmail = (email || '').toLowerCase().trim();
+
+  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
+  if (!user) {
+    return sendError(response, 401, 'Invalid credentials.');
+  }
+
+  const isMatch = await verifyPassword(password, user.passwordHash);
+  if (!isMatch) {
+    return sendError(response, 401, 'Invalid credentials.');
+  }
+
+  if (user.status !== USER_STATUS.REQUIRES_CORRECTION) {
+    return sendError(response, 400, `Account is in ${user.status} state, not REQUIRES_CORRECTION.`);
+  }
+
+  const profile = await TeacherProfile.findOne({ userId: user._id });
+  if (!profile) {
+    return sendError(response, 404, 'Staff profile not found.');
+  }
+
+  if (updatedProfile) {
+    if (updatedProfile.fatherName) profile.fatherName = updatedProfile.fatherName.trim();
+    if (updatedProfile.dateOfBirth) profile.dateOfBirth = new Date(updatedProfile.dateOfBirth);
+    if (updatedProfile.cnic) profile.cnic = updatedProfile.cnic.trim();
+    if (updatedProfile.qualification) profile.qualification = updatedProfile.qualification.trim();
+    if (updatedProfile.bankName) profile.bankName = updatedProfile.bankName.trim();
+    if (updatedProfile.branchName) profile.branchName = updatedProfile.branchName.trim();
+    if (updatedProfile.accountNumber) profile.accountNumber = updatedProfile.accountNumber.trim();
+    if (updatedProfile.accountTitle) profile.accountTitle = updatedProfile.accountTitle.trim();
+  }
+
+  user.status = USER_STATUS.PENDING_APPROVAL;
+  profile.lifecycleStatus = TEACHER_STATUS.PENDING_APPROVAL;
+  profile.correctionRemarks = '';
+  profile.approvalHistory.push({
+    action: 'SUBMITTED',
+    actorId: user._id,
+    actorRole: user.role,
+    actorName: user.fullName,
+    decision: 'CORRECTION_RESUBMITTED',
+    reason: 'Applicant updated profile following correction request.',
+    timestamp: new Date(),
+  });
+
+  await user.save();
+  await profile.save();
+
+  await AuditLog.create({
+    actorId: user._id,
+    actorRole: user.role,
+    actorDesignation: user.designation,
+    actorName: user.fullName,
+    action: 'STAFF_CORRECTION_RESUBMITTED',
+    targetModel: 'User',
+    targetId: user._id,
+    targetName: user.fullName,
+    townId: user.townId,
+    newState: { status: USER_STATUS.PENDING_APPROVAL },
+    result: 'SUCCESS',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Corrected profile resubmitted successfully. It is now pending administrative approval.', {
+    userId: user._id,
+    status: user.status,
+  });
+});
 
 /**
  * Official Account Sign In (Triple-Lock Rate Limited & Password Protected)
@@ -440,6 +625,11 @@ export const handleLogin = asyncHandler(async (request, response) => {
   if (user.status === USER_STATUS.REQUIRES_CORRECTION) {
     const remarks = user.approvalDetails?.correctionRemarks ? `: ${user.approvalDetails.correctionRemarks}` : '';
     return sendError(response, 403, `Your profile requires correction${remarks}. Please contact your school administrator.`);
+  }
+
+  if (user.status === USER_STATUS.REJECTED) {
+    const reason = user.approvalDetails?.rejectionReason ? `: ${user.approvalDetails.rejectionReason}` : '';
+    return sendError(response, 403, `Your registration was rejected${reason}. Please contact your school administrator.`);
   }
 
   if (user.status === USER_STATUS.RETIRED || user.status === USER_STATUS.INACTIVE) {

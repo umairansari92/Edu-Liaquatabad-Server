@@ -2,6 +2,9 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { getPublicTownStats } from '../controllers/publicStatsController.js';
 import School from '../models/School.js';
+import Class from '../models/Class.js';
+import Section from '../models/Section.js';
+import Subject from '../models/Subject.js';
 
 const router = express.Router();
 
@@ -38,6 +41,30 @@ router.get('/schools', async (incomingRequest, outgoingResponse) => {
       success: false,
       statusCode: 500,
       message: 'Failed to retrieve active schools list',
+    });
+  }
+});
+
+// GET /api/v1/public/schools/:schoolId/structure — Public classes, sections & subjects for registration forms
+router.get('/schools/:schoolId/structure', async (incomingRequest, outgoingResponse) => {
+  try {
+    const { schoolId } = incomingRequest.params;
+    const [classes, sections, subjects] = await Promise.all([
+      Class.find({ schoolId, status: 'ACTIVE' }).select('_id name numericGrade').sort({ numericGrade: 1 }).lean(),
+      Section.find({ schoolId, status: 'ACTIVE' }).select('_id classId name').lean(),
+      Subject.find({ schoolId, status: 'ACTIVE' }).select('_id classId name code').lean(),
+    ]);
+
+    return outgoingResponse.status(200).json({
+      success: true,
+      statusCode: 200,
+      data: { classes, sections, subjects },
+    });
+  } catch (error) {
+    return outgoingResponse.status(500).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to retrieve school academic structure',
     });
   }
 });

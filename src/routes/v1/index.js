@@ -12,6 +12,9 @@ import transferRoutes from '../transferRoutes.js';
 import exportRoutes from '../exportRoutes.js';
 import adminUserRoutes from '../adminUserRoutes.js';
 import systemControlRoutes from '../systemControlRoutes.js';
+import approvalRoutes from '../approvalRoutes.js';
+import teachingAssignmentRoutes from '../teachingAssignmentRoutes.js';
+import staffProfileRoutes from '../staffProfileRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -30,6 +33,15 @@ router.use('/auth', authRoutes);
 
 // User & Role Management endpoints
 router.use('/users', userRoutes);
+
+// Institutional Staff Approvals & Verification
+router.use('/approvals', approvalRoutes);
+
+// Staff Profiles & Official PDF Service Records
+router.use('/staff', staffProfileRoutes);
+
+// Authoritative Teaching Assignments
+router.use('/assignments', teachingAssignmentRoutes);
 
 // Municipal School infrastructure endpoints
 router.use('/schools', schoolRoutes);

@@ -128,14 +128,57 @@ export const registerStudentSchema = z.object({
   { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
 );
 
+export const cnicField = z
+  .string()
+  .trim()
+  .regex(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'CNIC must follow the official format: XXXXX-XXXXXXX-X (e.g., 42101-1234567-1)',
+  });
+
+export const teachingAssignmentInputSchema = z.object({
+  classId: z.string().trim().min(1, 'Class is required'),
+  sectionId: z.string().trim().min(1, 'Section is required'),
+  subjectId: z.string().trim().min(1, 'Subject is required'),
+  academicSession: z.string().trim().min(1, 'Academic session is required'),
+});
+
 export const registerTeacherSchema = z.object({
+  // Personal Info
   fullName: nameField('Full Name'),
-  email: emailField,
-  password: passwordField,
-  phoneNumber: phoneField,
+  fatherName: safeString(100, 2, "Father's Name is required"),
+  dateOfBirth: z.union([z.string().min(1), z.date()]).refine((val) => !isNaN(new Date(val).getTime()), {
+    message: 'Valid Date of Birth is required',
+  }),
+  cnic: cnicField,
+  profilePhoto: z.object({
+    secureUrl: z.string().optional().or(z.literal('')),
+    publicId: z.string().optional(),
+  }).optional(),
+
+  // Employment Info
+  employeeId: safeString(50, 3, 'Employee Number must be at least 3 characters'),
   designation: safeString(100, 2, 'Designation is required'),
+  appointmentDate: z.union([z.string().min(1), z.date()]).refine((val) => !isNaN(new Date(val).getTime()), {
+    message: 'Valid Date of Appointment is required',
+  }),
+  email: emailField,
+  phoneNumber: phoneField,
+  schoolId: z.string().trim().min(1, 'School selection is required'),
   qualification: safeString(100, 2, 'Qualification is required'),
-  schoolId: z.string().trim().max(100).optional(),
+  isTeachingStaff: z.boolean().optional().default(true),
+
+  // Bank Info
+  bankName: safeString(100, 2, 'Bank Name is required'),
+  branchName: safeString(100, 2, 'Branch Name is required'),
+  accountNumber: z.string().trim().min(5, 'Bank Account Number must be at least 5 characters').max(50),
+  accountTitle: safeString(100, 2, 'Bank Account Title is required'),
+
+  // Teaching Assignments (Teachers only)
+  teachingAssignments: z.array(teachingAssignmentInputSchema).optional().default([]),
+
+  // Security & Authentication
+  password: passwordField,
+  confirmPassword: z.string().min(1, 'Confirm password is required').optional(),
   baseRole: z.enum([BASE_ROLES.TEACHER, BASE_ROLES.PEON, BASE_ROLES.SUPERVISOR]).optional().default(BASE_ROLES.TEACHER),
   role: z.string().optional(),
   otpCode: otpField,
@@ -145,26 +188,18 @@ export const registerTeacherSchema = z.object({
 }).refine(
   (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
   { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
+).refine(
+  (data) => {
+    // Non-teaching staff must NOT have teaching assignments
+    if (data.isTeachingStaff === false && data.teachingAssignments && data.teachingAssignments.length > 0) {
+      return false;
+    }
+    return true;
+  },
+  { message: 'Non-teaching staff cannot be assigned teaching assignments.', path: ['teachingAssignments'] }
 );
 
-export const registerStaffSchema = z.object({
-  fullName: nameField('Full Name'),
-  email: emailField,
-  password: passwordField,
-  phoneNumber: phoneField,
-  designation: safeString(100, 2, 'Designation is required'),
-  qualification: safeString(100, 0).optional(),
-  schoolId: z.string().trim().max(100).optional(),
-  baseRole: z.enum([BASE_ROLES.PEON, BASE_ROLES.TEACHER, BASE_ROLES.SUPERVISOR]),
-  role: z.string().optional(),
-  otpCode: otpField,
-  captchaAnswer: z.string().trim().optional(),
-  captchaChallengeToken: z.string().trim().optional(),
-  _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
-}).refine(
-  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
-  { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
-);
+export const registerStaffSchema = registerTeacherSchema;
 
 export const passwordResetRequestSchema = z.object({
   email: emailField,

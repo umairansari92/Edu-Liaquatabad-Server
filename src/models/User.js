@@ -5,6 +5,7 @@ const UserSchema = new mongoose.Schema({
   organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
   townId: { type: mongoose.Schema.Types.ObjectId, ref: 'Town', index: true },
   schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
+  claimedSchoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true }, // Unverified institutional claim during registration
   assignedSchools: [{ type: mongoose.Schema.Types.ObjectId, ref: 'School' }],
 
   fullName: { type: String, required: true, trim: true },
@@ -21,11 +22,11 @@ const UserSchema = new mongoose.Schema({
     type: String,
     enum: Object.values(BASE_ROLES),
     default: function () {
-      if (this.role && Object.values(BASE_ROLES).includes(this.role)) {
+      if (this && this.role && Object.values(BASE_ROLES).includes(this.role)) {
         return this.role;
       }
-      if ([ROLES.HM, ROLES.TEACHER].includes(this.role)) return BASE_ROLES.TEACHER;
-      if (this.role === ROLES.SUPERVISOR) return BASE_ROLES.SUPERVISOR;
+      if (this && [ROLES.HM, ROLES.TEACHER].includes(this.role)) return BASE_ROLES.TEACHER;
+      if (this && this.role === ROLES.SUPERVISOR) return BASE_ROLES.SUPERVISOR;
       return BASE_ROLES.TEACHER;
     },
     index: true,

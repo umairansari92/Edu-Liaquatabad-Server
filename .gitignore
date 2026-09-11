@@ -17,3 +17,8 @@ coverage/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Development Credentials & Test Accounts (Strictly prohibited in Git/Production)
+docs/development/TEST_ACCOUNTS.md
+../docs/development/TEST_ACCOUNTS.md
+TEST_ACCOUNTS.md
