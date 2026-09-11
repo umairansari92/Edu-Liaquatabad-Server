@@ -12,6 +12,7 @@ import {
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import School from '../models/School.js';
+import Section from '../models/Section.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 import { hashPassword } from '../utils/passwordUtils.js';
@@ -234,5 +235,100 @@ export const handleSetSchoolCode = asyncHandler(async (request, response) => {
   return sendSuccess(response, 200, `School code '${schoolCode.toUpperCase()}' set successfully.`, {
     schoolCode: schoolCode.toUpperCase(),
     backfilledStudents: backfilledCount,
+  });
+});
+
+/**
+ * GET /api/v1/students/section/:sectionId
+ * Authoritative Student Roster for an assigned section
+ * Strict server-side verification:
+ * - Active session required
+ * - If TEACHER: must match teacher's schoolId and assigned section
+ * - Strictly strips all credentials, passwords, tokens, and admin-only fields
+ */
+export const handleGetSectionStudents = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { sectionId } = request.params;
+
+  if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, 'A valid 24-character hexadecimal sectionId is required.');
+  }
+
+  const section = await Section.findById(sectionId)
+    .populate('classId', 'name numericGrade code')
+    .populate('classTeacherId', 'fullName designation email')
+    .lean();
+
+  if (!section) {
+    return sendError(response, 404, 'Class section not found in municipal registry.');
+  }
+
+  // Enforce active account
+  if (requestingActor.status && requestingActor.status !== USER_STATUS.ACTIVE) {
+    return sendError(response, 403, 'Access denied. Your account is not in an active state. Contact your Head Master.');
+  }
+
+  // ── Jurisdictional Authorization Boundary ──────────────────────────────────
+  if (requestingActor.role === ROLES.TEACHER) {
+    const teacherSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    const sectionSchoolId = String(section.schoolId);
+
+    if (!teacherSchoolId || teacherSchoolId !== sectionSchoolId) {
+      return sendError(response, 403, 'Access denied. You cannot view student rosters for a school other than your verified posting.');
+    }
+
+    if (!section.classTeacherId) {
+      return sendError(response, 403, 'Access denied. You are not assigned to this section. Subject-teacher section access requires a TeacherSectionAssignment domain model which is not yet implemented.');
+    }
+
+    const assignedTeacherId = String(section.classTeacherId._id || section.classTeacherId);
+    const actorId = String(requestingActor._id || requestingActor.userId);
+    if (assignedTeacherId !== actorId) {
+      return sendError(response, 403, 'Access denied. You are not the assigned class teacher for this section.');
+    }
+  } else if (requestingActor.role === ROLES.HM) {
+    const hmSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (hmSchoolId !== String(section.schoolId)) {
+      return sendError(response, 403, 'Access denied. This section belongs to another school.');
+    }
+  }
+
+  // ── Retrieve Active Students ───────────────────────────────────────────────
+  const studentProfiles = await StudentProfile.find({
+    sectionId: section._id,
+    schoolId: section.schoolId,
+    lifecycleStatus: STUDENT_STATUS.ACTIVE,
+  })
+    .populate('userId', 'fullName email phoneNumber status')
+    .sort({ grNumber: 1 })
+    .lean();
+
+  // ── Strict Data Sanitization (Zero credentials/passwords exposed) ───────────
+  const sanitizedStudents = studentProfiles.map((profile) => ({
+    _id: profile._id,
+    userId: profile.userId?._id,
+    fullName: profile.userId?.fullName || 'Student',
+    email: profile.userId?.email || '',
+    phoneNumber: profile.userId?.phoneNumber || '',
+    grNumber: profile.grNumber,
+    globalStudentId: profile.globalStudentId || `GR-${profile.grNumber}`,
+    gender: profile.gender || 'UNSPECIFIED',
+    fatherOrGuardianName: profile.fatherOrGuardianName,
+    guardianContactNumber: profile.guardianContactNumber,
+    admissionDate: profile.admissionDate,
+    lifecycleStatus: profile.lifecycleStatus,
+  }));
+
+  return sendSuccess(response, 200, 'Section student roster retrieved successfully.', {
+    section: {
+      _id: section._id,
+      name: section.name,
+      roomNumber: section.roomNumber || '',
+      capacity: section.capacity,
+      class: section.classId,
+      classTeacher: section.classTeacherId,
+    },
+    students: sanitizedStudents,
+    totalCount: sanitizedStudents.length,
   });
 });

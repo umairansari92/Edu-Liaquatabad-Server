@@ -13,6 +13,7 @@ import {
   handlePreviewNextGr,
   handleCheckGrAvailability,
   handleSetSchoolCode,
+  handleGetSectionStudents,
 } from '../controllers/studentController.js';
 
 const router = express.Router();
@@ -39,5 +40,8 @@ router.post('/enroll', authLimiter, validate(enrollStudentSchema), handleEnrollS
  * Sets the school code used as prefix for Global Student IDs (e.g. MMHA → MMHA-0001)
  */
 router.patch('/schools/:schoolId/code', authLimiter, validate(setSchoolCodeSchema), handleSetSchoolCode);
+
+// Authoritative Student Roster for an assigned section
+router.get('/section/:sectionId', handleGetSectionStudents);
 
 export default router;

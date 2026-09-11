@@ -9,6 +9,7 @@ import {
   handleGetSubjects,
   handleCreateSubject,
   handleUpdateSubject,
+  handleGetTeacherSummary,
 } from '../controllers/academicController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
@@ -71,5 +72,10 @@ router.patch('/subjects/:id',
   validate(updateSubjectSchema),
   handleUpdateSubject
 );
+
+// ─── Teacher Operational Summary (Teacher-scoped, no admin data) ──────────────
+// Only accessible by authenticated users with attendance.view permission
+// Derives scope exclusively from JWT token — client cannot supply teacherId
+router.get('/teacher-summary', authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW), handleGetTeacherSummary);
 
 export default router;

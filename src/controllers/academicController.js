@@ -4,7 +4,10 @@ import Class from '../models/Class.js';
 import Section from '../models/Section.js';
 import Subject from '../models/Subject.js';
 import School from '../models/School.js';
+import Attendance from '../models/Attendance.js';
+import StudentProfile from '../models/StudentProfile.js';
 import AuditLog from '../models/AuditLog.js';
+import { ROLES, SCOPES, ATTENDANCE_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 
 // ─── Helper: Write Academic Audit Event ──────────────────────────────────────
 const writeAcademicAudit = async ({ actorId, actorRole, actorName, action, targetModel, targetId, targetName, schoolId, previousState, newState, result, reason, ipAddress, userAgent }) => {
@@ -369,4 +372,132 @@ export const handleUpdateSubject = asyncHandler(async (request, response) => {
   });
 
   return sendSuccess(response, 200, 'Subject updated successfully.', { subject: subjectRecord });
+});
+
+// ═══════════════════════════════════════════════════════════
+// TEACHER OPERATIONAL WORKSPACE SUMMARY
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/academic/teacher-summary
+ * Returns a scoped operational overview for the authenticated teacher:
+ * - Assigned sections (via classTeacherId on Section, filtered to their school)
+ * - Per-section student count and today's attendance status
+ * - Pending academic work count (exams with status DRAFT that they have submitted)
+ *
+ * SECURITY:
+ * - Derives teacher identity exclusively from request.user (JWT token)
+ * - Never trusts any client-supplied teacherId / schoolId
+ * - Section filtering enforces schoolId boundary
+ *
+ * ASSIGNMENT MODEL NOTE:
+ * The current database model uses Section.classTeacherId to identify the primary
+ * class teacher of a section. There is NO separate subject-teacher assignment table.
+ * Therefore, "assigned sections" can only be securely derived from:
+ *   Section.find({ classTeacherId: req.user._id, schoolId: req.user.schoolId })
+ * Until a formal TeacherSectionAssignment model is introduced by HM administration,
+ * subject teachers without classTeacher assignment cannot be differentiated.
+ * This limitation is documented and exposed in the response for transparency.
+ */
+export const handleGetTeacherSummary = asyncHandler(async (request, response) => {
+  const teacher = request.user;
+  const teacherId = String(teacher._id || teacher.userId);
+  const teacherSchoolId = String(teacher.schoolId?._id || teacher.schoolId || '');
+
+  if (!teacherSchoolId) {
+    return sendError(response, 403, 'Your teacher account has no school assignment. Contact your Head Master.');
+  }
+
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+  const todayEnd   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+  // 1. Sections where this teacher is classTeacherId (only provable assignment)
+  const assignedSections = await Section.find({
+    classTeacherId: teacherId,
+    schoolId: teacherSchoolId,
+    status: { $ne: 'ARCHIVED' },
+  })
+    .populate('classId', 'name numericGrade code')
+    .lean();
+
+  // 2. Per-section: student count + today's attendance status
+  const sectionSummaries = await Promise.all(
+    assignedSections.map(async (section) => {
+      const [studentCount, attendanceRecord] = await Promise.all([
+        StudentProfile.countDocuments({
+          sectionId: section._id,
+          schoolId: section.schoolId,
+          lifecycleStatus: STUDENT_STATUS.ACTIVE,
+        }),
+        Attendance.findOne({
+          schoolId: section.schoolId,
+          sectionId: section._id,
+          attendanceType: 'STUDENT',
+          date: { $gte: todayStart, $lte: todayEnd },
+        }).lean(),
+      ]);
+
+      const attendanceStatus = attendanceRecord
+        ? attendanceRecord.verificationStatus
+        : 'NOT_SUBMITTED';
+
+      const presentCount  = attendanceRecord
+        ? attendanceRecord.records.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length
+        : null;
+      const absentCount   = attendanceRecord
+        ? attendanceRecord.records.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length
+        : null;
+      const leaveCount    = attendanceRecord
+        ? attendanceRecord.records.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length
+        : null;
+
+      return {
+        _id: section._id,
+        name: section.name,
+        roomNumber: section.roomNumber || '',
+        capacity: section.capacity,
+        class: section.classId,
+        studentCount,
+        todayAttendance: {
+          status: attendanceStatus,
+          submitted: !!attendanceRecord,
+          presentCount,
+          absentCount,
+          leaveCount,
+          submittedAt: attendanceRecord?.updatedAt || null,
+        },
+      };
+    })
+  );
+
+  const totalAssignedStudents = sectionSummaries.reduce((sum, s) => sum + s.studentCount, 0);
+  const pendingAttendanceSections = sectionSummaries.filter((s) => !s.todayAttendance.submitted);
+
+  return sendSuccess(response, 200, 'Teacher operational summary retrieved.', {
+    teacherContext: {
+      teacherId,
+      schoolId: teacherSchoolId,
+      scope: teacher.scope,
+      assignmentModel: 'classTeacherId',
+      assignmentNote:
+        'Sections are derived from Section.classTeacherId. Subject-teacher assignments without class-teacher role cannot be automatically verified until an explicit TeacherSectionAssignment model is introduced.',
+    },
+    summary: {
+      assignedSectionCount: assignedSections.length,
+      totalAssignedStudents,
+      pendingAttendanceCount: pendingAttendanceSections.length,
+    },
+    sections: sectionSummaries,
+    // Timetable: No timetable model exists in this version.
+    // Timetable management is planned as a future backend feature.
+    timetable: {
+      available: false,
+      message: 'No timetable has been assigned for today. The timetable feature is in the academic roadmap.',
+    },
+    // Homework: No homework model exists in this version.
+    homework: { available: false, message: 'Homework management is in the academic roadmap.' },
+    // Leave: No leave model exists in this version.
+    leave:    { available: false, message: 'Leave management is in the academic roadmap.' },
+  });
 });

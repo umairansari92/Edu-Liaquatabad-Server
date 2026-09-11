@@ -7,6 +7,7 @@ import userRoutes from '../userRoutes.js';
 import superAdminRoutes from '../superAdminRoutes.js';
 import schoolRoutes from '../schoolRoutes.js';
 import academicRoutes from '../academicRoutes.js';
+import attendanceRoutes from '../attendanceRoutes.js';
 import transferRoutes from '../transferRoutes.js';
 import exportRoutes from '../exportRoutes.js';
 import adminUserRoutes from '../adminUserRoutes.js';
@@ -47,6 +48,9 @@ router.use('/admin/users', adminUserRoutes);
 
 // Academic management (Classes, Sections, Subjects)
 router.use('/academic', academicRoutes);
+
+// Teacher Attendance management (submit, view status, roster sheet)
+router.use('/attendance', attendanceRoutes);
 
 // Teacher transfers & staff reassignments
 router.use('/transfers', transferRoutes);
