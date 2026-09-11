@@ -10,11 +10,19 @@ import academicRoutes from '../academicRoutes.js';
 import transferRoutes from '../transferRoutes.js';
 import exportRoutes from '../exportRoutes.js';
 import adminUserRoutes from '../adminUserRoutes.js';
+import systemControlRoutes from '../systemControlRoutes.js';
+import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
 
-// Health check endpoint
+// Health check endpoint (always accessible for monitoring probes)
 router.use('/health', healthRoutes);
+
+// System Control endpoints (ROOT_ADMIN only, bypasses outage guard)
+router.use('/system-control', systemControlRoutes);
+
+// Global System Outage Simulation Guard (simulates 503 cluster failure for non-root users when active)
+router.use(systemOutageGuard);
 
 // Auth & OTP endpoints
 router.use('/auth', authRoutes);

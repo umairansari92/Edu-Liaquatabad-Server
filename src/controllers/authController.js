@@ -16,6 +16,7 @@ import School from '../models/School.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, BASE_ROLES, PUBLIC_REGISTRATION_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, TEACHER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 import { getEffectivePermissions } from '../config/permissions.js';
+import { getSystemStatus } from '../services/systemControlService.js';
 
 /**
  * Generate Math Security CAPTCHA
@@ -364,9 +365,17 @@ export const handleRegisterStaff = handleRegisterTeacher;
  */
 export const handleLogin = asyncHandler(async (request, response) => {
   const { email, password, captchaAnswer, captchaChallengeToken } = request.body;
-
-  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedEmail = (email || '').toLowerCase().trim();
   const clientIp = request.ip || request.headers['x-forwarded-for']?.split(',')[0]?.trim() || '0.0.0.0';
+
+  // 0. Check Simulated Infrastructure Outage (Emergency Kill Switch)
+  const systemStatus = getSystemStatus();
+  if (systemStatus.isSuspended) {
+    const candidateUser = await User.findOne({ email: normalizedEmail }).select('role').lean();
+    if (!candidateUser || candidateUser.role !== ROLES.ROOT_ADMIN) {
+      return sendError(response, 503, systemStatus.errorMessage);
+    }
+  }
 
   // 1. Check Triple-Lock Account Lockout Status
   const lockoutStatus = await checkEmailLockout(normalizedEmail, clientIp);

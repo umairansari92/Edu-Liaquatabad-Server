@@ -307,6 +307,11 @@ export const handleGetSystemAuditLogs = asyncHandler(async (request, response) =
     searchFilterQuery.action = { $regex: String(request.query.action), $options: 'i' };
   }
 
+  // ROOT_ADMIN Stealth: hide ROOT_ADMIN actions from non-root viewers
+  if (request.user.role !== ROLES.ROOT_ADMIN) {
+    searchFilterQuery.actorRole = { $ne: ROLES.ROOT_ADMIN };
+  }
+
   const [auditLogsList, totalAuditRecordsCount] = await Promise.all([
     AuditLog.find(searchFilterQuery)
       .sort({ createdAt: -1 })
@@ -418,16 +423,19 @@ export const handleGetPlatformAnalytics = asyncHandler(async (request, response)
     { day: 'Saturday', boysRate: 85.9, girlsRate: 88.4, coEdRate: 85.8, overallRate: 86.7 },
   ];
 
-  // RBAC Pyramid Distribution
-  const authorityPyramid = [
-    { tier: 'ROOT_ADMIN', label: 'Root Admin (100)', count: 1, fill: '#ef4444' },
+  // RBAC Pyramid Distribution (ROOT_ADMIN tier is strictly hidden from non-root actors)
+  const authorityPyramid = [];
+  if (request.user.role === ROLES.ROOT_ADMIN) {
+    authorityPyramid.push({ tier: 'ROOT_ADMIN', label: 'Root Admin (100)', count: 1, fill: '#ef4444' });
+  }
+  authorityPyramid.push(
     { tier: 'SUPER_ADMIN', label: 'Super Admin (90)', count: superAdminCount, fill: '#f59e0b' },
     { tier: 'ADMIN', label: 'Admin / DDO (80)', count: adminCount, fill: '#10b981' },
     { tier: 'SUPERVISOR', label: 'Supervisor (60)', count: supervisorCount, fill: '#06b6d4' },
     { tier: 'HM', label: 'Head Masters (50)', count: headMasterCount, fill: '#3b82f6' },
     { tier: 'TEACHER', label: 'Faculty / Staff (30)', count: teacherCount, fill: '#8b5cf6' },
     { tier: 'STUDENT', label: 'Students (10)', count: studentCount, fill: '#ec4899' },
-  ];
+  );
 
   // Institutional Category Proportions
   const schoolTypeBreakdown = [
