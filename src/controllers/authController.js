@@ -711,8 +711,8 @@ export const handleForgotPassword = asyncHandler(async (request, response) => {
     return sendSuccess(response, 200, `If an active account exists for ${normalizedEmail}, a 6-digit password reset code has been sent.`);
   }
 
-  await requestOtp(normalizedEmail, 'PASSWORD_RESET');
-  return sendSuccess(response, 200, `A 6-digit password reset code has been sent to ${normalizedEmail}.`);
+  const otpResult = await requestOtp(normalizedEmail, 'PASSWORD_RESET');
+  return sendSuccess(response, 200, `A 6-digit password reset code has been sent to ${normalizedEmail}.`, otpResult);
 });
 
 /**

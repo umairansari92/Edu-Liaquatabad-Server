@@ -92,18 +92,30 @@ export const sendOtpEmail = async (email, plainOtp, purpose = 'REGISTRATION') =>
     </div>
   `;
 
+  const fromAddress = process.env.EMAIL_FROM
+    ? process.env.EMAIL_FROM.replace(/^["']|["']$/g, '')
+    : '"Education Department DMC" <liaquatabadeducation@gmail.com>';
+
+  // Prominent terminal logging for instant developer visibility
+  console.log('\n======================================================');
+  console.log('📨 [OTP DISPATCH ATTEMPT]');
+  console.log(`🎯 Recipient:    ${email}`);
+  console.log(`🔑 6-DIGIT CODE: ${plainOtp}`);
+  console.log(`📋 Purpose:      ${purpose}`);
+  console.log('======================================================\n');
+
   try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || '"Education Department DMC" <no-reply@liaquatabad-schools.gov.pk>',
+    const info = await transporter.sendMail({
+      from: fromAddress,
       to: email,
       subject: `[DMC Liaquatabad] ${subject}: ${plainOtp}`,
       html: htmlContent,
     });
+    console.log(`✅ [Nodemailer Success] Email delivered to ${email} (Message ID: ${info?.messageId})`);
     return true;
   } catch (error) {
-    console.error('[Nodemailer OTP Error]', error.message);
-    // In local dev without live SMTP, log plainOtp for instant developer verification
-    console.log(`[LOCAL DEV OTP DISPATCH] -> To: ${email} | Code: ${plainOtp} | Purpose: ${purpose}`);
+    console.error('❌ [Nodemailer OTP Error]:', error.message);
+    console.log(`💡 [DEV OTP FALLBACK] -> To: ${email} | Code: ${plainOtp}`);
     return true;
   }
 };

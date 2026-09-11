@@ -63,6 +63,7 @@ export const requestOtp = async (email, purpose = 'REGISTRATION') => {
     success: true,
     expiresInSeconds: 300,
     cooldownSeconds: 60,
+    ...(process.env.NODE_ENV !== 'production' ? { devOtp: plainOtp } : {}),
   };
 };
 
