@@ -17,6 +17,7 @@ import teachingAssignmentRoutes from '../teachingAssignmentRoutes.js';
 import staffProfileRoutes from '../staffProfileRoutes.js';
 import homeworkRoutes from '../homeworkRoutes.js';
 import holidayRoutes from '../holidayRoutes.js';
+import announcementRoutes from '../announcementRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -77,6 +78,9 @@ router.use('/homework', homeworkRoutes);
 
 // Holidays, vacations & weekly-off pattern governance
 router.use('/', holidayRoutes);
+
+// Executive Announcements & Town Messages
+router.use('/announcements', announcementRoutes);
 
 export default router;
 

@@ -8,6 +8,7 @@ import AuditLog from '../models/AuditLog.js';
 import cache from '../utils/cache.js';
 import { getKarachiDateString } from '../utils/karachiTime.js';
 import { ROLES } from '../../config/constants.js';
+import { invalidatePublicStatsCache } from './publicStatsController.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /holidays — Declare Town Holiday, Break, or School Emergency Closure
@@ -172,6 +173,7 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
   // Invalidate holiday caches
   cache.delByPrefix('school:');
   cache.delByPrefix('town:');
+  invalidatePublicStatsCache();
 
   return sendSuccess(response, 201, 'Holiday/Closure declared successfully.', holiday);
 });
@@ -286,6 +288,7 @@ export const handleCancelHoliday = asyncHandler(async (request, response) => {
 
   cache.delByPrefix('school:');
   cache.delByPrefix('town:');
+  invalidatePublicStatsCache();
 
   return sendSuccess(response, 200, 'Holiday announcement cancelled successfully.', holiday);
 });
@@ -401,6 +404,7 @@ export const handleCreateWeeklyOffPattern = asyncHandler(async (request, respons
 
   cache.delByPrefix('school:');
   cache.delByPrefix('town:');
+  invalidatePublicStatsCache();
 
   return sendSuccess(response, 201, 'Weekly off pattern configured successfully.', pattern);
 });

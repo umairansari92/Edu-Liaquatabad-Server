@@ -20,8 +20,9 @@ const publicStatsLimiter = rateLimit({
   },
 });
 
-// GET /api/v1/public/stats — Public statistics for Next.js Landing Page (Throttled & Cached)
+// GET /api/v1/public/stats & /api/v1/public/town-stats — Public statistics for Next.js Landing Page (Throttled & Cached)
 router.get('/stats', publicStatsLimiter, getPublicTownStats);
+router.get('/town-stats', publicStatsLimiter, getPublicTownStats);
 
 // GET /api/v1/public/schools — Public active schools list for onboarding forms
 router.get('/schools', async (incomingRequest, outgoingResponse) => {
