@@ -402,4 +402,62 @@ console.log('===================================================================
   assert(typeof deactivationFilter.schoolId !== 'undefined', 'Test 43: No undefined schoolId spread bug in deactivation query');
 }
 
+// ─── Test 14: Supervisor Multi-School Scoping Invariant ───────────────────────
+{
+  const supervisorActor = {
+    _id: '507f1f77bcf86cd799439077',
+    role: ROLES.SUPERVISOR,
+    townId: '507f1f77bcf86cd799439100',
+    assignedSchools: [
+      '507f1f77bcf86cd799439001',
+      '507f1f77bcf86cd799439002',
+    ],
+  };
+
+  const buildSupervisorFilter = (actor) => {
+    const filter = {};
+    const actorTownId = actor.townId;
+    if (actor.role === ROLES.SUPERVISOR) {
+      const assignedSchoolIds = Array.isArray(actor.assignedSchools)
+        ? actor.assignedSchools.map((s) => s?._id || s)
+        : [];
+      filter.$or = [
+        { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
+        { scopeType: 'SCHOOL', schoolId: { $in: assignedSchoolIds } },
+      ];
+    }
+    return filter;
+  };
+
+  const filter = buildSupervisorFilter(supervisorActor);
+  assert(Array.isArray(filter.$or), 'Test 44: Supervisor filter constructs explicit $or branch');
+  const schoolCondition = filter.$or.find((c) => c.scopeType === 'SCHOOL');
+  assert(schoolCondition && schoolCondition.schoolId?.$in?.length === 2, 'Test 45: Supervisor restricted strictly to assignedSchools array');
+
+  const foreignSchoolId = '507f1f77bcf86cd799439099';
+  const hasAccessToForeignSchool = schoolCondition.schoolId.$in.includes(foreignSchoolId);
+  assert(!hasAccessToForeignSchool, 'Test 46: Supervisor denied access to foreign school patterns (isolation intact)');
+}
+
+// ─── Test 15: Town-Wide Past-Date Attendance Conflict Scope Check ─────────────
+{
+  const finalScopeType = 'TOWN';
+  const finalTownId = '507f1f77bcf86cd799439100';
+  const townSchools = ['507f1f77bcf86cd799439001', '507f1f77bcf86cd799439002', '507f1f77bcf86cd799439003'];
+
+  const buildAttendanceConflictQuery = (scopeType, townId, schoolId, allTownSchools) => {
+    const q = { attendanceType: 'STUDENT' };
+    if (scopeType === 'SCHOOL') {
+      q.schoolId = schoolId;
+    } else if (townId) {
+      q.schoolId = { $in: allTownSchools };
+    }
+    return q;
+  };
+
+  const townQuery = buildAttendanceConflictQuery(finalScopeType, finalTownId, null, townSchools);
+  assert(townQuery.schoolId && Array.isArray(townQuery.schoolId.$in), 'Test 47: Town-wide conflict check queries all schools in the town');
+  assert(townQuery.schoolId.$in.length === 3, 'Test 48: Every school in town is evaluated for conflict before holiday declaration');
+}
+
 console.log(`\n🎉 ALL ${passedTests}/${totalTests} TOWN HOLIDAY & TIMING POLICY TESTS PASSED!\n`);

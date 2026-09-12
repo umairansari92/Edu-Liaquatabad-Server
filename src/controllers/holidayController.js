@@ -194,11 +194,22 @@ export const handleGetHolidays = asyncHandler(async (request, response) => {
   const actorSchoolId = requestingActor.schoolId?._id || requestingActor.schoolId;
   const actorTownId = requestingActor.townId?._id || requestingActor.townId;
 
-  if (requestingActor.role === ROLES.HM || requestingActor.role === ROLES.TEACHER || requestingActor.role === ROLES.STUDENT) {
+  if ([ROLES.HM, ROLES.TEACHER, ROLES.STUDENT, ROLES.PARENT].includes(requestingActor.role)) {
     filter.$or = [
       { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
       ...(actorSchoolId ? [{ scopeType: 'SCHOOL', schoolId: actorSchoolId }] : []),
     ];
+  } else if (requestingActor.role === ROLES.SUPERVISOR) {
+    const assignedSchoolIds = Array.isArray(requestingActor.assignedSchools)
+      ? requestingActor.assignedSchools.map((s) => s?._id || s)
+      : [];
+    filter.$or = [
+      { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
+      { scopeType: 'SCHOOL', schoolId: { $in: assignedSchoolIds } },
+    ];
+  } else if (requestingActor.role === ROLES.ADMIN && actorTownId) {
+    // Town Admin: lock to their assigned municipal town
+    filter.townId = actorTownId;
   }
 
   const holidays = await HolidayCalendar.find(filter)
@@ -413,7 +424,15 @@ export const handleGetWeeklyOffPatterns = asyncHandler(async (request, response)
       { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
       ...(actorSchoolId ? [{ scopeType: 'SCHOOL', schoolId: actorSchoolId }] : []),
     ];
-  } else if (actorTownId) {
+  } else if (requestingActor.role === ROLES.SUPERVISOR) {
+    const assignedSchoolIds = Array.isArray(requestingActor.assignedSchools)
+      ? requestingActor.assignedSchools.map((s) => s?._id || s)
+      : [];
+    filter.$or = [
+      { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
+      { scopeType: 'SCHOOL', schoolId: { $in: assignedSchoolIds } },
+    ];
+  } else if (requestingActor.role === ROLES.ADMIN && actorTownId) {
     // Town Admin: restrict to their verified town
     filter.townId = actorTownId;
   }
