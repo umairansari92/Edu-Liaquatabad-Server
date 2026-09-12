@@ -16,6 +16,7 @@ import approvalRoutes from '../approvalRoutes.js';
 import teachingAssignmentRoutes from '../teachingAssignmentRoutes.js';
 import staffProfileRoutes from '../staffProfileRoutes.js';
 import homeworkRoutes from '../homeworkRoutes.js';
+import holidayRoutes from '../holidayRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -73,6 +74,9 @@ router.use('/exports', exportRoutes);
 
 // Homework management (Teacher create, Student view, HM overview)
 router.use('/homework', homeworkRoutes);
+
+// Holidays, vacations & weekly-off pattern governance
+router.use('/', holidayRoutes);
 
 export default router;
 

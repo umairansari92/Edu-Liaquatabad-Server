@@ -4,6 +4,7 @@ import {
   handleGetSchools,
   handleGetSchoolById,
   handleUpdateSchool,
+  handleUpdateSchoolTimings,
 } from '../controllers/schoolController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
@@ -46,6 +47,12 @@ router.patch(
   authorizeScope,
   validate(updateSchoolSchema),
   handleUpdateSchool
+// ─── Configure School Operational Timings (ROOT_ADMIN, SUPER_ADMIN, ADMIN) ──
+router.patch(
+  '/:id/timings',
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
+  authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
+  handleUpdateSchoolTimings
 );
 
 export default router;

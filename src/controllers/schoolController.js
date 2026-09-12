@@ -433,3 +433,85 @@ export const handleUpdateSchool = asyncHandler(async (request, response) => {
     school: schoolRecord,
   });
 });
+
+/**
+ * PATCH /api/v1/schools/:id/timings
+ * Configure or adjust operational school timings & attendance windows
+ * Restricted strictly to ROOT_ADMIN, SUPER_ADMIN, and ADMIN.
+ */
+export const handleUpdateSchoolTimings = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: targetSchoolId } = request.params;
+  const { timings, reason = 'Seasonal or administrative timings adjustment' } = request.body;
+
+  const allowedRoles = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN];
+  if (!allowedRoles.includes(requestingActor.role)) {
+    return sendError(response, 403, 'Access denied. Only municipal leadership (Admin, Super Admin, Root Admin) can configure school timings.');
+  }
+
+  if (!targetSchoolId || !/^[0-9a-fA-F]{24}$/.test(targetSchoolId)) {
+    return sendError(response, 400, 'Invalid school ID format.');
+  }
+
+  if (!timings || typeof timings !== 'object') {
+    return sendError(response, 400, 'A valid timings object is required.');
+  }
+
+  const school = await School.findById(targetSchoolId);
+  if (!school) {
+    return sendError(response, 404, 'Municipal school entity not found.');
+  }
+
+  // Admin town boundary check
+  if (requestingActor.role === ROLES.ADMIN) {
+    if (String(school.townId) !== String(requestingActor.townId)) {
+      return sendError(response, 403, 'Access denied. You do not have authority over schools in another administrative town.');
+    }
+  }
+
+  const previousState = { timings: school.timings };
+
+  school.timings = {
+    regular: {
+      startTime:             timings.regular?.startTime             || school.timings?.regular?.startTime             || '08:00',
+      endTime:               timings.regular?.endTime               || school.timings?.regular?.endTime               || '13:30',
+      attendanceWindowStart: timings.regular?.attendanceWindowStart || school.timings?.regular?.attendanceWindowStart || '07:45',
+      attendanceWindowEnd:   timings.regular?.attendanceWindowEnd   || school.timings?.regular?.attendanceWindowEnd   || '14:00',
+    },
+    friday: {
+      startTime:             timings.friday?.startTime             || school.timings?.friday?.startTime             || '07:30',
+      endTime:               timings.friday?.endTime               || school.timings?.friday?.endTime               || '12:00',
+      attendanceWindowStart: timings.friday?.attendanceWindowStart || school.timings?.friday?.attendanceWindowStart || '07:15',
+      attendanceWindowEnd:   timings.friday?.attendanceWindowEnd   || school.timings?.friday?.attendanceWindowEnd   || '12:30',
+    },
+    allowHmLateOverride: timings.allowHmLateOverride !== undefined
+      ? Boolean(timings.allowHmLateOverride)
+      : (school.timings?.allowHmLateOverride ?? true),
+  };
+
+  await school.save();
+
+  // AuditLog Generation (Constitution Article V.6)
+  await writeSchoolAuditLog({
+    actorId: requestingActor._id || requestingActor.userId,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName || '',
+    action: 'SCHOOL_TIMINGS_UPDATED',
+    targetSchoolId: school._id,
+    targetSchoolName: school.name,
+    townId: school.townId,
+    previousState,
+    newState: { timings: school.timings },
+    result: 'SUCCESS',
+    reason,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'School operational timings updated successfully.', {
+    schoolId: school._id,
+    timings: school.timings,
+  });
+});

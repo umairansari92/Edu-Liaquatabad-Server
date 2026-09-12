@@ -53,6 +53,27 @@ const SchoolSchema = new mongoose.Schema({
     enum: ['ACTIVE', 'SUSPENDED', 'CLOSED', 'INACTIVE', 'ARCHIVED'],
     default: 'ACTIVE',
   },
+
+  /**
+   * Operational Timings & Attendance Window
+   * Configurable per school by ROOT_ADMIN, SUPER_ADMIN, ADMIN.
+   * Supports seasonal shifts (summer/winter) and Friday Jummah schedules.
+   */
+  timings: {
+    regular: {
+      startTime:             { type: String, default: '08:00' },
+      endTime:               { type: String, default: '13:30' },
+      attendanceWindowStart: { type: String, default: '07:45' },
+      attendanceWindowEnd:   { type: String, default: '14:00' },
+    },
+    friday: {
+      startTime:             { type: String, default: '07:30' },
+      endTime:               { type: String, default: '12:00' },
+      attendanceWindowStart: { type: String, default: '07:15' },
+      attendanceWindowEnd:   { type: String, default: '12:30' },
+    },
+    allowHmLateOverride: { type: Boolean, default: true },
+  },
 }, { timestamps: true });
 
 export default mongoose.models.School || mongoose.model('School', SchoolSchema);

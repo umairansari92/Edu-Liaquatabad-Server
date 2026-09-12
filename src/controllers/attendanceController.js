@@ -5,6 +5,7 @@ import StudentProfile from "../models/StudentProfile.js";
 import Section from "../models/Section.js";
 import TeachingAssignment from "../models/TeachingAssignment.js";
 import AuditLog from "../models/AuditLog.js";
+import School from "../models/School.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
@@ -13,6 +14,7 @@ import {
   TEACHING_ASSIGNMENT_STATUS,
 } from "../../config/constants.js";
 import { processAttendanceDelta, computeRecordsHash } from "../services/attendanceRollupService.js";
+import { validateSubmissionWindow } from "../services/attendanceWindowService.js";
 import cache from "../utils/cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,6 +217,8 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     date,
     absentStudentProfileIds = [],
     leaveStudentProfileIds  = [],
+    isLateOverride = false,
+    lateReason = '',
   } = request.body;
 
   if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
@@ -254,6 +258,24 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
   if (queryDate > todayEnd) return sendError(response, 400, "Attendance cannot be submitted for a future date.");
+
+  const school = await School.findById(section.schoolId).lean();
+  if (!school) {
+    return sendError(response, 404, "Section school entity not found in municipal registry.");
+  }
+
+  // ── 3-Stage Gate: Holiday Check -> Weekly Off Check -> PKT Dynamic Window Check
+  const windowCheck = await validateSubmissionWindow({
+    school,
+    requestingActor,
+    date: queryDate,
+    isLateOverride: Boolean(isLateOverride),
+    lateReason: typeof lateReason === 'string' ? lateReason : '',
+  });
+
+  if (!windowCheck.allowed) {
+    return sendError(response, 403, windowCheck.reason);
+  }
 
   const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
   const dayEnd   = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
@@ -348,12 +370,17 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   const absentCount  = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length;
   const leaveCount   = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length;
 
+  const auditAction = windowCheck.isLateOverride ? "ATTENDANCE_LATE_OVERRIDE_SUBMITTED" : "ATTENDANCE_SUBMITTED";
+  const auditReason = windowCheck.isLateOverride
+    ? `HM Emergency Late Clearance: ${windowCheck.lateReason}`
+    : "Teacher submitted daily attendance (A/L exceptions; P server-derived from enrollment).";
+
   await AuditLog.create({
     actorId:          teacherId,
     actorRole:        requestingActor.role,
     actorDesignation: requestingActor.designation || "",
     actorName:        requestingActor.fullName || "",
-    action:           "ATTENDANCE_SUBMITTED",
+    action:           auditAction,
     targetModel:      "Attendance",
     targetId:         attendanceRecord._id,
     targetName:       `${section.classId?.name || "Class"} — ${section.name}`,
@@ -366,9 +393,11 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
       presentCount,
       absentCount,
       leaveCount,
+      isLateOverride: Boolean(windowCheck.isLateOverride),
+      lateReason: windowCheck.lateReason || null,
     },
     result:    "SUCCESS",
-    reason:    "Teacher submitted daily attendance (A/L exceptions; P server-derived from enrollment).",
+    reason:    auditReason,
     ipAddress: request.ip || "",
     userAgent: request.headers["user-agent"] || "",
     requestId: request.headers["x-request-id"] || "",
