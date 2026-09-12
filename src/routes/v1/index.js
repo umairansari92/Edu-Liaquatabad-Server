@@ -15,6 +15,7 @@ import systemControlRoutes from '../systemControlRoutes.js';
 import approvalRoutes from '../approvalRoutes.js';
 import teachingAssignmentRoutes from '../teachingAssignmentRoutes.js';
 import staffProfileRoutes from '../staffProfileRoutes.js';
+import homeworkRoutes from '../homeworkRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -69,6 +70,9 @@ router.use('/transfers', transferRoutes);
 
 // Export operations (CSV streaming)
 router.use('/exports', exportRoutes);
+
+// Homework management (Teacher create, Student view, HM overview)
+router.use('/homework', homeworkRoutes);
 
 export default router;
 

@@ -1,9 +1,17 @@
-﻿import express from "express";
+import express from "express";
 import {
   handleGetAttendanceStatus,
   handleGetAttendanceSheet,
   handleSubmitAttendance,
+  handleGetAttendanceRegister,
+  handleGetMonthlySummary,
 } from "../controllers/attendanceController.js";
+import {
+  handleGetStudentAttendanceAnalytics,
+  handleGetSectionAttendanceAnalytics,
+  handleGetSchoolAttendanceAnalytics,
+  handleGetTownAttendanceOverview,
+} from "../controllers/attendanceAnalyticsController.js";
 import { authenticate } from "../middlewares/authenticate.js";
 import { authorizePermissions } from "../middlewares/authorizePermissions.js";
 import { PERMISSIONS } from "../config/permissions.js";
@@ -29,13 +37,59 @@ router.get(
   handleGetAttendanceSheet
 );
 
-// ─── POST Submit Attendance ────────────────────────────────────────────────────
-// Teacher submits or updates attendance for their section
-// Server enforces school boundary + classTeacherId assignment before writing
+// ─── POST Submit Attendance (A/L exceptions only; P server-derived) ─────────────
+// Teacher submits A and L exceptions; server derives PRESENT for all others.
+// Authorized via TeachingAssignment — NOT classTeacherId.
 router.post(
   "/submit",
   authorizePermissions(PERMISSIONS.ATTENDANCE_MARK),
   handleSubmitAttendance
+);
+
+// ─── GET Monthly Attendance Register (official P/A/L grid) ───────────────────
+// Returns a full grid of daily P/A/L for all enrolled students in the section.
+router.get(
+  "/register",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetAttendanceRegister
+);
+
+// ─── GET Monthly Attendance Summary (Previous / Current / Total) ─────────────
+// Returns cumulative P/A/L summary per student for government register format.
+router.get(
+  "/monthly-summary",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetMonthlySummary
+);
+
+// ─── High-Performance Multi-Level Attendance Intelligence (2026 Engine) ──────
+
+// Level 1: Student / Parent view (Current %, Last Month %, Academic Year % from admissionDate)
+router.get(
+  "/analytics/student/:userId?",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetStudentAttendanceAnalytics
+);
+
+// Level 2: Section view with full student comparison roster
+router.get(
+  "/analytics/section/:sectionId",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetSectionAttendanceAnalytics
+);
+
+// Level 3: School-wide view with section comparisons and low attendance alerts
+router.get(
+  "/analytics/school/:schoolId?",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetSchoolAttendanceAnalytics
+);
+
+// Level 4: Town-wide municipal overview and school rankings
+router.get(
+  "/analytics/town-overview",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetTownAttendanceOverview
 );
 
 export default router;

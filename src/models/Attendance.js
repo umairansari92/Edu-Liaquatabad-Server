@@ -35,8 +35,11 @@ const AttendanceSchema = new mongoose.Schema({
     default: 'PENDING_VERIFICATION',
     index: true,
   },
+  contentHash: { type: String, default: '' },
+  lastRollupAt: { type: Date },
 }, { timestamps: true });
 
 AttendanceSchema.index({ schoolId: 1, attendanceType: 1, date: 1, sectionId: 1 }, { unique: true });
+AttendanceSchema.index({ 'records.userId': 1, date: 1 });
 
 export default mongoose.models.Attendance || mongoose.model('Attendance', AttendanceSchema);

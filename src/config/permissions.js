@@ -60,6 +60,10 @@ export const PERMISSIONS = Object.freeze({
 
   // Audit Logs & Security Telemetry
   AUDIT_VIEW: 'audit.view',
+
+  // Homework Operations
+  HOMEWORK_VIEW:   'homework.view',
+  HOMEWORK_CREATE: 'homework.create',
 });
 
 // ─── Role Default Permissions ─────────────────────────────────────────────────
@@ -137,6 +141,8 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.TRANSFERS_APPROVE_JOINING,
     PERMISSIONS.DOCUMENTS_VIEW,
     PERMISSIONS.DOCUMENTS_PUBLISH,
+    PERMISSIONS.HOMEWORK_VIEW,
+    PERMISSIONS.HOMEWORK_CREATE,
   ],
 
   // TEACHER: Class/section operational authority
@@ -147,6 +153,8 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.EXAMS_VIEW,
     PERMISSIONS.EXAMS_ENTER_MARKS,
     PERMISSIONS.DOCUMENTS_VIEW,
+    PERMISSIONS.HOMEWORK_VIEW,
+    PERMISSIONS.HOMEWORK_CREATE,
   ],
 
   // PEON: Operational support staff — documents view
@@ -159,6 +167,7 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.ATTENDANCE_VIEW,
     PERMISSIONS.EXAMS_VIEW,
     PERMISSIONS.DOCUMENTS_VIEW,
+    PERMISSIONS.HOMEWORK_VIEW,
   ],
 
   // PARENT: Read-only access to child's records
@@ -166,6 +175,7 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.ATTENDANCE_VIEW,
     PERMISSIONS.EXAMS_VIEW,
     PERMISSIONS.DOCUMENTS_VIEW,
+    PERMISSIONS.HOMEWORK_VIEW,
   ],
 });
 
