@@ -5,6 +5,7 @@ import {
   handleSubmitAttendance,
   handleGetAttendanceRegister,
   handleGetMonthlySummary,
+  handleGetAttendanceWindowStatus,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -20,6 +21,13 @@ const router = express.Router();
 
 // All attendance routes require authentication
 router.use(authenticate);
+
+// ─── GET Real-Time Attendance Window & Closure Status ──────────────────────────
+router.get(
+  "/window-status",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetAttendanceWindowStatus
+);
 
 // ─── GET Attendance Status ─────────────────────────────────────────────────────
 // Teacher queries attendance submission status for their section (read-only)

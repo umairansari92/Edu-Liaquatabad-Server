@@ -3,6 +3,7 @@ import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import HolidayCalendar from '../models/HolidayCalendar.js';
 import WeeklyOffPattern from '../models/WeeklyOffPattern.js';
 import School from '../models/School.js';
+import Attendance from '../models/Attendance.js';
 import AuditLog from '../models/AuditLog.js';
 import cache from '../utils/cache.js';
 import { getKarachiDateString } from '../utils/karachiTime.js';
@@ -86,6 +87,41 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
       const schoolDoc = await School.findById(finalSchoolId).select('townId organizationId').lean();
       if (!schoolDoc) return sendError(response, 404, 'Target school not found.');
       finalTownId = schoolDoc.townId;
+    }
+
+    // ── Admin Backdating & Attendance Conflict Guard ─────────────────────────
+    if (startDate < todayPkt) {
+      const startObj = new Date(startDate);
+      const endObj = new Date(endDate);
+      endObj.setHours(23, 59, 59, 999);
+
+      const attendanceQuery = {
+        date: { $gte: startObj, $lte: endObj },
+        attendanceType: 'STUDENT',
+      };
+      if (finalScopeType === 'SCHOOL') {
+        attendanceQuery.schoolId = finalSchoolId;
+      } else if (finalTownId) {
+        const townSchoolIds = await School.find({ townId: finalTownId }).distinct('_id');
+        attendanceQuery.schoolId = { $in: townSchoolIds };
+      }
+
+      const existingAttendance = await Attendance.findOne(attendanceQuery).select('_id date schoolId').lean();
+      if (existingAttendance) {
+        return sendError(
+          response,
+          409,
+          `Cannot retroactively declare holiday for past dates (${startDate} to ${endDate}). Submitted attendance registers already exist for this period. Formal administrative reconciliation is required.`
+        );
+      }
+
+      if (reason.trim().length < 15) {
+        return sendError(
+          response,
+          400,
+          'Retroactive holiday declaration requires a detailed justification (minimum 15 characters) for the permanent municipal audit trail.'
+        );
+      }
     }
   }
 
@@ -286,16 +322,32 @@ export const handleCreateWeeklyOffPattern = asyncHandler(async (request, respons
     return sendError(response, 400, 'townId is required.');
   }
 
+  let finalSchoolId = null;
+  if (scopeType === 'SCHOOL') {
+    if (!schoolId || !/^[0-9a-fA-F]{24}$/.test(String(schoolId))) {
+      return sendError(response, 400, 'A valid schoolId is required when configuring a school-scoped weekly off pattern.');
+    }
+    const schoolDoc = await School.findById(schoolId).select('townId organizationId').lean();
+    if (!schoolDoc) {
+      return sendError(response, 404, 'Target school not found in municipal registry.');
+    }
+    finalSchoolId = schoolDoc._id;
+  }
+
   const orgId = requestingActor.organizationId?._id || requestingActor.organizationId || requestingActor.orgId;
 
-  // Deactivate any currently active weekly off pattern for this scope
+  // Deactivate any currently active weekly off pattern for this exact scope
+  const deactivationFilter = {
+    townId: finalTownId,
+    scopeType,
+    status: 'ACTIVE',
+  };
+  if (scopeType === 'SCHOOL') {
+    deactivationFilter.schoolId = finalSchoolId;
+  }
+
   await WeeklyOffPattern.updateMany(
-    {
-      townId: finalTownId,
-      scopeType,
-      ...(scopeType === 'SCHOOL' ? { schoolId } : {}),
-      status: 'ACTIVE',
-    },
+    deactivationFilter,
     { $set: { status: 'CANCELLED', effectiveTo: new Date() } }
   );
 
@@ -303,7 +355,7 @@ export const handleCreateWeeklyOffPattern = asyncHandler(async (request, respons
     organizationId: orgId,
     townId: finalTownId,
     scopeType,
-    schoolId: scopeType === 'SCHOOL' ? schoolId : null,
+    schoolId: scopeType === 'SCHOOL' ? finalSchoolId : null,
     offDays,
     effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : new Date(),
     effectiveTo: effectiveTo ? new Date(effectiveTo) : null,
@@ -343,12 +395,30 @@ export const handleCreateWeeklyOffPattern = asyncHandler(async (request, respons
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /weekly-off — List active weekly off patterns
+// GET /weekly-off — List active weekly off patterns (Scoped to Actor's Town/School)
 // ═══════════════════════════════════════════════════════════════════════════════
 export const handleGetWeeklyOffPatterns = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
   const { status = 'ACTIVE' } = request.query;
 
-  const patterns = await WeeklyOffPattern.find(status ? { status } : {})
+  const filter = {};
+  if (status) filter.status = status;
+
+  const actorSchoolId = requestingActor.schoolId?._id || requestingActor.schoolId;
+  const actorTownId = requestingActor.townId?._id || requestingActor.townId;
+
+  // Enforce 100% Data Isolation: Zero Cross-Tenant / Cross-School Data Leakage
+  if ([ROLES.HM, ROLES.TEACHER, ROLES.STUDENT, ROLES.PARENT].includes(requestingActor.role)) {
+    filter.$or = [
+      { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
+      ...(actorSchoolId ? [{ scopeType: 'SCHOOL', schoolId: actorSchoolId }] : []),
+    ];
+  } else if (actorTownId) {
+    // Town Admin: restrict to their verified town
+    filter.townId = actorTownId;
+  }
+
+  const patterns = await WeeklyOffPattern.find(filter)
     .populate('schoolId', 'name code')
     .populate('createdBy', 'fullName role')
     .sort({ createdAt: -1 })

@@ -14,7 +14,12 @@ import {
   TEACHING_ASSIGNMENT_STATUS,
 } from "../../config/constants.js";
 import { processAttendanceDelta, computeRecordsHash } from "../services/attendanceRollupService.js";
-import { validateSubmissionWindow } from "../services/attendanceWindowService.js";
+import { validateSubmissionWindow, checkIsSchoolClosed } from "../services/attendanceWindowService.js";
+import {
+  getKarachiTimeString,
+  getKarachiDateString,
+  getKarachiDayOfWeek,
+} from "../utils/karachiTime.js";
 import cache from "../utils/cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,28 +192,128 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
     };
   });
 
+  // Calculate real-time submission window and closure status for UI
+  const school = await School.findById(section.schoolId).lean();
+  const windowCheck = school
+    ? await validateSubmissionWindow({
+        school,
+        requestingActor,
+        date: queryDate,
+      })
+    : { allowed: true };
+
+  const closureCheck = school ? await checkIsSchoolClosed(school, queryDate) : { isClosed: false };
+  const currentDayOfWeek = getKarachiDayOfWeek(queryDate);
+  const isFriday = currentDayOfWeek === 5;
+  const schedule = isFriday ? school?.timings?.friday : school?.timings?.regular;
+  const currentTimePkt = getKarachiTimeString(queryDate);
+  const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && school?.timings?.allowHmLateOverride !== false;
+
   return sendSuccess(response, 200, "Attendance sheet retrieved.", {
     section: { _id: section._id, name: section.name, roomNumber: section.roomNumber || "", class: section.classId },
     date: queryDate.toISOString().split("T")[0],
     alreadySubmitted: !!existingRecord,
     verificationStatus: existingRecord?.verificationStatus || null,
     roster,
+    windowStatus: {
+      allowed: windowCheck.allowed,
+      code: windowCheck.code || (windowCheck.allowed ? "WINDOW_OPEN" : "UNKNOWN"),
+      reason: windowCheck.reason || "",
+      isClosed: closureCheck.isClosed,
+      closureType: closureCheck.type || null,
+      closureReason: closureCheck.reason || null,
+      currentTimePkt,
+      currentDatePkt: queryDatePkt,
+      isFriday,
+      schedule: {
+        startTime: schedule?.startTime || (isFriday ? "07:30" : "08:00"),
+        endTime: schedule?.endTime || (isFriday ? "12:00" : "13:30"),
+        attendanceWindowStart: schedule?.attendanceWindowStart || (isFriday ? "07:15" : "07:45"),
+        attendanceWindowEnd: schedule?.attendanceWindowEnd || (isFriday ? "12:30" : "14:00"),
+      },
+      allowHmLateOverride: school?.timings?.allowHmLateOverride ?? true,
+      canOverride,
+    },
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /attendance/window-status — Dedicated real-time window & closure query
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleGetAttendanceWindowStatus = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { schoolId, date } = request.query;
+
+  let targetSchoolId = schoolId;
+  if (!targetSchoolId && (requestingActor.role === ROLES.TEACHER || requestingActor.role === ROLES.HM)) {
+    targetSchoolId = requestingActor.schoolId?._id || requestingActor.schoolId;
+  }
+
+  if (!targetSchoolId) {
+    return sendError(response, 400, "A valid schoolId is required to determine attendance window status.");
+  }
+
+  const school = await School.findById(targetSchoolId).lean();
+  if (!school) {
+    return sendError(response, 404, "School not found in municipal registry.");
+  }
+
+  const queryDate = date ? new Date(date) : new Date();
+  if (isNaN(queryDate.getTime())) return sendError(response, 400, "Invalid date format.");
+
+  const windowCheck = await validateSubmissionWindow({
+    school,
+    requestingActor,
+    date: queryDate,
+  });
+
+  const closureCheck = await checkIsSchoolClosed(school, queryDate);
+
+  const currentDayOfWeek = getKarachiDayOfWeek(queryDate);
+  const isFriday = currentDayOfWeek === 5;
+  const schedule = isFriday ? school.timings?.friday : school.timings?.regular;
+  const currentTimePkt = getKarachiTimeString(queryDate);
+
+  const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && school.timings?.allowHmLateOverride !== false;
+
+  return sendSuccess(response, 200, "Attendance window status retrieved.", {
+    allowed: windowCheck.allowed,
+    code: windowCheck.code || (windowCheck.allowed ? "WINDOW_OPEN" : "UNKNOWN"),
+    reason: windowCheck.reason || "",
+    isClosed: closureCheck.isClosed,
+    closureType: closureCheck.type || null,
+    closureReason: closureCheck.reason || null,
+    currentTimePkt,
+    currentDatePkt: queryDatePkt,
+    isFriday,
+    schedule: {
+      startTime: schedule?.startTime || (isFriday ? "07:30" : "08:00"),
+      endTime: schedule?.endTime || (isFriday ? "12:00" : "13:30"),
+      attendanceWindowStart: schedule?.attendanceWindowStart || (isFriday ? "07:15" : "07:45"),
+      attendanceWindowEnd: schedule?.attendanceWindowEnd || (isFriday ? "12:30" : "14:00"),
+    },
+    allowHmLateOverride: school.timings?.allowHmLateOverride ?? true,
+    canOverride,
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /attendance/submit
 //
-// Teacher sends ONLY exceptions:
-//   { sectionId, date, absentStudentProfileIds: [...], leaveStudentProfileIds: [...] }
+// Teacher sends exceptions or records:
+//   { sectionId, date, absentStudentProfileIds: [...], leaveStudentProfileIds: [...], isLateOverride, lateReason }
 //
 // Server derives:
 //   Student not in absent or leave → PRESENT (automatically)
 //   Student in absent → ABSENT
 //   Student in leave  → LEAVE
 //   Student in BOTH   → 400 Bad Request (A+L overlap)
-//
-// Client-supplied "P" is ignored entirely — server calculates from enrollment.
 // ═══════════════════════════════════════════════════════════════════════════════
 export const handleSubmitAttendance = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
@@ -217,6 +322,7 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     date,
     absentStudentProfileIds = [],
     leaveStudentProfileIds  = [],
+    records = [],
     isLateOverride = false,
     lateReason = '',
   } = request.body;
@@ -224,15 +330,22 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
     return sendError(response, 400, "A valid sectionId is required.");
   }
-  if (!Array.isArray(absentStudentProfileIds)) {
-    return sendError(response, 400, "absentStudentProfileIds must be an array.");
-  }
-  if (!Array.isArray(leaveStudentProfileIds)) {
-    return sendError(response, 400, "leaveStudentProfileIds must be an array.");
+
+  // Graceful derivation if client sends 'records' array instead of direct arrays
+  let effectiveAbsentIds = Array.isArray(absentStudentProfileIds) ? [...absentStudentProfileIds] : [];
+  let effectiveLeaveIds  = Array.isArray(leaveStudentProfileIds)  ? [...leaveStudentProfileIds]  : [];
+
+  if (effectiveAbsentIds.length === 0 && effectiveLeaveIds.length === 0 && Array.isArray(records) && records.length > 0) {
+    effectiveAbsentIds = records
+      .filter((r) => r.status === ATTENDANCE_STATUS.ABSENT || r.currentStatus === ATTENDANCE_STATUS.ABSENT)
+      .map((r) => r.studentProfileId || r.userId);
+    effectiveLeaveIds = records
+      .filter((r) => r.status === ATTENDANCE_STATUS.LEAVE || r.currentStatus === ATTENDANCE_STATUS.LEAVE)
+      .map((r) => r.studentProfileId || r.userId);
   }
 
   // Validate all submitted IDs are valid ObjectIds
-  const allIds = [...absentStudentProfileIds, ...leaveStudentProfileIds];
+  const allIds = [...effectiveAbsentIds, ...effectiveLeaveIds];
   for (const id of allIds) {
     if (!/^[0-9a-fA-F]{24}$/.test(String(id))) {
       return sendError(response, 400, `Invalid studentProfileId format: ${id}`);
@@ -240,8 +353,8 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   }
 
   // A + L overlap check — same student cannot be both Absent AND Leave
-  const absentSet = new Set(absentStudentProfileIds.map(String));
-  const leaveSet  = new Set(leaveStudentProfileIds.map(String));
+  const absentSet = new Set(effectiveAbsentIds.map(String));
+  const leaveSet  = new Set(effectiveLeaveIds.map(String));
   const overlaps  = [...absentSet].filter((id) => leaveSet.has(id));
   if (overlaps.length > 0) {
     return sendError(response, 400,
