@@ -179,31 +179,31 @@ async function runSuite() {
 
   // Test 1: HM cannot post announcement (403)
   {
-    const req = { user: hmUser, body: { title: 'T', message: 'Long enough message here', announcerName: 'N', announcerDesignation: 'D' } };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 403, 'HM attempting to post announcement is rejected with 403 Forbidden');
+    const mockRequest = { user: hmUser, body: { title: 'T', message: 'Long enough message here', announcerName: 'N', announcerDesignation: 'D' } };
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 403, 'HM attempting to post announcement is rejected with 403 Forbidden');
   }
 
   // Test 2: Teacher cannot post announcement (403)
   {
-    const req = { user: teacherUser, body: { title: 'T', message: 'Long enough message here', announcerName: 'N', announcerDesignation: 'D' } };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 403, 'Teacher attempting to post announcement is rejected with 403 Forbidden');
+    const mockRequest = { user: teacherUser, body: { title: 'T', message: 'Long enough message here', announcerName: 'N', announcerDesignation: 'D' } };
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 403, 'Teacher attempting to post announcement is rejected with 403 Forbidden');
   }
 
   // Test 3: Student cannot post announcement (403)
   {
-    const req = { user: studentUser, body: { title: 'T', message: 'Long enough message here', announcerName: 'N', announcerDesignation: 'D' } };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 403, 'Student attempting to post announcement is rejected with 403 Forbidden');
+    const mockRequest = { user: studentUser, body: { title: 'T', message: 'Long enough message here', announcerName: 'N', announcerDesignation: 'D' } };
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 403, 'Student attempting to post announcement is rejected with 403 Forbidden');
   }
 
   // Test 4: Root Admin CAN post announcement (201)
   {
-    const req = {
+    const mockRequest = {
       user: rootAdminUser,
       body: {
         title: 'Independence Day Official Message',
@@ -215,16 +215,16 @@ async function runSuite() {
       },
       get: () => 'TestAgent',
     };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 201, 'ROOT_ADMIN can post announcement (201 Created)');
-    assert(res.body.data.status === 'ACTIVE', 'Announcement status is ACTIVE');
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 201, 'ROOT_ADMIN can post announcement (201 Created)');
+    assert(mockResponse.body.data.status === 'ACTIVE', 'Announcement status is ACTIVE');
     assert(mockAnnouncements.length === 1, 'Mock store contains 1 announcement');
   }
 
   // Test 5: Admin (DDO) CAN post announcement (201)
   {
-    const req = {
+    const mockRequest = {
       user: ddoAdminUser,
       body: {
         title: 'Defence Day Gazette Holiday Notification',
@@ -236,10 +236,10 @@ async function runSuite() {
       },
       get: () => 'TestAgent',
     };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 201, 'ADMIN (DDO) can post announcement (201 Created)');
-    assert(res.body.data.status === 'ACTIVE', 'Second announcement is ACTIVE');
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 201, 'ADMIN (DDO) can post announcement (201 Created)');
+    assert(mockResponse.body.data.status === 'ACTIVE', 'Second announcement is ACTIVE');
   }
 
   // ── TEST GROUP 2: Single-Active Invariant & Zero Hard Deletion ─────────────
@@ -247,7 +247,7 @@ async function runSuite() {
 
   // Test 6: Exactly one announcement is active
   {
-    const activeAnnouncements = mockAnnouncements.filter((a) => a.status === 'ACTIVE');
+    const activeAnnouncements = mockAnnouncements.filter((announcement) => announcement.status === 'ACTIVE');
     assert(activeAnnouncements.length === 1, 'Exactly ONE announcement is ACTIVE at a time');
     assert(activeAnnouncements[0].title === 'Defence Day Gazette Holiday Notification', 'Active announcement is the newest one');
   }
@@ -255,7 +255,7 @@ async function runSuite() {
   // Test 7: Zero hard-deletion: older announcement is archived with timestamp
   {
     assert(mockAnnouncements.length === 2, 'Total announcements count is 2 (Article IV: Zero Hard Deletion)');
-    const archived = mockAnnouncements.find((a) => a.title === 'Independence Day Official Message');
+    const archived = mockAnnouncements.find((announcement) => announcement.title === 'Independence Day Official Message');
     assert(archived.status === 'ARCHIVED', 'Previous announcement status transitioned to ARCHIVED');
     assert(archived.archivedAt instanceof Date, 'archivedAt timestamp was populated');
     assert(archived.archivedBy.toString() === ddoAdminUser._id.toString(), 'archivedBy points to the replacement author');
@@ -266,26 +266,26 @@ async function runSuite() {
 
   // Test 8: Empty title rejected (400)
   {
-    const req = { user: ddoAdminUser, body: { title: '   ', message: 'Valid long message here', announcerName: 'Name', announcerDesignation: 'Desig' } };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 400, 'Blank title is rejected with 400 Bad Request');
+    const mockRequest = { user: ddoAdminUser, body: { title: '   ', message: 'Valid long message here', announcerName: 'Name', announcerDesignation: 'Desig' } };
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 400, 'Blank title is rejected with 400 Bad Request');
   }
 
   // Test 9: Short message rejected (400)
   {
-    const req = { user: ddoAdminUser, body: { title: 'Valid Title', message: 'Too short', announcerName: 'Name', announcerDesignation: 'Desig' } };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 400, 'Message shorter than 10 characters is rejected with 400 Bad Request');
+    const mockRequest = { user: ddoAdminUser, body: { title: 'Valid Title', message: 'Too short', announcerName: 'Name', announcerDesignation: 'Desig' } };
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 400, 'Message shorter than 10 characters is rejected with 400 Bad Request');
   }
 
   // Test 10: Invalid announcement type rejected (400)
   {
-    const req = { user: ddoAdminUser, body: { title: 'Valid Title', message: 'Valid long message here', type: 'INVALID_TYPE', announcerName: 'Name', announcerDesignation: 'Desig' } };
-    const res = createMockResponse();
-    await handleCreateAnnouncement(req, res, () => {});
-    assert(res.statusCode === 400, 'Invalid type is rejected with 400 Bad Request');
+    const mockRequest = { user: ddoAdminUser, body: { title: 'Valid Title', message: 'Valid long message here', type: 'INVALID_TYPE', announcerName: 'Name', announcerDesignation: 'Desig' } };
+    const mockResponse = createMockResponse();
+    await handleCreateAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 400, 'Invalid type is rejected with 400 Bad Request');
   }
 
   // ── TEST GROUP 4: Public Endpoints & Archiving ─────────────────────────────
@@ -293,30 +293,30 @@ async function runSuite() {
 
   // Test 11: Public active endpoint works without credentials
   {
-    const req = {};
-    const res = createMockResponse();
-    await handleGetActiveAnnouncement(req, res, () => {});
-    assert(res.statusCode === 200, 'GET /announcements/active returns 200 OK without credentials');
-    assert(res.body.data.title === 'Defence Day Gazette Holiday Notification', 'Returns active announcement data');
+    const mockRequest = {};
+    const mockResponse = createMockResponse();
+    await handleGetActiveAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 200, 'GET /announcements/active returns 200 OK without credentials');
+    assert(mockResponse.body.data.title === 'Defence Day Gazette Holiday Notification', 'Returns active announcement data');
   }
 
   // Test 12: Archive endpoint allows Admin to archive active announcement
   {
-    const activeDoc = mockAnnouncements.find((a) => a.status === 'ACTIVE');
-    const req = { user: ddoAdminUser, params: { id: activeDoc._id.toString() }, get: () => 'TestAgent' };
-    const res = createMockResponse();
-    await handleArchiveAnnouncement(req, res, () => {});
-    assert(res.statusCode === 200, 'Active announcement archived successfully');
-    assert(mockAnnouncements.filter((a) => a.status === 'ACTIVE').length === 0, 'No announcements currently active');
+    const activeDoc = mockAnnouncements.find((announcement) => announcement.status === 'ACTIVE');
+    const mockRequest = { user: ddoAdminUser, params: { id: activeDoc._id.toString() }, get: () => 'TestAgent' };
+    const mockResponse = createMockResponse();
+    await handleArchiveAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 200, 'Active announcement archived successfully');
+    assert(mockAnnouncements.filter((announcement) => announcement.status === 'ACTIVE').length === 0, 'No announcements currently active');
   }
 
   // Test 13: GET active when none active returns null
   {
-    const req = {};
-    const res = createMockResponse();
-    await handleGetActiveAnnouncement(req, res, () => {});
-    assert(res.statusCode === 200, 'GET /announcements/active returns 200 OK');
-    assert(res.body.data === null, 'Returns data: null when no announcement is active');
+    const mockRequest = {};
+    const mockResponse = createMockResponse();
+    await handleGetActiveAnnouncement(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 200, 'GET /announcements/active returns 200 OK');
+    assert(mockResponse.body.data === null, 'Returns data: null when no announcement is active');
   }
 
   // ── TEST GROUP 5: Public Town Stats & Instant Cache Invalidation ───────────
@@ -324,14 +324,14 @@ async function runSuite() {
 
   // Test 14: Public Town Stats returns structured aggregate data
   {
-    const req = {};
-    const res = createMockResponse();
-    await getPublicTownStats(req, res, () => {});
-    assert(res.statusCode === 200, 'GET /api/v1/public/town-stats returns 200 OK');
-    assert(res.body.data.metrics !== undefined, 'Contains metrics object');
-    assert(res.body.data.metrics.totalSchools >= 45, 'Metrics contains totalSchools');
-    assert(res.body.data.metrics.overallAttendanceRate !== undefined, 'Metrics contains overallAttendanceRate');
-    assert(res.body.data.digitalAttendanceRate !== undefined, 'Maintains backwards-compatible keys');
+    const mockRequest = {};
+    const mockResponse = createMockResponse();
+    await getPublicTownStats(mockRequest, mockResponse, () => {});
+    assert(mockResponse.statusCode === 200, 'GET /api/v1/public/town-stats returns 200 OK');
+    assert(mockResponse.body.data.metrics !== undefined, 'Contains metrics object');
+    assert(mockResponse.body.data.metrics.totalSchools >= 45, 'Metrics contains totalSchools');
+    assert(mockResponse.body.data.metrics.overallAttendanceRate !== undefined, 'Metrics contains overallAttendanceRate');
+    assert(mockResponse.body.data.digitalAttendanceRate !== undefined, 'Maintains backwards-compatible keys');
   }
 
   // Test 15: Cache invalidation function executes cleanly

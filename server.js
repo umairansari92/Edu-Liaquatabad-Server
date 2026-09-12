@@ -108,8 +108,8 @@ connectDatabase();
 app.use('/api/v1', v1Routes);
 
 // ─── Root Fallback Route ──────────────────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({
+app.get('/', (request, response) => {
+  response.json({
     platform: 'Education Department Liaquatabad Town Centre (DMC)',
     version: 'v1.0.0',
     docs: '/api/v1/health',
