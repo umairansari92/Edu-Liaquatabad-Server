@@ -47,6 +47,8 @@ router.patch(
   authorizeScope,
   validate(updateSchoolSchema),
   handleUpdateSchool
+);
+
 // ─── Configure School Operational Timings (ROOT_ADMIN, SUPER_ADMIN, ADMIN) ──
 router.patch(
   '/:id/timings',
