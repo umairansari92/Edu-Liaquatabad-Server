@@ -21,7 +21,7 @@ const buildCsvRow = (cells) => cells.map(escapeCsvCell).join(',');
 
 const getDateString = () => new Date().toISOString().slice(0, 10);
 
-const formatDate = (d) => (d ? new Date(d).toISOString().split('T')[0] : '');
+const formatDate = (dateValue) => (dateValue ? new Date(dateValue).toISOString().split('T')[0] : '');
 
 /** Write an immutable audit log entry for each export event */
 const writeExportAudit = async (actor, request, action, totalRecords, filename) => {
@@ -181,7 +181,7 @@ export const handleExportStaffCsv = asyncHandler(async (request, response) => {
     .lean();
 
   // Fetch TeacherProfiles keyed by userId for O(1) lookup
-  const staffUserIds = staffUsers.map((u) => u._id);
+  const staffUserIds = staffUsers.map((staffUser) => staffUser._id);
   const teacherProfiles = await TeacherProfile.find({ userId: { $in: staffUserIds } })
     .populate('currentSchoolId', 'name schoolCode')
     .lean();
@@ -206,24 +206,24 @@ export const handleExportStaffCsv = asyncHandler(async (request, response) => {
     'Joining Date', 'Account Status', 'Registered On',
   ]) + '\r\n');
 
-  for (const u of staffUsers) {
-    const profile = profileMap[String(u._id)] || {};
+  for (const staffUser of staffUsers) {
+    const profile = profileMap[String(staffUser._id)] || {};
     response.write(buildCsvRow([
-      u.fullName,
-      u.email        || '',
-      u.phoneNumber  || '',
-      u.designation  || '',
-      u.baseRole     || '',
-      u.role,
-      u.scope        || '',
-      u.schoolId?.name       || profile.currentSchoolId?.name       || '',
-      u.schoolId?.schoolCode || profile.currentSchoolId?.schoolCode || '',
+      staffUser.fullName,
+      staffUser.email        || '',
+      staffUser.phoneNumber  || '',
+      staffUser.designation  || '',
+      staffUser.baseRole     || '',
+      staffUser.role,
+      staffUser.scope        || '',
+      staffUser.schoolId?.name       || profile.currentSchoolId?.name       || '',
+      staffUser.schoolId?.schoolCode || profile.currentSchoolId?.schoolCode || '',
       profile.employeeId             || '',
       profile.qualification          || '',
       (profile.specializationSubjects || []).join(' | '),
       formatDate(profile.joiningDate),
-      u.status,
-      formatDate(u.createdAt),
+      staffUser.status,
+      formatDate(staffUser.createdAt),
     ]) + '\r\n');
   }
 
@@ -259,10 +259,10 @@ export const handleExportStudentsCsv = asyncHandler(async (request, response) =>
   // Search filter applied post-populate (name / GR No)
   if (search) {
     const searchLower = search.toLowerCase();
-    profiles = profiles.filter((p) =>
-      (p.userId?.fullName || '').toLowerCase().includes(searchLower) ||
-      String(p.grNumber).includes(search) ||
-      (p.globalStudentId || '').toLowerCase().includes(searchLower)
+    profiles = profiles.filter((studentProfile) =>
+      (studentProfile.userId?.fullName || '').toLowerCase().includes(searchLower) ||
+      String(studentProfile.grNumber).includes(search) ||
+      (studentProfile.globalStudentId || '').toLowerCase().includes(searchLower)
     );
   }
 
@@ -339,7 +339,7 @@ export const handleExportGuardiansCsv = asyncHandler(async (request, response) =
     .lean();
 
   // Fetch all linked students in a single batched query
-  const guardianIds = guardians.map((g) => g._id);
+  const guardianIds = guardians.map((guardianUser) => guardianUser._id);
   const linkedStudentProfiles = await StudentProfile.find({
     parentUserId: { $in: guardianIds },
   })

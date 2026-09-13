@@ -124,9 +124,9 @@ export const handleGetAttendanceStatus = asyncHandler(async (request, response) 
     submitted: true,
     status: record.verificationStatus,
     totalRecords: record.records.length,
-    presentCount: record.records.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length,
-    absentCount:  record.records.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length,
-    leaveCount:   record.records.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length,
+    presentCount: record.records.filter((recordItem) => recordItem.status === ATTENDANCE_STATUS.PRESENT).length,
+    absentCount:  record.records.filter((recordItem) => recordItem.status === ATTENDANCE_STATUS.ABSENT).length,
+    leaveCount:   record.records.filter((recordItem) => recordItem.status === ATTENDANCE_STATUS.LEAVE).length,
     submittedAt:  record.updatedAt,
   });
 });
@@ -337,11 +337,11 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
 
   if (effectiveAbsentIds.length === 0 && effectiveLeaveIds.length === 0 && Array.isArray(records) && records.length > 0) {
     effectiveAbsentIds = records
-      .filter((r) => r.status === ATTENDANCE_STATUS.ABSENT || r.currentStatus === ATTENDANCE_STATUS.ABSENT)
-      .map((r) => r.studentProfileId || r.userId);
+      .filter((submittedRecord) => submittedRecord.status === ATTENDANCE_STATUS.ABSENT || submittedRecord.currentStatus === ATTENDANCE_STATUS.ABSENT)
+      .map((submittedRecord) => submittedRecord.studentProfileId || submittedRecord.userId);
     effectiveLeaveIds = records
-      .filter((r) => r.status === ATTENDANCE_STATUS.LEAVE || r.currentStatus === ATTENDANCE_STATUS.LEAVE)
-      .map((r) => r.studentProfileId || r.userId);
+      .filter((submittedRecord) => submittedRecord.status === ATTENDANCE_STATUS.LEAVE || submittedRecord.currentStatus === ATTENDANCE_STATUS.LEAVE)
+      .map((submittedRecord) => submittedRecord.studentProfileId || submittedRecord.userId);
   }
 
   // Validate all submitted IDs are valid ObjectIds
@@ -402,8 +402,8 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     .populate("userId", "fullName _id")
     .lean();
 
-  const authorizedProfileIds = new Set(authorizedStudents.map((s) => String(s._id)));
-  const profileToUserId      = Object.fromEntries(authorizedStudents.map((s) => [String(s._id), s.userId?._id]));
+  const authorizedProfileIds = new Set(authorizedStudents.map((studentProfile) => String(studentProfile._id)));
+  const profileToUserId      = Object.fromEntries(authorizedStudents.map((studentProfile) => [String(studentProfile._id), studentProfile.userId?._id]));
 
   // Verify submitted IDs are in the authoritative roster — reject injected IDs
   for (const id of [...absentSet, ...leaveSet]) {
@@ -479,9 +479,9 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     });
   }
 
-  const presentCount = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length;
-  const absentCount  = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length;
-  const leaveCount   = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length;
+  const presentCount = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.PRESENT).length;
+  const absentCount  = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.ABSENT).length;
+  const leaveCount   = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.LEAVE).length;
 
   const auditAction = windowCheck.isLateOverride ? "ATTENDANCE_LATE_OVERRIDE_SUBMITTED" : "ATTENDANCE_SUBMITTED";
   const auditReason = windowCheck.isLateOverride
@@ -704,7 +704,7 @@ export const handleGetMonthlySummary = asyncHandler(async (request, response) =>
   const aggregate = (records, uidStr) => {
     let present = 0, absent = 0, leave = 0;
     for (const rec of records) {
-      const entry = rec.records.find((r) => String(r.userId) === uidStr);
+      const entry = rec.records.find((recordItem) => String(recordItem.userId) === uidStr);
       if (entry) {
         if (entry.status === ATTENDANCE_STATUS.PRESENT)     present++;
         else if (entry.status === ATTENDANCE_STATUS.ABSENT) absent++;

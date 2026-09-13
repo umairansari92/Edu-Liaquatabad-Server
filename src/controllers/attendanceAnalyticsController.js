@@ -159,7 +159,7 @@ export const handleGetSectionAttendanceAnalytics = asyncHandler(async (request, 
     .sort({ grNumber: 1 })
     .lean();
 
-  const userIds = studentProfiles.map(p => p.userId?._id).filter(Boolean);
+  const userIds = studentProfiles.map(studentProfile => studentProfile.userId?._id).filter(Boolean);
 
   // Fetch all summaries for these students in this session
   const summaries = await AttendanceSummary.find({
@@ -169,8 +169,8 @@ export const handleGetSectionAttendanceAnalytics = asyncHandler(async (request, 
 
   // Map: `${userId}_${year}_${month}` -> summary
   const summaryMap = {};
-  for (const s of summaries) {
-    summaryMap[`${String(s.userId)}_${s.year}_${s.month}`] = s;
+  for (const summaryRecord of summaries) {
+    summaryMap[`${String(summaryRecord.userId)}_${summaryRecord.year}_${summaryRecord.month}`] = summaryRecord;
   }
 
   let sectionCurrentPresent = 0;
@@ -180,13 +180,13 @@ export const handleGetSectionAttendanceAnalytics = asyncHandler(async (request, 
   let sectionSessionPresent = 0;
   let sectionSessionWorking = 0;
 
-  const roster = studentProfiles.map(p => {
-    const uid = String(p.userId?._id);
+  const roster = studentProfiles.map(studentProfile => {
+    const uid = String(studentProfile.userId?._id);
     const curr = summaryMap[`${uid}_${currentYear}_${currentMonth}`] || { presentDays: 0, totalWorkingDays: 0, absentDays: 0, leaveDays: 0 };
     const last = summaryMap[`${uid}_${lastYear}_${lastMonth}`] || { presentDays: 0, totalWorkingDays: 0, absentDays: 0, leaveDays: 0 };
 
     // Sum overall session for this student
-    const studentSessionSummaries = summaries.filter(s => String(s.userId) === uid);
+    const studentSessionSummaries = summaries.filter(sessionSummary => String(sessionSummary.userId) === uid);
     let stSessionPresent = 0;
     let stSessionWorking = 0;
     let stSessionAbsent = 0;
@@ -489,15 +489,15 @@ export const handleGetTownAttendanceOverview = asyncHandler(async (request, resp
 
   const calcPct = (pDays, wDays) => wDays > 0 ? Number(((pDays / wDays) * 100).toFixed(1)) : 0;
 
-  const schoolRankings = Object.values(schoolMetricsMap).map(m => ({
-    schoolId: m.schoolId,
-    name: m.name,
-    code: m.code,
-    dmcRegion: m.dmcRegion,
-    currentMonthPct: calcPct(m.currP, m.currW),
-    lastMonthPct: calcPct(m.lastP, m.lastW),
-    overallSessionPct: calcPct(m.sessP, m.sessW),
-  })).sort((a, b) => b.overallSessionPct - a.overallSessionPct);
+  const schoolRankings = Object.values(schoolMetricsMap).map((schoolMetric) => ({
+    schoolId: schoolMetric.schoolId,
+    name: schoolMetric.name,
+    code: schoolMetric.code,
+    dmcRegion: schoolMetric.dmcRegion,
+    currentMonthPct: calcPct(schoolMetric.currP, schoolMetric.currW),
+    lastMonthPct: calcPct(schoolMetric.lastP, schoolMetric.lastW),
+    overallSessionPct: calcPct(schoolMetric.sessP, schoolMetric.sessW),
+  })).sort((rankingA, rankingB) => rankingB.overallSessionPct - rankingA.overallSessionPct);
 
   const result = {
     academicSession: session,

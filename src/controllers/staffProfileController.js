@@ -43,7 +43,7 @@ const evaluateProfileAccess = (actor, targetUser, targetProfile) => {
   const targetSchoolId = targetUser.schoolId || targetUser.claimedSchoolId || targetProfile?.currentSchoolId || targetProfile?.claimedSchoolId;
   if (actor.role === ROLES.SUPERVISOR) {
     if (targetSchoolId) {
-      const assigned = (actor.assignedSchools || []).map((s) => String(s._id || s));
+      const assigned = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool._id || assignedSchool));
       if (assigned.includes(String(targetSchoolId))) {
         return { canView: true, canViewSensitive: false }; // Masked sensitive
       }
@@ -132,19 +132,19 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
           accountNumber: access.canViewSensitive ? targetProfile.accountNumber : maskBankAccount(targetProfile.accountNumber),
           accountTitle: access.canViewSensitive ? targetProfile.accountTitle : '****',
           correctionRemarks: targetProfile.correctionRemarks,
-          approvalHistory: (targetProfile.approvalHistory || []).map((h) => ({
-            action: h.action,
-            decision: h.decision,
-            reason: h.reason,
-            actorRole: h.actorRole,
-            actorName: h.actorName,
-            timestamp: h.timestamp,
+          approvalHistory: (targetProfile.approvalHistory || []).map((historyEntry) => ({
+            action: historyEntry.action,
+            decision: historyEntry.decision,
+            reason: historyEntry.reason,
+            actorRole: historyEntry.actorRole,
+            actorName: historyEntry.actorName,
+            timestamp: historyEntry.timestamp,
           })),
         }
       : null,
     assignments: {
-      active: assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
-      history: assignments.filter((a) => a.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+      active: assignments.filter((assignmentItem) => assignmentItem.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+      history: assignments.filter((assignmentItem) => assignmentItem.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE),
     },
   };
 

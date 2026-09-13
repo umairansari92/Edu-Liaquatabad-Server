@@ -16,8 +16,8 @@ async function testAll() {
     });
     console.log(`✅ [MongoDB Atlas] Connected successfully! Host: ${conn.connection.host}`);
     await mongoose.disconnect();
-  } catch (err) {
-    console.error(`❌ [MongoDB Atlas] Error: ${err.message}`);
+  } catch (mongoConnectionError) {
+    console.error(`❌ [MongoDB Atlas] Error: ${mongoConnectionError.message}`);
   }
 
   // 2. Cloudinary
@@ -30,8 +30,8 @@ async function testAll() {
   try {
     const ping = await cloudinary.api.ping();
     console.log(`✅ [Cloudinary] Connected successfully! Status: ${ping.status}`);
-  } catch (err) {
-    console.error(`❌ [Cloudinary] Error: ${err.message}`);
+  } catch (cloudinaryPingError) {
+    console.error(`❌ [Cloudinary] Error: ${cloudinaryPingError.message}`);
   }
 
   // 3. Gmail SMTP
@@ -48,8 +48,8 @@ async function testAll() {
     });
     await transporter.verify();
     console.log('✅ [Gmail SMTP] Authentication verified successfully! Ready to dispatch emails.');
-  } catch (err) {
-    console.error(`❌ [Gmail SMTP] Error: ${err.message}`);
+  } catch (smtpVerificationError) {
+    console.error(`❌ [Gmail SMTP] Error: ${smtpVerificationError.message}`);
   }
 
   console.log('\n--- 🎉 All Tests Complete ---');

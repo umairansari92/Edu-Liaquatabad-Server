@@ -42,16 +42,16 @@ export const handleGetClasses = asyncHandler(async (request, response) => {
   const classes = await Class.find(filter).sort({ numericGrade: 1 }).lean();
 
   // For each class, count its active sections
-  const classIds = classes.map((c) => c._id);
+  const classIds = classes.map((classItem) => classItem._id);
   const sectionCounts = await Section.aggregate([
     { $match: { classId: { $in: classIds }, status: { $ne: 'ARCHIVED' } } },
     { $group: { _id: '$classId', count: { $sum: 1 } } },
   ]);
-  const sectionCountMap = Object.fromEntries(sectionCounts.map((sc) => [String(sc._id), sc.count]));
+  const sectionCountMap = Object.fromEntries(sectionCounts.map((sectionCountItem) => [String(sectionCountItem._id), sectionCountItem.count]));
 
-  const enrichedClasses = classes.map((c) => ({
-    ...c,
-    sectionCount: sectionCountMap[String(c._id)] || 0,
+  const enrichedClasses = classes.map((classItem) => ({
+    ...classItem,
+    sectionCount: sectionCountMap[String(classItem._id)] || 0,
   }));
 
   return sendSuccess(response, 200, 'Classes retrieved successfully.', { classes: enrichedClasses });
@@ -443,13 +443,13 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         : 'NOT_SUBMITTED';
 
       const presentCount  = attendanceRecord
-        ? attendanceRecord.records.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length
+        ? attendanceRecord.records.filter((attendanceEntry) => attendanceEntry.status === ATTENDANCE_STATUS.PRESENT).length
         : null;
       const absentCount   = attendanceRecord
-        ? attendanceRecord.records.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length
+        ? attendanceRecord.records.filter((attendanceEntry) => attendanceEntry.status === ATTENDANCE_STATUS.ABSENT).length
         : null;
       const leaveCount    = attendanceRecord
-        ? attendanceRecord.records.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length
+        ? attendanceRecord.records.filter((attendanceEntry) => attendanceEntry.status === ATTENDANCE_STATUS.LEAVE).length
         : null;
 
       return {
@@ -471,8 +471,8 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     })
   );
 
-  const totalAssignedStudents = sectionSummaries.reduce((sum, s) => sum + s.studentCount, 0);
-  const pendingAttendanceSections = sectionSummaries.filter((s) => !s.todayAttendance.submitted);
+  const totalAssignedStudents = sectionSummaries.reduce((runningSum, sectionSummary) => runningSum + sectionSummary.studentCount, 0);
+  const pendingAttendanceSections = sectionSummaries.filter((sectionSummary) => !sectionSummary.todayAttendance.submitted);
 
   return sendSuccess(response, 200, 'Teacher operational summary retrieved.', {
     teacherContext: {

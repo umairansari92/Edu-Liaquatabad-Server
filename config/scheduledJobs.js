@@ -19,8 +19,8 @@ export const startScheduledJobs = () => {
       if (result.deletedCount > 0) {
         logger.info(`[Cron] SecurityLockout cleanup: ${result.deletedCount} expired records removed.`);
       }
-    } catch (err) {
-      logger.error(`[Cron] SecurityLockout cleanup failed: ${err.message}`);
+    } catch (cleanupError) {
+      logger.error(`[Cron] SecurityLockout cleanup failed: ${cleanupError.message}`);
     }
   });
 

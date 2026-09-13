@@ -5,7 +5,7 @@ const SCRIPT_INJECTION_REGEX = /<[^>]*>|javascript:|on\w+\s*=|\$where|\$expr/i;
 const safeString = (max = 200, min = 0, minMsg = '') => {
   let schema = z.string().trim().max(max, `Must be ${max} chars or fewer`);
   if (min > 0) schema = schema.min(min, minMsg || `Must be at least ${min} chars`);
-  return schema.refine((v) => !SCRIPT_INJECTION_REGEX.test(v), {
+  return schema.refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
     message: 'Input contains disallowed characters.',
   });
 };

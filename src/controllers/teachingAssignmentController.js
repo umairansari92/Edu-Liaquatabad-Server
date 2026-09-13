@@ -17,7 +17,7 @@ const canManageSchoolAssignments = (actor, schoolId) => {
   if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(actor.role)) return true;
 
   if (actor.role === ROLES.SUPERVISOR) {
-    const assigned = (actor.assignedSchools || []).map((s) => String(s._id || s));
+    const assigned = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool._id || assignedSchool));
     return assigned.includes(String(schoolId));
   }
 
@@ -59,8 +59,8 @@ export const handleGetTeacherAssignments = asyncHandler(async (request, response
     .sort({ status: 1, createdAt: -1 })
     .lean();
 
-  const activeAssignments = assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
-  const historicalAssignments = assignments.filter((a) => a.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const activeAssignments = assignments.filter((assignmentItem) => assignmentItem.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const historicalAssignments = assignments.filter((assignmentItem) => assignmentItem.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
 
   return sendSuccess(response, 200, 'Teaching assignments retrieved successfully.', {
     teacher: {
@@ -90,8 +90,8 @@ export const handleGetMyAssignments = asyncHandler(async (request, response) => 
     .sort({ status: 1, createdAt: -1 })
     .lean();
 
-  const activeAssignments = assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
-  const historicalAssignments = assignments.filter((a) => a.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const activeAssignments = assignments.filter((assignmentItem) => assignmentItem.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const historicalAssignments = assignments.filter((assignmentItem) => assignmentItem.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
 
   return sendSuccess(response, 200, 'Your teaching assignments retrieved.', {
     activeAssignments,

@@ -11,10 +11,10 @@ import { ATTENDANCE_STATUS } from '../../config/constants.js';
  * @returns {string} e.g. "2025-2026"
  */
 export const resolveAcademicSession = (date = new Date()) => {
-  const d = new Date(date);
-  const year = d.getFullYear();
+  const targetDate = new Date(date);
+  const year = targetDate.getFullYear();
   // July or later is session start year; before July is second year of session
-  if (d.getMonth() >= 6) {
+  if (targetDate.getMonth() >= 6) {
     return `${year}-${year + 1}`;
   }
   return `${year - 1}-${year}`;
@@ -27,7 +27,7 @@ export const resolveAcademicSession = (date = new Date()) => {
  */
 export const computeRecordsHash = (records = []) => {
   const sorted = [...records]
-    .map(r => `${String(r.userId)}:${r.status}`)
+    .map((attendanceItem) => `${String(attendanceItem.userId)}:${attendanceItem.status}`)
     .sort()
     .join('|');
   return crypto.createHash('sha256').update(sorted).digest('hex').substring(0, 32);
@@ -212,7 +212,7 @@ export const reconcileSectionMonthRollup = async (schoolId, sectionId, year, mon
     let totalWorkingDays = 0;
 
     for (const rec of records) {
-      const entry = rec.records?.find(r => String(r.userId) === uidStr);
+      const entry = rec.records?.find((attendanceRecord) => String(attendanceRecord.userId) === uidStr);
       if (entry) {
         totalWorkingDays++;
         if (entry.status === ATTENDANCE_STATUS.PRESENT) presentDays++;

@@ -220,15 +220,15 @@ export const ROLE_PERMISSION_CEILING = Object.freeze({
   ],
 
   [ROLES.PEON]: Object.values(PERMISSIONS).filter(
-    (p) => ![PERMISSIONS.DOCUMENTS_VIEW, PERMISSIONS.ATTENDANCE_VIEW].includes(p)
+    (permissionKey) => ![PERMISSIONS.DOCUMENTS_VIEW, PERMISSIONS.ATTENDANCE_VIEW].includes(permissionKey)
   ),
 
   [ROLES.STUDENT]: Object.values(PERMISSIONS).filter(
-    (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)
+    (permissionKey) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(permissionKey)
   ),
 
   [ROLES.PARENT]: Object.values(PERMISSIONS).filter(
-    (p) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(p)
+    (permissionKey) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(permissionKey)
   ),
 });
 
@@ -242,7 +242,7 @@ export const ROLE_PERMISSION_CEILING = Object.freeze({
  */
 export const validatePermissionCeiling = (role, customPermissions = []) => {
   const forbiddenList = ROLE_PERMISSION_CEILING[role] || [];
-  const violations = customPermissions.filter((p) => forbiddenList.includes(p));
+  const violations = customPermissions.filter((customPermission) => forbiddenList.includes(customPermission));
   return {
     valid: violations.length === 0,
     forbiddenPermissions: violations,
@@ -262,7 +262,7 @@ export const getEffectivePermissions = (user) => {
 
   // Strip any ceiling violations from custom permissions
   const ceilingForbidden = new Set(ROLE_PERMISSION_CEILING[user.role] || []);
-  const safeCustomPerms = customPerms.filter((p) => !ceilingForbidden.has(p));
+  const safeCustomPerms = customPerms.filter((customPermission) => !ceilingForbidden.has(customPermission));
 
   return Array.from(new Set([...defaultPerms, ...safeCustomPerms]));
 };

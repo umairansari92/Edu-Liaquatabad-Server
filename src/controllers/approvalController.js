@@ -62,7 +62,7 @@ export const isAuthorizedApprover = (actor, targetUser, targetProfile) => {
 
     case ROLES.SUPERVISOR:
       if (!targetSchoolId) return false;
-      const assigned = (actor.assignedSchools || []).map((s) => String(s._id || s));
+      const assigned = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool._id || assignedSchool));
       return assigned.includes(String(targetSchoolId));
 
     case ROLES.HM:
@@ -112,9 +112,9 @@ export const handleGetPendingApprovals = asyncHandler(async (request, response) 
     .sort({ createdAt: -1 })
     .lean();
 
-  const userIds = pendingUsers.map((u) => u._id);
+  const userIds = pendingUsers.map((pendingUser) => pendingUser._id);
   const profiles = await TeacherProfile.find({ userId: { $in: userIds } }).lean();
-  const profileMap = new Map(profiles.map((p) => [String(p.userId), p]));
+  const profileMap = new Map(profiles.map((teacherProfile) => [String(teacherProfile.userId), teacherProfile]));
 
   // Build sanitized, masked response items
   const items = pendingUsers.map((user) => {

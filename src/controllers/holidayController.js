@@ -203,7 +203,7 @@ export const handleGetHolidays = asyncHandler(async (request, response) => {
     ];
   } else if (requestingActor.role === ROLES.SUPERVISOR) {
     const assignedSchoolIds = Array.isArray(requestingActor.assignedSchools)
-      ? requestingActor.assignedSchools.map((s) => s?._id || s)
+      ? requestingActor.assignedSchools.map((assignedSchool) => assignedSchool?._id || assignedSchool)
       : [];
     filter.$or = [
       { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
@@ -430,7 +430,7 @@ export const handleGetWeeklyOffPatterns = asyncHandler(async (request, response)
     ];
   } else if (requestingActor.role === ROLES.SUPERVISOR) {
     const assignedSchoolIds = Array.isArray(requestingActor.assignedSchools)
-      ? requestingActor.assignedSchools.map((s) => s?._id || s)
+      ? requestingActor.assignedSchools.map((assignedSchool) => assignedSchool?._id || assignedSchool)
       : [];
     filter.$or = [
       { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
