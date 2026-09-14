@@ -391,7 +391,7 @@ export const handleGetPlatformAnalytics = asyncHandler(async (request, response)
     totalSchools,
     primarySchools,
     secondarySchools,
-    higherSecondarySchools,
+    eceSchools,
     elementarySchools,
     superAdminCount,
     adminCount,
@@ -403,7 +403,7 @@ export const handleGetPlatformAnalytics = asyncHandler(async (request, response)
     School.countDocuments({ status: 'ACTIVE' }),
     School.countDocuments({ schoolType: 'PRIMARY', status: 'ACTIVE' }),
     School.countDocuments({ schoolType: 'SECONDARY', status: 'ACTIVE' }),
-    School.countDocuments({ schoolType: 'HIGHER_SECONDARY', status: 'ACTIVE' }),
+    School.countDocuments({ schoolType: 'ECE', status: 'ACTIVE' }),
     School.countDocuments({ schoolType: 'ELEMENTARY', status: 'ACTIVE' }),
     User.countDocuments({ role: ROLES.SUPER_ADMIN }),
     User.countDocuments({ role: ROLES.ADMIN }),
@@ -442,7 +442,7 @@ export const handleGetPlatformAnalytics = asyncHandler(async (request, response)
     { type: 'Secondary', count: secondarySchools, color: '#3b82f6' },
     { type: 'Primary', count: primarySchools, color: '#10b981' },
     { type: 'Elementary', count: elementarySchools, color: '#f59e0b' },
-    { type: 'Higher Secondary', count: higherSecondarySchools, color: '#8b5cf6' },
+    { type: 'ECE', count: eceSchools, color: '#8b5cf6' },
   ];
 
   return sendSuccess(response, 200, 'Platform analytics retrieved successfully.', {

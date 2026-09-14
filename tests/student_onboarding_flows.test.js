@@ -194,16 +194,25 @@ async function runStudentOnboardingSuite() {
   const parsedEce = createSchoolSchema.safeParse(eceSchoolPayload);
   assert(parsedEce.success, 'ECE school creation passes validation with Nursery to KG2 scope');
 
-  const middleSchoolPayload = {
-    name: 'Government Boys Middle School No. 4',
-    schoolCode: 'GBMS',
-    schoolType: 'MIDDLE',
+  const elementarySchoolPayload = {
+    name: 'Government Elementary School No. 4',
+    schoolCode: 'GES04',
+    schoolType: 'ELEMENTARY',
     genderType: 'BOYS',
     supportedMediums: ['URDU', 'ENGLISH', 'SINDHI'],
     address: 'Block 7, Liaquatabad, Karachi',
   };
-  const parsedMiddle = createSchoolSchema.safeParse(middleSchoolPayload);
-  assert(parsedMiddle.success, 'Middle school creation passes validation with Urdu/English/Sindhi mediums');
+  const parsedElementary = createSchoolSchema.safeParse(elementarySchoolPayload);
+  assert(parsedElementary.success, 'Elementary school creation passes validation with Urdu/English/Sindhi mediums');
+
+  // Verify MIDDLE and HIGHER_SECONDARY are strictly rejected
+  const rejectedMiddlePayload = { ...elementarySchoolPayload, schoolType: 'MIDDLE' };
+  const middleResult = createSchoolSchema.safeParse(rejectedMiddlePayload);
+  assert(!middleResult.success, 'MIDDLE school type is strictly rejected as per DMC policy');
+
+  const rejectedHigherSecondaryPayload = { ...elementarySchoolPayload, schoolType: 'HIGHER_SECONDARY' };
+  const higherSecResult = createSchoolSchema.safeParse(rejectedHigherSecondaryPayload);
+  assert(!higherSecResult.success, 'HIGHER_SECONDARY school type is strictly rejected as per DMC policy');
 
   console.log('\n======================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} STUDENT ONBOARDING TESTS PASSED PERFECTLY!`);

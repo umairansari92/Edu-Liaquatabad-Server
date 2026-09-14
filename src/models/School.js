@@ -37,7 +37,7 @@ const SchoolSchema = new mongoose.Schema({
 
   schoolType: {
     type: String,
-    enum: ['ECE', 'PRIMARY', 'ELEMENTARY', 'MIDDLE', 'SECONDARY', 'HIGHER_SECONDARY'],
+    enum: ['ECE', 'PRIMARY', 'ELEMENTARY', 'SECONDARY'],
     required: true,
   },
   supportedMediums: {
