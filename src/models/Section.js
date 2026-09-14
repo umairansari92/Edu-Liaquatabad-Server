@@ -4,6 +4,7 @@ const SectionSchema = new mongoose.Schema({
   classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true, index: true },
   schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
   name: { type: String, required: true, trim: true },
+  medium: { type: String, enum: ['URDU', 'ENGLISH', 'SINDHI'], default: 'URDU' },
   capacity: { type: Number, default: 40 },
   roomNumber: { type: String, trim: true },
   classTeacherId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

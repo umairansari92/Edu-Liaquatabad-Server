@@ -120,6 +120,7 @@ export const registerStudentSchema = z.object({
   // Student Personal Identity
   fullName: nameField('Student Name').optional(),
   studentFullName: nameField('Student Name').optional(),
+  bFormNumber: cnicField.optional().or(z.literal('')),
   gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
   dateOfBirth: z.string().optional(),
   dateOfBirthInWords: safeString(200, 0).optional(),
@@ -140,6 +141,8 @@ export const registerStudentSchema = z.object({
   // Academic & School Details
   schoolId: z.string().trim().max(100).optional(),
   admissionClassRequested: safeString(50, 0).optional(),
+  mediumRequested: z.enum(['URDU', 'ENGLISH', 'SINDHI']).optional().default('URDU'),
+  mediumOfInstruction: z.enum(['URDU', 'ENGLISH', 'SINDHI']).optional(),
   className: safeString(50, 0).optional(),
   sectionName: safeString(10, 0).optional(),
   classId: z.string().trim().max(100).optional(),

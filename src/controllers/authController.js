@@ -119,6 +119,10 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
     businessPhoneNumber = '',
     guardianEmail,
 
+    bFormNumber,
+    mediumRequested,
+    mediumOfInstruction,
+
     email,
     password,
     confirmPassword,
@@ -278,14 +282,17 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
     rollNumber: rollNumber || String(assignedGrNumber),
 
     admissionClassRequested: admissionClassRequested || className || 'General',
+    mediumOfInstruction: (mediumRequested || mediumOfInstruction || 'URDU').toUpperCase(),
+    bFormNumber: bFormNumber ? bFormNumber.trim() : undefined,
     lastSchoolAttended,
     admissionDate: admissionDate ? new Date(admissionDate) : new Date(),
     admissionRemarks,
     lifecycleStatus: STUDENT_STATUS.PENDING_APPROVAL,
   });
 
-  // 9. Mask sensitive PII (CNIC) for immutable audit compliance
+  // 9. Mask sensitive PII (CNIC & B-Form) for immutable audit compliance
   const maskedCnic = guardianCnicNumber ? `*****${guardianCnicNumber.slice(-4)}` : 'N/A';
+  const maskedBForm = bFormNumber ? `*****${bFormNumber.slice(-4)}` : 'N/A';
 
   await AuditLog.create({
     actorId: enrolledStudentUser._id,
@@ -304,6 +311,8 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
       admissionRegisterNumber: assignedAdmissionRegisterNumber,
       globalStudentId: assignedGlobalStudentId,
       admissionClassRequested: studentProfile.admissionClassRequested,
+      mediumOfInstruction: studentProfile.mediumOfInstruction,
+      bFormMasked: maskedBForm,
       guardianCnicMasked: maskedCnic,
       role: enrolledStudentUser.role,
     },

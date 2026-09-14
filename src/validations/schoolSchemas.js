@@ -21,9 +21,14 @@ export const createSchoolSchema = z.object({
     .regex(/^[A-Z0-9]{2,10}$/, 'School code must be 2–10 uppercase alphanumeric characters (e.g. MMHA, GGSS).')
     .optional(),
   emisCode: safeString(20).optional(),
-  schoolType: z.enum(['PRIMARY', 'SECONDARY', 'HIGHER_SECONDARY', 'ELEMENTARY'], {
-    errorMap: () => ({ message: 'School type must be PRIMARY, SECONDARY, HIGHER_SECONDARY, or ELEMENTARY.' }),
+  schoolType: z.enum(['ECE', 'PRIMARY', 'ELEMENTARY', 'MIDDLE', 'SECONDARY', 'HIGHER_SECONDARY'], {
+    errorMap: () => ({ message: 'School type must be ECE, PRIMARY, ELEMENTARY, MIDDLE, SECONDARY, or HIGHER_SECONDARY.' }),
   }),
+  supportedMediums: z.array(z.enum(['URDU', 'ENGLISH', 'SINDHI'])).optional(),
+  gradeRange: z.object({
+    lowestGrade: z.string().optional(),
+    highestGrade: z.string().optional(),
+  }).optional(),
   genderType: z.enum(['BOYS', 'GIRLS', 'CO_EDUCATION'], {
     errorMap: () => ({ message: 'Gender type must be BOYS, GIRLS, or CO_EDUCATION.' }),
   }),
@@ -47,7 +52,12 @@ export const updateSchoolSchema = z.object({
     .regex(/^[A-Z0-9]{2,10}$/, 'School code must be 2–10 uppercase alphanumeric characters.')
     .optional(),
   emisCode: safeString(20).optional(),
-  schoolType: z.enum(['PRIMARY', 'SECONDARY', 'HIGHER_SECONDARY', 'ELEMENTARY']).optional(),
+  schoolType: z.enum(['ECE', 'PRIMARY', 'ELEMENTARY', 'MIDDLE', 'SECONDARY', 'HIGHER_SECONDARY']).optional(),
+  supportedMediums: z.array(z.enum(['URDU', 'ENGLISH', 'SINDHI'])).optional(),
+  gradeRange: z.object({
+    lowestGrade: z.string().optional(),
+    highestGrade: z.string().optional(),
+  }).optional(),
   genderType: z.enum(['BOYS', 'GIRLS', 'CO_EDUCATION']).optional(),
   address: safeString(300, 5).optional(),
   contactPhone: safeString(30).optional(),

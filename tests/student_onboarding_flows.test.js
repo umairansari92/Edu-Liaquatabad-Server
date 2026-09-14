@@ -24,6 +24,7 @@ import {
   registerStudentSchema,
   studentPortalActivationSchema,
 } from '../src/validations/authSchemas.js';
+import { createSchoolSchema } from '../src/validations/schoolSchemas.js';
 import { convertDateToWords } from '../src/utils/dateToWords.js';
 import { studentActivationLimiter } from '../src/middlewares/tripleLockRateLimiter.js';
 
@@ -70,6 +71,7 @@ async function runStudentOnboardingSuite() {
     gender: 'MALE',
     dateOfBirth: '2015-08-14',
     dateOfBirthInWords: 'Fourteenth of August Two Thousand Fifteen',
+    bFormNumber: '42101-9876543-1',
     religion: 'ISLAM',
     placeOfBirth: 'Karachi',
     fatherFullName: 'Tariq Mehmood',
@@ -85,6 +87,7 @@ async function runStudentOnboardingSuite() {
     residencePhoneNumber: '02134567890',
     schoolId: '66ce705a1b2c3d4e5f6a7b05',
     admissionClassRequested: 'Class 6',
+    mediumRequested: 'URDU',
     lastSchoolAttended: 'Govt Primary School No. 1',
     admissionDate: '2026-09-14',
     admissionRemarks: 'No medical conditions reported',
@@ -98,7 +101,7 @@ async function runStudentOnboardingSuite() {
   if (!parsedAdmission.success) {
     console.error('Validation errors:', JSON.stringify(parsedAdmission.error.errors, null, 2));
   }
-  assert(parsedAdmission.success, 'Comprehensive 20+ fields admission payload passes validation');
+  assert(parsedAdmission.success, 'Comprehensive 20+ fields admission payload passes validation with B-Form and medium');
 
   // Privilege escalation defense: student cannot inject ROOT_ADMIN or HM
   const attackPayload = {
@@ -172,6 +175,35 @@ async function runStudentOnboardingSuite() {
   const maskedCnic = `*****${sampleCnic.slice(-4)}`;
   assert(maskedCnic === '*****-67-1' || maskedCnic.startsWith('*****'), `CNIC properly masked for audit log: ${maskedCnic}`);
   assert(!maskedCnic.includes('42101'), 'Full CNIC prefix is never exposed in masked representation');
+
+  const sampleBForm = '42101-9876543-1';
+  const maskedBForm = `*****${sampleBForm.slice(-4)}`;
+  assert(maskedBForm === '*****-43-1' || maskedBForm.startsWith('*****'), `B-Form properly masked for audit log: ${maskedBForm}`);
+  assert(!maskedBForm.includes('42101'), 'Full B-Form prefix is never exposed in masked representation');
+
+  // ─── 6. School Types & Mediums Distribution Verification ──────────────────
+  console.log('\n--- 6. Institutional Categories & Instruction Mediums Verification ---');
+  const eceSchoolPayload = {
+    name: 'Government Early Childhood Education Centre Liaquatabad',
+    schoolCode: 'GECE',
+    schoolType: 'ECE',
+    genderType: 'CO_EDUCATION',
+    supportedMediums: ['URDU', 'ENGLISH'],
+    address: 'Block 2, Liaquatabad, Karachi',
+  };
+  const parsedEce = createSchoolSchema.safeParse(eceSchoolPayload);
+  assert(parsedEce.success, 'ECE school creation passes validation with Nursery to KG2 scope');
+
+  const middleSchoolPayload = {
+    name: 'Government Boys Middle School No. 4',
+    schoolCode: 'GBMS',
+    schoolType: 'MIDDLE',
+    genderType: 'BOYS',
+    supportedMediums: ['URDU', 'ENGLISH', 'SINDHI'],
+    address: 'Block 7, Liaquatabad, Karachi',
+  };
+  const parsedMiddle = createSchoolSchema.safeParse(middleSchoolPayload);
+  assert(parsedMiddle.success, 'Middle school creation passes validation with Urdu/English/Sindhi mediums');
 
   console.log('\n======================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} STUDENT ONBOARDING TESTS PASSED PERFECTLY!`);

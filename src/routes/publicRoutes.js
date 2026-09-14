@@ -28,7 +28,7 @@ router.get('/town-stats', publicStatsLimiter, getPublicTownStats);
 router.get('/schools', async (incomingRequest, outgoingResponse) => {
   try {
     const schoolsList = await School.find({ status: 'ACTIVE' })
-      .select('_id name schoolCode schoolType genderType address')
+      .select('_id name schoolCode schoolType genderType address supportedMediums gradeRange')
       .sort({ name: 1 })
       .lean();
 
@@ -52,7 +52,7 @@ router.get('/schools/:schoolId/structure', async (incomingRequest, outgoingRespo
     const { schoolId } = incomingRequest.params;
     const [classes, sections, subjects] = await Promise.all([
       Class.find({ schoolId, status: 'ACTIVE' }).select('_id name numericGrade').sort({ numericGrade: 1 }).lean(),
-      Section.find({ schoolId, status: 'ACTIVE' }).select('_id classId name').lean(),
+      Section.find({ schoolId, status: 'ACTIVE' }).select('_id classId name medium capacity').lean(),
       Subject.find({ schoolId, status: 'ACTIVE' }).select('_id classId name code').lean(),
     ]);
 

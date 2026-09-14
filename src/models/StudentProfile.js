@@ -57,6 +57,7 @@ const StudentProfileSchema = new mongoose.Schema({
 
   // ─── Student Personal Identity ─────────────────────────────────────────────
   studentFullName: { type: String, trim: true },
+  bFormNumber: { type: String, trim: true }, // Student's B-Form / Child Registration Certificate (CRC)
   dateOfBirth: { type: Date, required: true },
   dateOfBirthInWords: { type: String, trim: true }, // Auto-derived from dateOfBirth
   gender: { type: String, enum: ['MALE', 'FEMALE', 'OTHER'], required: true },
@@ -95,6 +96,11 @@ const StudentProfileSchema = new mongoose.Schema({
 
   // ─── Academic & Admission Data ─────────────────────────────────────────────
   admissionClassRequested: { type: String, trim: true },
+  mediumOfInstruction: {
+    type: String,
+    enum: ['URDU', 'ENGLISH', 'SINDHI'],
+    default: 'URDU',
+  },
   lastSchoolAttended: { type: String, trim: true },
   admissionDate: { type: Date, default: Date.now },
   admissionRemarks: { type: String, trim: true },

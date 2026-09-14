@@ -37,8 +37,17 @@ const SchoolSchema = new mongoose.Schema({
 
   schoolType: {
     type: String,
-    enum: ['PRIMARY', 'SECONDARY', 'HIGHER_SECONDARY', 'ELEMENTARY'],
+    enum: ['ECE', 'PRIMARY', 'ELEMENTARY', 'MIDDLE', 'SECONDARY', 'HIGHER_SECONDARY'],
     required: true,
+  },
+  supportedMediums: {
+    type: [String],
+    enum: ['URDU', 'ENGLISH', 'SINDHI'],
+    default: ['URDU', 'ENGLISH'],
+  },
+  gradeRange: {
+    lowestGrade: { type: String, default: 'KG1' },
+    highestGrade: { type: String, default: 'CLASS_5' },
   },
   genderType: {
     type: String,
