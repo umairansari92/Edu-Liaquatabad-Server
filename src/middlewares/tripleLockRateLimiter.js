@@ -67,6 +67,19 @@ export const captchaLimiter = rateLimit({
   },
 });
 
+// Dedicated Student Activation Limiter — Anti-Enumeration Guard (max 30 in dev, 5 in prod per 15 min)
+export const studentActivationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 30 : 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many student activation attempts from this IP. Please try again after 15 minutes.',
+  },
+});
+
 // Dedicated OTP Limiter
 export const otpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes

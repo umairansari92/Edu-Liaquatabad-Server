@@ -58,6 +58,12 @@ const phoneField = z
   .regex(/^(\+92|0)?[3][0-9]{9}$/, 'Please enter a valid Pakistani mobile number (e.g. 03001234567)')
   .max(15, 'Phone number too long');
 
+const generalPhoneField = z
+  .string()
+  .trim()
+  .regex(/^(\+92|0)?[0-9]{9,11}$/, 'Please enter a valid Pakistani phone or mobile number')
+  .max(16, 'Phone number too long');
+
 const otpField = z
   .string()
   .trim()
@@ -103,37 +109,97 @@ export const verifyOtpSchema = z.object({
   }),
 });
 
-export const registerStudentSchema = z.object({
-  fullName: nameField('Full Name'),
-  fatherOrGuardianName: nameField('Father/Guardian Name'),
-  schoolId: z.string().trim().max(100).optional(),
-  grNumber: z.union([z.string().trim().min(1, 'GR Number is required').max(50), z.number()]).optional(),
-  rollNumber: z.string().trim().max(50).optional(),
-  password: passwordField,
-  confirmPassword: z.string().min(1, 'Confirm password is required').optional(),
-  email: emailField.optional().or(z.literal('')),
-  className: safeString(50, 0).optional(),
-  sectionName: safeString(10, 0).optional(),
-  guardianContactNumber: phoneField.optional().or(z.literal('')),
-  classId: z.string().trim().max(100).optional(),
-  sectionId: z.string().trim().max(100).optional(),
-  baseRole: z.literal(BASE_ROLES.STUDENT).optional().default(BASE_ROLES.STUDENT),
-  role: z.string().optional(),
-  otpCode: otpField.optional().or(z.literal('')),
-  captchaAnswer: z.string().trim().optional(),
-  captchaChallengeToken: z.string().trim().optional(),
-  _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
-}).refine(
-  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
-  { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
-);
-
 export const cnicField = z
   .string()
   .trim()
   .regex(/^\d{5}-\d{7}-\d{1}$/, {
     message: 'CNIC must follow the official format: XXXXX-XXXXXXX-X (e.g., 42101-1234567-1)',
   });
+
+export const registerStudentSchema = z.object({
+  // Student Personal Identity
+  fullName: nameField('Student Name').optional(),
+  studentFullName: nameField('Student Name').optional(),
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
+  dateOfBirth: z.string().optional(),
+  dateOfBirthInWords: safeString(200, 0).optional(),
+  religion: safeString(50, 0).optional(),
+  placeOfBirth: safeString(100, 0).optional(),
+  studentPhotoUrl: z.string().url('Invalid photo URL').optional().or(z.literal('')),
+
+  // Parents' & Guardian Information
+  fatherFullName: nameField("Father's Name").optional(),
+  motherFullName: nameField("Mother's Name").optional(),
+  fatherOrGuardianName: nameField('Father/Guardian Name').optional(),
+  relationshipWithStudent: z.enum(['FATHER', 'MOTHER', 'GUARDIAN']).optional().default('FATHER'),
+  guardianCnicNumber: cnicField.optional().or(z.literal('')),
+  fatherQualification: safeString(100, 0).optional(),
+  motherQualification: safeString(100, 0).optional(),
+  fatherOccupation: safeString(100, 0).optional(),
+
+  // Academic & School Details
+  schoolId: z.string().trim().max(100).optional(),
+  admissionClassRequested: safeString(50, 0).optional(),
+  className: safeString(50, 0).optional(),
+  sectionName: safeString(10, 0).optional(),
+  classId: z.string().trim().max(100).optional(),
+  sectionId: z.string().trim().max(100).optional(),
+  lastSchoolAttended: safeString(150, 0).optional(),
+  admissionDate: z.string().optional(),
+  admissionRemarks: safeString(500, 0).optional(),
+
+  // Contact & Address Details
+  permanentResidentialAddress: safeString(300, 0).optional(),
+  parentOfficeAddress: safeString(300, 0).optional(),
+  guardianCellNumber: phoneField.optional().or(z.literal('')),
+  guardianContactNumber: phoneField.optional().or(z.literal('')),
+  residencePhoneNumber: generalPhoneField.optional().or(z.literal('')),
+  businessPhoneNumber: generalPhoneField.optional().or(z.literal('')),
+  guardianEmail: emailField.optional().or(z.literal('')),
+
+  // Account Credentials & Security
+  email: emailField.optional().or(z.literal('')),
+  password: passwordField,
+  confirmPassword: z.string().min(1, 'Confirm password is required').optional(),
+  otpCode: otpField.optional().or(z.literal('')),
+  baseRole: z.literal(BASE_ROLES.STUDENT).optional().default(BASE_ROLES.STUDENT),
+  role: z.string().optional(),
+  captchaAnswer: z.string().trim().optional(),
+  captchaChallengeToken: z.string().trim().optional(),
+  _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
+
+  // Legacy fields (auto-assigned by server for Flow A; kept for backwards compatibility)
+  grNumber: z.union([z.string().trim().min(1).max(50), z.number()]).optional(),
+  rollNumber: z.string().trim().max(50).optional(),
+}).refine(
+  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
+  { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
+).refine(
+  (data) => !data.confirmPassword || data.password === data.confirmPassword,
+  { message: 'Passwords do not match.', path: ['confirmPassword'] }
+);
+
+/**
+ * Flow B: Portal Account Activation for Already-Enrolled Students
+ * Anti-Enumeration 2-Factor Identity Claim Schema
+ */
+export const studentPortalActivationSchema = z.object({
+  schoolId: z.string().trim().min(1, 'Please select your School'),
+  grNumber: z.union([z.string().trim(), z.number()]).optional(),
+  globalStudentId: z.string().trim().optional(),
+  dateOfBirth: z.string().min(1, 'Student Date of Birth is required for identity verification'),
+  email: emailField,
+  password: passwordField,
+  confirmPassword: z.string().min(1, 'Please confirm your account password'),
+  otpCode: otpField,
+  _gotcha: z.string().max(0, 'Submission rejected.').optional(),
+}).refine(
+  (data) => Boolean(data.grNumber || data.globalStudentId),
+  { message: 'Either GR Number or Global Student ID must be provided.', path: ['grNumber'] }
+).refine(
+  (data) => data.password === data.confirmPassword,
+  { message: 'Passwords do not match.', path: ['confirmPassword'] }
+);
 
 export const teachingAssignmentInputSchema = z.object({
   classId: z.string().trim().min(1, 'Class is required'),

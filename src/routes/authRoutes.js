@@ -4,6 +4,7 @@ import {
   handleSendOtp,
   handleVerifyOtp,
   handleRegisterStudent,
+  handleActivateStudentPortal,
   handleRegisterTeacher,
   handleRegisterStaff,
   handleLogin,
@@ -21,6 +22,7 @@ import {
   otpLimiter,
   registrationLimiter,
   refreshTokenLimiter,
+  studentActivationLimiter,
 } from '../middlewares/tripleLockRateLimiter.js';
 import { honeypotCheck } from '../middlewares/honeypot.js';
 import { validate } from '../middlewares/validate.js';
@@ -29,6 +31,7 @@ import {
   sendOtpSchema,
   verifyOtpSchema,
   registerStudentSchema,
+  studentPortalActivationSchema,
   registerTeacherSchema,
   registerStaffSchema,
   loginSchema,
@@ -73,13 +76,21 @@ router.post(
   handleVerifyOtp
 );
 
-// ─── Registration Endpoints (Public Onboarding) ───────────────────────────────
+// ─── Registration & Activation Endpoints (Public Onboarding) ──────────────────
 router.post(
   '/register-student',
   registrationLimiter,
   honeypotCheck,
   validate(registerStudentSchema),
   handleRegisterStudent
+);
+
+router.post(
+  '/activate-student-portal',
+  studentActivationLimiter,
+  honeypotCheck,
+  validate(studentPortalActivationSchema),
+  handleActivateStudentPortal
 );
 
 router.post(

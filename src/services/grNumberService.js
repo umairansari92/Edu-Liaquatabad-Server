@@ -44,6 +44,36 @@ export const generateNextGrNumber = async (schoolId) => {
 };
 
 /**
+ * Auto-generate the next Admission Register Number and sequential GR No for a school.
+ * Human-readable format: {SchoolCode}-{AdmissionYear}-{SequentialNumber} (e.g. LTC045-2026-0001)
+ *
+ * @param {string} schoolId - MongoDB ObjectId of the school
+ * @param {Date|string} [admissionDate] - Admission date to derive year from
+ * @returns {Promise<{ grNumber: number, admissionRegisterNumber: string }>}
+ */
+export const generateNextAdmissionRegisterNumber = async (schoolId, admissionDate = new Date()) => {
+  const updated = await School.findByIdAndUpdate(
+    schoolId,
+    { $inc: { lastGrNumber: 1 } },
+    { new: true, runValidators: false, select: 'schoolCode lastGrNumber' }
+  );
+
+  if (!updated) {
+    throw new Error('School not found — cannot generate Admission Register Number.');
+  }
+
+  const schoolCode = updated.schoolCode || 'SCH';
+  const admissionYear = new Date(admissionDate).getFullYear() || new Date().getFullYear();
+  const sequentialPadded = String(updated.lastGrNumber).padStart(4, '0');
+  const admissionRegisterNumber = `${schoolCode}-${admissionYear}-${sequentialPadded}`;
+
+  return {
+    grNumber: updated.lastGrNumber,
+    admissionRegisterNumber,
+  };
+};
+
+/**
  * Preview the next GR No without actually committing it.
  * Used by the HM enrollment form to show a suggested GR number.
  *
