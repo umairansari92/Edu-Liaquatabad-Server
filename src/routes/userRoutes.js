@@ -1,8 +1,8 @@
-import express from 'express';
 import {
   handleAssignRoleAndDesignation,
   handleUpdateUserStatus,
   handleGetUsers,
+  handleGetUserById,
   handleGetUserAuditHistory,
   handleBulkUserAction,
 } from '../controllers/userManagementController.js';
@@ -23,6 +23,15 @@ router.get(
   authenticate,
   authorizePermissions(PERMISSIONS.USERS_VIEW),
   handleGetUsers
+);
+
+// ─── Get User by ID (Protected Identity Enforcement) ──────────────────────────
+router.get(
+  '/:id',
+  authenticate,
+  authorizePermissions(PERMISSIONS.USERS_VIEW),
+  authorizeScope,
+  handleGetUserById
 );
 
 // ─── Bulk User Status Operations (Approve / Suspend) ──────────────────────────

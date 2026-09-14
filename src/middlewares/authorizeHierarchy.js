@@ -4,16 +4,35 @@ import User from '../models/User.js';
 import AuditLog from '../models/AuditLog.js';
 
 /**
+ * Evaluates whether the target user is protected or invisible to the requesting actor.
+ * Invariant: ROOT_ADMIN is invisible/protected from SUPER_ADMIN, ADMIN, and all subordinate roles.
+ * Invariant: SUPER_ADMIN is invisible/protected from ADMIN and subordinates in management endpoints.
+ */
+export const isTargetProtectedFromActor = (actor, targetUser) => {
+  if (!actor || !targetUser) return false;
+  // ROOT_ADMIN is protected from everyone except ROOT_ADMIN themselves
+  if (targetUser.role === ROLES.ROOT_ADMIN && actor.role !== ROLES.ROOT_ADMIN) {
+    return true;
+  }
+  // SUPER_ADMIN is protected from ADMIN and below in management contexts
+  if (targetUser.role === ROLES.SUPER_ADMIN && [ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER, ROLES.STUDENT, ROLES.PARENT].includes(actor.role)) {
+    return true;
+  }
+  return false;
+};
+
+/**
  * Server-Enforced Hierarchy Guard (The Golden Security Rule)
- * Asserts that the actor's role level is strictly greater than the target user's role level.
- * In addition, checks that the actor cannot elevate a target to a role equal to or higher than their own.
+ * Asserts that the actor's role level is strictly greater than the target user's role level,
+ * with explicit policy provisions for SUPER_ADMIN peer/self governance.
  *
- * SEC-CRIT-01 INVARIANTS (Wave 1 Remediation):
- *  1. ROOT_ADMIN target is ALWAYS immutable via web APIs — nobody can demote, suspend, or delete
- *     a ROOT_ADMIN account through the web portal. Emergency recovery uses the CLI script only.
- *  2. Self-demotion / self-suspension is prohibited for every role including ROOT_ADMIN themselves.
- *  3. Lower/equal authority actors cannot modify ROOT_ADMIN accounts, bypassed or not.
- *  4. Every blocked attempt is written to the immutable AuditLog without logging any secrets.
+ * POLICY INVARIANTS:
+ *  1. ROOT_ADMIN target is ALWAYS immutable via web APIs — cannot be demoted, suspended, or modified.
+ *  2. SUPER_ADMIN may manage peer SUPER_ADMINs (suspend, demote, grant authority) and self-suspend/self-demote,
+ *     provided at least one other active platform administrator (ROOT_ADMIN or SUPER_ADMIN) remains.
+ *  3. ADMIN cannot manage, grant, demote, or suspend another ADMIN, SUPER_ADMIN, or ROOT_ADMIN.
+ *  4. Self-mutation for non-SUPER_ADMIN roles remains prohibited.
+ *  5. Every blocked attempt is written to the immutable AuditLog without logging secrets.
  */
 export const authorizeHierarchy = async (request, response, nextFunction) => {
   try {
@@ -36,11 +55,10 @@ export const authorizeHierarchy = async (request, response, nextFunction) => {
     const targetRoleLevel = ROLE_HIERARCHY[targetUser.role] || 0;
 
     // ── INVARIANT 1: ROOT_ADMIN target is ALWAYS immutable via web APIs ──────────
-    // No actor — not even another ROOT_ADMIN — may demote, suspend, or otherwise
-    // mutate a ROOT_ADMIN account through the web portal. CLI break-glass only.
     const isRoleOrStatusMutationRequest =
       request.body.role ||
       request.body.newRole ||
+      request.body.authority ||
       request.body.status ||
       request.body.scope ||
       request.body.customPermissions;
@@ -58,21 +76,50 @@ export const authorizeHierarchy = async (request, response, nextFunction) => {
       );
     }
 
-    // ── INVARIANT 2: Self-demotion / self-suspension prohibition ─────────────────
-    // No actor may change their own role, scope, or set their own status to a
-    // non-active lifecycle state (suspension, retirement, etc.) via web APIs.
+    // ── INVARIANT 2: Self-mutation policies ──────────────────────────────────────
     const actorId      = String(requestingActor._id || requestingActor.userId);
     const targetId     = String(targetUser._id);
     const isSelfTarget = actorId === targetId;
 
     if (isSelfTarget) {
-      const isRoleChangeAttempt = !!(request.body.role || request.body.newRole || request.body.scope);
+      const isRoleChangeAttempt = !!(request.body.role || request.body.newRole || request.body.authority || request.body.scope);
       const isDeactivationAttempt = !!(
         request.body.status &&
         request.body.status !== USER_STATUS.ACTIVE
       );
 
-      if (isRoleChangeAttempt || isDeactivationAttempt) {
+      // Special provision: SUPER_ADMIN may self-suspend or self-demote if platform governance is safe
+      if (requestingActor.role === ROLES.SUPER_ADMIN && (isRoleChangeAttempt || isDeactivationAttempt)) {
+        const proposedRole = request.body.role || request.body.newRole || request.body.authority;
+        // Cannot elevate self to ROOT_ADMIN
+        if (proposedRole === ROLES.ROOT_ADMIN) {
+          await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
+            reason: 'ROOT_ADMIN_ELEVATION_FORBIDDEN: Cannot elevate account to ROOT_ADMIN via web APIs.',
+            action: 'PRIVILEGE_ESCALATION_ATTEMPT',
+          });
+          return sendError(response, 403, 'Forbidden: You cannot elevate your account to ROOT_ADMIN.');
+        }
+
+        // Safety check: At least one other active administrator (ROOT_ADMIN or SUPER_ADMIN) must remain
+        const activeGovCount = await User.countDocuments({
+          _id: { $ne: requestingActor._id },
+          role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+          status: USER_STATUS.ACTIVE,
+        });
+
+        if (activeGovCount < 1) {
+          await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
+            reason: 'GOVERNANCE_SAFETY_VIOLATION: Cannot self-suspend or self-demote without at least one other active Root Admin or Super Admin.',
+            action: 'SELF_MUTATION_SAFETY_BLOCKED',
+          });
+          return sendError(
+            response,
+            409,
+            'Governance safety violation: At least one other active platform administrator (Root Admin or Super Admin) must remain before self-suspension or demotion.'
+          );
+        }
+        // Allow downstream controller to handle self-action with session revocation
+      } else if (isRoleChangeAttempt || isDeactivationAttempt) {
         await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
           reason: 'SELF_MUTATION_FORBIDDEN: Actors cannot demote, change scope, or suspend their own accounts via web APIs.',
           action: 'SELF_MUTATION_ATTEMPT_BLOCKED',
@@ -87,39 +134,66 @@ export const authorizeHierarchy = async (request, response, nextFunction) => {
     }
 
     // ── INVARIANT 3: Target Level Protection ─────────────────────────────────────
-    // Actor must be strictly higher in hierarchy than target.
-    // Exception: ROOT_ADMIN (level 100) has supreme authority over all non-ROOT_ADMIN accounts.
-    if (requestingActor.role !== ROLES.ROOT_ADMIN && actorRoleLevel <= targetRoleLevel) {
-      await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
-        reason: 'INSUFFICIENT_HIERARCHY: Actor authority level is lower than or equal to target account.',
-        action: 'UNAUTHORIZED_HIERARCHY_MODIFICATION_ATTEMPT',
-      });
-
-      return sendError(
-        response,
-        403,
-        `Access denied. You cannot modify or manage an account with equal or higher authority (${targetUser.role}).`
-      );
-    }
-
-    // ── INVARIANT 4: Proposed Role Elevation Protection ───────────────────────────
-    // Actor cannot grant a role equal to or higher than their own.
-    if (request.body.newRole || request.body.role) {
-      const proposedRole  = request.body.newRole || request.body.role;
-      const proposedLevel = ROLE_HIERARCHY[proposedRole] || 0;
-
-      if (requestingActor.role !== ROLES.ROOT_ADMIN && proposedLevel >= actorRoleLevel) {
+    if (requestingActor.role === ROLES.ROOT_ADMIN) {
+      // Supreme authority over non-ROOT_ADMIN accounts
+    } else if (requestingActor.role === ROLES.SUPER_ADMIN) {
+      // Super Admin cannot modify Root Admin
+      if (targetUser.role === ROLES.ROOT_ADMIN) {
         await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
-          reason: 'INSUFFICIENT_HIERARCHY: Actor cannot grant a role equal to or higher than their own level.',
-          action: 'PRIVILEGE_ESCALATION_ATTEMPT',
-          newState: { attemptedRole: proposedRole },
+          reason: 'ROOT_ADMIN_PROTECTED: Super Admin cannot modify Root Admin accounts.',
+          action: 'UNAUTHORIZED_HIERARCHY_MODIFICATION_ATTEMPT',
+        });
+        return sendError(response, 403, 'Access denied. You cannot modify Root Admin accounts.');
+      }
+      // Super Admin CAN manage peer Super Admins, Admins, and subordinates
+    } else {
+      // Other roles (ADMIN, SUPERVISOR, etc.) strictly cannot modify equal or higher authority
+      if (actorRoleLevel <= targetRoleLevel) {
+        await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
+          reason: `INSUFFICIENT_HIERARCHY: Role ${requestingActor.role} cannot modify account of equal or higher authority (${targetUser.role}).`,
+          action: 'UNAUTHORIZED_HIERARCHY_MODIFICATION_ATTEMPT',
         });
 
         return sendError(
           response,
           403,
-          `Access denied. You cannot assign a role with equal or higher authority (${proposedRole}).`
+          `Access denied. You cannot modify or manage an account with equal or higher authority (${targetUser.role}).`
         );
+      }
+    }
+
+    // ── INVARIANT 4: Proposed Role Elevation Protection ───────────────────────────
+    if (request.body.newRole || request.body.role || request.body.authority) {
+      const proposedRole  = request.body.newRole || request.body.role || request.body.authority;
+      const proposedLevel = ROLE_HIERARCHY[proposedRole] || 0;
+
+      if (requestingActor.role === ROLES.ROOT_ADMIN) {
+        if (proposedRole === ROLES.ROOT_ADMIN) {
+          return sendError(response, 403, 'Access denied. ROOT_ADMIN cannot be granted via web APIs.');
+        }
+      } else if (requestingActor.role === ROLES.SUPER_ADMIN) {
+        if (proposedRole === ROLES.ROOT_ADMIN) {
+          await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
+            reason: 'SUPER_ADMIN_CANNOT_GRANT_ROOT_ADMIN: Super Admin cannot grant ROOT_ADMIN authority.',
+            action: 'PRIVILEGE_ESCALATION_ATTEMPT',
+          });
+          return sendError(response, 403, 'Access denied. Super Admin cannot grant ROOT_ADMIN authority.');
+        }
+      } else {
+        // ADMIN and lower roles cannot grant equal or higher authority
+        if (proposedLevel >= actorRoleLevel) {
+          await writeHierarchyAuditDenied(request, requestingActor, targetUser, {
+            reason: `INSUFFICIENT_HIERARCHY: Actor (${requestingActor.role}) cannot grant role equal to or higher than their own level (${proposedRole}).`,
+            action: 'PRIVILEGE_ESCALATION_ATTEMPT',
+            newState: { attemptedRole: proposedRole },
+          });
+
+          return sendError(
+            response,
+            403,
+            `Access denied. You cannot assign a role with equal or higher authority (${proposedRole}).`
+          );
+        }
       }
     }
 

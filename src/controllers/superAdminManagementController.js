@@ -107,44 +107,58 @@ export const handleDisableSuperAdmin = asyncHandler(async (request, response) =>
     return sendError(response, 400, `This endpoint is exclusively for disabling SUPER_ADMIN accounts. Target role is ${targetUser.role}.`);
   }
 
-  // ── SAFEGUARD 1: Self-disable prevention ──────────────────────────────────
-
+  // ── SAFEGUARD 1: Self-disable policy ─────────────────────────────────────
   const actorIdString = String(requestingActor._id || requestingActor.userId);
   const targetUserIdString = String(targetUser._id);
 
   if (actorIdString === targetUserIdString) {
-    await writeAudit({
-      actorId:          requestingActor._id || requestingActor.userId,
-      actorRole:        requestingActor.role,
-      actorDesignation: requestingActor.designation || '',
-      actorName:        requestingActor.fullName || '',
-      action:           'SUPER_ADMIN_SELF_DISABLE_BLOCKED',
-      targetId:         targetUser._id,
-      targetName:       targetUser.fullName,
-      townId:           requestingActor.townId,
-      schoolId:         null,
-      previousState:    { status: targetUser.status },
-      newState:         { attemptedStatus: USER_STATUS.SUSPENDED },
-      result:           'DENIED',
-      reason:           'FORBIDDEN: Actor attempted to disable their own SUPER_ADMIN account.',
-      ipAddress:        request.ip || '',
-      userAgent:        request.headers['user-agent'] || '',
-      requestId:        request.headers['x-request-id'] || '',
-    });
+    if (requestingActor.role === ROLES.SUPER_ADMIN) {
+      const otherActiveGov = await User.countDocuments({
+        _id: { $ne: targetUser._id },
+        role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+        status: USER_STATUS.ACTIVE,
+      });
 
-    return sendError(response, 403, 'Forbidden: You cannot disable your own Super Admin account.');
+      if (otherActiveGov < 1) {
+        return sendError(
+          response,
+          409,
+          'Cannot self-suspend: At least one other active platform administrator (Root Admin or Super Admin) must remain.'
+        );
+      }
+    } else {
+      await writeAudit({
+        actorId:          requestingActor._id || requestingActor.userId,
+        actorRole:        requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName:        requestingActor.fullName || '',
+        action:           'SUPER_ADMIN_SELF_DISABLE_BLOCKED',
+        targetId:         targetUser._id,
+        targetName:       targetUser.fullName,
+        townId:           requestingActor.townId,
+        schoolId:         null,
+        previousState:    { status: targetUser.status },
+        newState:         { attemptedStatus: USER_STATUS.SUSPENDED },
+        result:           'DENIED',
+        reason:           'FORBIDDEN: Actor attempted to disable their own account without authority.',
+        ipAddress:        request.ip || '',
+        userAgent:        request.headers['user-agent'] || '',
+        requestId:        request.headers['x-request-id'] || '',
+      });
+
+      return sendError(response, 403, 'Forbidden: You cannot disable your own account through this endpoint.');
+    }
   }
 
-  // ── SAFEGUARD 2: Final active SUPER_ADMIN protection ─────────────────────
-  // ROOT_ADMIN is exempt from this check — they can always recover the system
-
+  // ── SAFEGUARD 2: Final active administrator protection ───────────────────
   if (requestingActor.role !== ROLES.ROOT_ADMIN) {
-    const activeSuperAdminCount = await User.countDocuments({
-      role:   ROLES.SUPER_ADMIN,
+    const activeGovCount = await User.countDocuments({
+      _id: { $ne: targetUser._id },
+      role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
       status: USER_STATUS.ACTIVE,
     });
 
-    if (activeSuperAdminCount <= 1) {
+    if (activeGovCount < 1) {
       await writeAudit({
         actorId:          requestingActor._id || requestingActor.userId,
         actorRole:        requestingActor.role,
@@ -155,10 +169,10 @@ export const handleDisableSuperAdmin = asyncHandler(async (request, response) =>
         targetName:       targetUser.fullName,
         townId:           requestingActor.townId,
         schoolId:         null,
-        previousState:    { status: targetUser.status, activeSuperAdminCount },
+        previousState:    { status: targetUser.status, activeGovCount },
         newState:         { attemptedStatus: USER_STATUS.SUSPENDED },
         result:           'DENIED',
-        reason:           'FORBIDDEN: Disabling the final active Super Admin would eliminate all administrative recovery paths.',
+        reason:           'FORBIDDEN: Disabling this Super Admin would eliminate all active platform administrators.',
         ipAddress:        request.ip || '',
         userAgent:        request.headers['user-agent'] || '',
         requestId:        request.headers['x-request-id'] || '',
@@ -167,13 +181,12 @@ export const handleDisableSuperAdmin = asyncHandler(async (request, response) =>
       return sendError(
         response,
         409,
-        'Cannot disable the final active Super Admin account. Ensure at least one other Super Admin remains active before proceeding.'
+        'Cannot disable this Super Admin account. At least one other active platform administrator (Root Admin or Super Admin) must remain.'
       );
     }
   }
 
   // ── Apply disable + session revocation ───────────────────────────────────
-
   const previousState = {
     status:       targetUser.status,
     tokenVersion: targetUser.tokenVersion || 0,
@@ -185,7 +198,6 @@ export const handleDisableSuperAdmin = asyncHandler(async (request, response) =>
   await targetUser.save();
 
   // ── Write success audit record ────────────────────────────────────────────
-
   await writeAudit({
     actorId:          requestingActor._id || requestingActor.userId,
     actorRole:        requestingActor.role,
@@ -211,6 +223,86 @@ export const handleDisableSuperAdmin = asyncHandler(async (request, response) =>
   return sendSuccess(response, 200, 'Super Admin account disabled. All active sessions have been revoked.', {
     userId:       targetUser._id,
     status:       targetUser.status,
+    tokenVersion: targetUser.tokenVersion,
+  });
+});
+
+/**
+ * PATCH /api/v1/admin/super-admins/:id/demote
+ * Demote a SUPER_ADMIN account to ADMIN authority.
+ * Permitted actors: ROOT_ADMIN, SUPER_ADMIN (peer or self)
+ */
+export const handleDemoteSuperAdmin = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: targetUserId } = request.params;
+  const { reason } = request.body;
+
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+    return sendError(response, 400, 'A mandatory justification reason is required (minimum 10 characters).');
+  }
+
+  const targetUser = await User.findById(targetUserId);
+  if (!targetUser) {
+    return sendError(response, 404, 'Target SUPER_ADMIN account not found.');
+  }
+
+  if (targetUser.role !== ROLES.SUPER_ADMIN) {
+    return sendError(response, 400, `Target role is ${targetUser.role}. Only SUPER_ADMIN accounts can be demoted via this endpoint.`);
+  }
+
+  // Governance safety: Ensure at least one other active administrator remains
+  const otherActiveGov = await User.countDocuments({
+    _id: { $ne: targetUser._id },
+    role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+    status: USER_STATUS.ACTIVE,
+  });
+
+  if (otherActiveGov < 1) {
+    return sendError(
+      response,
+      409,
+      'Cannot demote Super Admin: At least one other active platform administrator (Root Admin or Super Admin) must remain.'
+    );
+  }
+
+  const previousState = {
+    role: targetUser.role,
+    scope: targetUser.scope,
+    tokenVersion: targetUser.tokenVersion || 0,
+  };
+
+  targetUser.role = ROLES.ADMIN;
+  targetUser.scope = SCOPES.TOWN;
+  targetUser.tokenVersion = (targetUser.tokenVersion || 0) + 1; // Revoke active sessions
+  await targetUser.save();
+
+  await writeAudit({
+    actorId: requestingActor._id || requestingActor.userId,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName || '',
+    action: 'SUPER_ADMIN_DEMOTED',
+    targetId: targetUser._id,
+    targetName: targetUser.fullName,
+    townId: targetUser.townId || requestingActor.townId,
+    schoolId: null,
+    previousState,
+    newState: {
+      role: targetUser.role,
+      scope: targetUser.scope,
+      tokenVersion: targetUser.tokenVersion,
+    },
+    result: 'SUCCESS',
+    reason: reason.trim(),
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Super Admin successfully demoted to Admin. Active sessions revoked.', {
+    userId: targetUser._id,
+    role: targetUser.role,
+    scope: targetUser.scope,
     tokenVersion: targetUser.tokenVersion,
   });
 });
@@ -307,10 +399,8 @@ export const handleGetSystemAuditLogs = asyncHandler(async (request, response) =
     searchFilterQuery.action = { $regex: String(request.query.action), $options: 'i' };
   }
 
-  // ROOT_ADMIN Stealth: hide ROOT_ADMIN actions from non-root viewers
-  if (request.user.role !== ROLES.ROOT_ADMIN) {
-    searchFilterQuery.actorRole = { $ne: ROLES.ROOT_ADMIN };
-  }
+  // Consequential governance actions taken by ROOT_ADMIN or other platform authorities
+  // are fully visible in the system audit log without leaking credentials or private fields.
 
   const [auditLogsList, totalAuditRecordsCount] = await Promise.all([
     AuditLog.find(searchFilterQuery)

@@ -30,9 +30,9 @@ import { dispatchNotificationEvent } from '../services/notificationDispatcher.js
  */
 export const handleInitiateTransfer = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
+  const teacherUserId = request.body.teacherUserId || request.body.teacherId;
+  const targetSchoolId = request.body.targetSchoolId || request.body.destinationSchoolId;
   const {
-    teacherUserId,
-    targetSchoolId,
     reason,
     isEmergencyOverride,
     overrideJustification,

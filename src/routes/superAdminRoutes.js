@@ -15,10 +15,10 @@ import { authorizeRoles } from '../middlewares/authorize.js';
 import { blockRootAdminCreation } from '../middlewares/blockRootAdminCreation.js';
 import { validate } from '../middlewares/validate.js';
 import { flushLockoutsSchema } from '../validations/userSchemas.js';
-import { ROLES } from '../../config/constants.js';
 import {
   handleCreateSuperAdmin,
   handleDisableSuperAdmin,
+  handleDemoteSuperAdmin,
   handleListSuperAdmins,
   handleGetPlatformOverview,
   handleGetSystemAuditLogs,
@@ -86,10 +86,16 @@ router.post('/', blockRootAdminCreation, handleCreateSuperAdmin);
 
 /**
  * PATCH /api/v1/admin/super-admins/:id/disable
- * Disable a Super Admin account (with all 5 safety guards inside controller)
+ * Disable a Super Admin account (with safety guards inside controller)
  * Only targets SUPER_ADMIN accounts (ROOT_ADMIN cannot be targeted)
- * Prevents self-disable, prevents disabling final active SUPER_ADMIN
  */
 router.patch('/:id/disable', handleDisableSuperAdmin);
+
+/**
+ * PATCH /api/v1/admin/super-admins/:id/demote
+ * Demote a Super Admin account to Admin (with safety guards inside controller)
+ * Permitted for ROOT_ADMIN or peer/self SUPER_ADMIN
+ */
+router.patch('/:id/demote', handleDemoteSuperAdmin);
 
 export default router;

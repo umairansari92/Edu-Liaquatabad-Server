@@ -6,6 +6,7 @@ import TeacherProfile from '../models/TeacherProfile.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 import { validatePermissionCeiling } from '../config/permissions.js';
+import { isTargetProtectedFromActor } from '../middlewares/authorizeHierarchy.js';
 
 /**
  * Writes a DENIED audit record for SEC-CRIT-01 controller-level blocks.
@@ -51,7 +52,6 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
   const { designation, role, scope, schoolId, customPermissions, reason = 'Administrative role/designation adjustment' } = request.body;
 
   // ── SEC-CRIT-01 Defense-in-Depth: Controller-level invariant checks ──────────
-  // These guards fire even if authorizeHierarchy middleware was somehow bypassed.
 
   // Guard A: ROOT_ADMIN accounts are immutable via web APIs
   const isMutationRequest = !!(role || scope || customPermissions || schoolId !== undefined);
@@ -64,39 +64,65 @@ export const handleAssignRoleAndDesignation = asyncHandler(async (request, respo
     return sendError(response, 403, 'Forbidden: ROOT_ADMIN accounts are immutable via web APIs.');
   }
 
-  // Guard B: Self-demotion prohibition
+  // Guard B: Self-mutation policies
   const actorId    = String(requestingActor._id || requestingActor.userId);
   const targetId   = String(targetUser._id);
   const isSelfOp   = actorId === targetId;
+
   if (isSelfOp && (role || scope)) {
-    await writeControllerDeniedAudit(
-      request, requestingActor, targetUser,
-      'SELF_ROLE_MUTATION_ATTEMPT_BLOCKED',
-      'CONTROLLER_GUARD: Actors cannot change their own role or scope via web APIs.'
-    );
-    return sendError(response, 403, 'Forbidden: You cannot change your own role or scope.');
+    if (requestingActor.role === ROLES.SUPER_ADMIN) {
+      if (role === ROLES.ROOT_ADMIN) {
+        return sendError(response, 403, 'Forbidden: Cannot elevate account to ROOT_ADMIN.');
+      }
+      const otherActiveGov = await User.countDocuments({
+        _id: { $ne: requestingActor._id },
+        role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+        status: USER_STATUS.ACTIVE,
+      });
+      if (otherActiveGov < 1) {
+        return sendError(response, 409, 'Governance safety violation: At least one other active platform administrator must remain.');
+      }
+    } else {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'SELF_ROLE_MUTATION_ATTEMPT_BLOCKED',
+        'CONTROLLER_GUARD: Actors cannot change their own role or scope via web APIs.'
+      );
+      return sendError(response, 403, 'Forbidden: You cannot change your own role or scope.');
+    }
   }
 
-  // Guard C: Hierarchy privilege escalation check (actor cannot grant equal or higher authority)
+  // Guard C: Hierarchy privilege escalation check
   const actorRoleLevel = requestingActor.roleLevel || ROLE_HIERARCHY[requestingActor.role] || 0;
   const targetRoleLevel = ROLE_HIERARCHY[targetUser.role] || 0;
 
-  if (requestingActor.role !== ROLES.ROOT_ADMIN && actorRoleLevel <= targetRoleLevel) {
-    await writeControllerDeniedAudit(
-      request, requestingActor, targetUser,
-      'HIERARCHY_VIOLATION_CONTROLLER_BLOCKED',
-      `CONTROLLER_GUARD: Cannot modify user of equal or higher authority (${targetUser.role}).`
-    );
-    return sendError(response, 403, `Access denied. You cannot manage an account with equal or higher authority (${targetUser.role}).`);
-  }
+  if (requestingActor.role === ROLES.ROOT_ADMIN) {
+    // Supreme authority
+  } else if (requestingActor.role === ROLES.SUPER_ADMIN) {
+    if (targetUser.role === ROLES.ROOT_ADMIN) {
+      return sendError(response, 403, 'Access denied. You cannot manage ROOT_ADMIN accounts.');
+    }
+    if (role === ROLES.ROOT_ADMIN) {
+      return sendError(response, 403, 'Access denied. You cannot assign ROOT_ADMIN authority.');
+    }
+  } else {
+    if (actorRoleLevel <= targetRoleLevel) {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'HIERARCHY_VIOLATION_CONTROLLER_BLOCKED',
+        `CONTROLLER_GUARD: Cannot modify user of equal or higher authority (${targetUser.role}).`
+      );
+      return sendError(response, 403, `Access denied. You cannot manage an account with equal or higher authority (${targetUser.role}).`);
+    }
 
-  if (role && requestingActor.role !== ROLES.ROOT_ADMIN && (ROLE_HIERARCHY[role] || 0) >= actorRoleLevel) {
-    await writeControllerDeniedAudit(
-      request, requestingActor, targetUser,
-      'PRIVILEGE_ESCALATION_CONTROLLER_BLOCKED',
-      `CONTROLLER_GUARD: Actor cannot grant role equal to or higher than their own level (${role}).`
-    );
-    return sendError(response, 403, `Access denied. You cannot assign a role with equal or higher authority (${role}).`);
+    if (role && (ROLE_HIERARCHY[role] || 0) >= actorRoleLevel) {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'PRIVILEGE_ESCALATION_CONTROLLER_BLOCKED',
+        `CONTROLLER_GUARD: Actor cannot grant role equal to or higher than their own level (${role}).`
+      );
+      return sendError(response, 403, `Access denied. You cannot assign a role with equal or higher authority (${role}).`);
+    }
   }
 
   // Guard D: Identity Domain Boundary Enforcement (Students and Parents cannot hold staff/administrative authority)
@@ -262,17 +288,29 @@ export const handleUpdateUserStatus = asyncHandler(async (request, response) => 
     return sendError(response, 403, 'Forbidden: ROOT_ADMIN accounts cannot be suspended or deactivated through web APIs.');
   }
 
-  // Guard B: Self-suspension prohibition
+  // Guard B: Self-suspension policies
   const actorId       = String(requestingActor._id || requestingActor.userId);
   const targetId      = String(targetUser._id);
   const isSelfOp      = actorId === targetId;
+
   if (isSelfOp && isDeactivation) {
-    await writeControllerDeniedAudit(
-      request, requestingActor, targetUser,
-      'SELF_SUSPENSION_ATTEMPT_BLOCKED',
-      `CONTROLLER_GUARD: Actors cannot suspend or deactivate their own account via web APIs. Attempted status: ${status}.`
-    );
-    return sendError(response, 403, 'Forbidden: You cannot suspend or deactivate your own account.');
+    if (requestingActor.role === ROLES.SUPER_ADMIN) {
+      const otherActiveGov = await User.countDocuments({
+        _id: { $ne: requestingActor._id },
+        role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+        status: USER_STATUS.ACTIVE,
+      });
+      if (otherActiveGov < 1) {
+        return sendError(response, 409, 'Cannot self-suspend: At least one other active platform administrator must remain.');
+      }
+    } else {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'SELF_SUSPENSION_ATTEMPT_BLOCKED',
+        `CONTROLLER_GUARD: Actors cannot suspend or deactivate their own account via web APIs. Attempted status: ${status}.`
+      );
+      return sendError(response, 403, 'Forbidden: You cannot suspend or deactivate your own account.');
+    }
   }
 
   if (!status || !Object.values(USER_STATUS).includes(status)) {
@@ -339,7 +377,7 @@ export const handleUpdateUserStatus = asyncHandler(async (request, response) => 
 });
 
 /**
- * Get Users Scoped by Caller Permissions
+ * Get Users Scoped by Caller Permissions and Role Protection Policies
  * GET /api/v1/users
  */
 export const handleGetUsers = asyncHandler(async (request, response) => {
@@ -356,15 +394,27 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     query.townId = request.user.townId;
   }
 
-  // ROOT_ADMIN Stealth: ROOT_ADMIN is strictly hidden from general personnel listings
-  if (role) {
-    if (role === ROLES.ROOT_ADMIN) {
-      query.role = '__NEVER_MATCH_HIDDEN__';
+  // ROOT_ADMIN Stealth & Visibility Guard
+  if (request.user.role === ROLES.ROOT_ADMIN) {
+    if (role) query.role = role;
+  } else if (request.user.role === ROLES.SUPER_ADMIN) {
+    if (role) {
+      query.role = role === ROLES.ROOT_ADMIN ? '__NEVER_MATCH_HIDDEN__' : role;
     } else {
-      query.role = role;
+      query.role = { $ne: ROLES.ROOT_ADMIN };
+    }
+  } else if (request.user.role === ROLES.ADMIN) {
+    if (role) {
+      query.role = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(role) ? '__NEVER_MATCH_HIDDEN__' : role;
+    } else {
+      query.role = { $nin: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] };
     }
   } else {
-    query.role = { $ne: ROLES.ROOT_ADMIN };
+    if (role) {
+      query.role = role === ROLES.ROOT_ADMIN ? '__NEVER_MATCH_HIDDEN__' : role;
+    } else {
+      query.role = { $ne: ROLES.ROOT_ADMIN };
+    }
   }
 
   if (status) query.status = status;
@@ -402,6 +452,42 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     page: safePage,
     totalPages: Math.ceil(total / safeLimit),
   });
+});
+
+/**
+ * Get User Details by ID (Protected Identity Enforcement)
+ * GET /api/v1/users/:id
+ */
+export const handleGetUserById = asyncHandler(async (request, response) => {
+  const { id } = request.params;
+  if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+    return sendError(response, 400, 'Invalid user ID format.');
+  }
+
+  const targetUser = await User.findById(id)
+    .select('-passwordHash -refreshTokenHash')
+    .populate('schoolId', 'name schoolCode emisCode')
+    .populate('townId', 'name code')
+    .lean();
+
+  if (!targetUser) {
+    return sendError(response, 404, 'User not found.');
+  }
+
+  // If target is protected from actor, return 404
+  if (isTargetProtectedFromActor(request.user, targetUser)) {
+    return sendError(response, 404, 'User not found.');
+  }
+
+  // Admin town-scope boundary
+  if (request.user.role === ROLES.ADMIN && request.user.townId && targetUser.townId) {
+    const targetTownId = targetUser.townId._id ? targetUser.townId._id.toString() : targetUser.townId.toString();
+    if (targetTownId !== request.user.townId.toString()) {
+      return sendError(response, 404, 'User not found.');
+    }
+  }
+
+  return sendSuccess(response, 200, 'User details retrieved successfully.', { user: targetUser });
 });
 
 /**
@@ -485,7 +571,7 @@ export const handleBulkUserAction = asyncHandler(async (request, response) => {
 
       // Invariant 3: Hierarchy authority check
       const targetRank = ROLE_HIERARCHY[targetUser.role] || 0;
-      if (!isRootAdminActor && targetRank <= actorRank) {
+      if (!isRootAdminActor && targetRank >= actorRank) {
         await writeControllerDeniedAudit(
           request,
           requestingActor,
@@ -576,14 +662,25 @@ export const handleGrantUserAuthority = asyncHandler(async (request, response) =
   const actorIdString  = String(requestingActor._id || requestingActor.userId);
   const targetIdString = String(targetUser._id);
 
-  // ── 2. Server-Enforced Guard: Self-grant Prohibition ──────────────────────
+  // ── 2. Server-Enforced Guard: Self-grant / Self-demote Policy ──────────────
   if (actorIdString === targetIdString) {
-    await writeControllerDeniedAudit(
-      request, requestingActor, targetUser,
-      'SELF_AUTHORITY_GRANT_BLOCKED',
-      'FORBIDDEN: Actor attempted to grant or escalate their own authority.'
-    );
-    return sendError(response, 403, 'Forbidden: You cannot grant or elevate your own authority.');
+    if (requestingActor.role === ROLES.SUPER_ADMIN && authority === ROLES.ADMIN) {
+      const otherActiveGov = await User.countDocuments({
+        _id: { $ne: requestingActor._id },
+        role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+        status: USER_STATUS.ACTIVE,
+      });
+      if (otherActiveGov < 1) {
+        return sendError(response, 409, 'Cannot demote self: At least one other active platform administrator (Root Admin or Super Admin) must remain.');
+      }
+    } else {
+      await writeControllerDeniedAudit(
+        request, requestingActor, targetUser,
+        'SELF_AUTHORITY_GRANT_BLOCKED',
+        'FORBIDDEN: Actor attempted to grant or escalate their own authority.'
+      );
+      return sendError(response, 403, 'Forbidden: You cannot grant or elevate your own authority.');
+    }
   }
 
   // ── 3. Server-Enforced Guard: ROOT_ADMIN Target Immutability ──────────────
@@ -637,11 +734,22 @@ export const handleGrantUserAuthority = asyncHandler(async (request, response) =
     return sendError(response, 403, 'Access denied. You do not have permission to grant privileged administrative authority.');
   }
 
-  // ── 6. Hierarchy Check: Target cannot have equal or higher authority ───────
+  // ── 6. Hierarchy Check: Target cannot have equal or higher authority (with SUPER_ADMIN peer allowance) ───
   const actorRoleLevel  = requestingActor.roleLevel || ROLE_HIERARCHY[requestingActor.role] || 0;
   const targetRoleLevel = ROLE_HIERARCHY[targetUser.role] || 0;
 
-  if (requestingActor.role !== ROLES.ROOT_ADMIN && actorRoleLevel <= targetRoleLevel) {
+  if (requestingActor.role === ROLES.SUPER_ADMIN && targetUser.role === ROLES.SUPER_ADMIN) {
+    if (authority === ROLES.ADMIN) {
+      const otherActiveGov = await User.countDocuments({
+        _id: { $ne: targetUser._id },
+        role: { $in: [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN] },
+        status: USER_STATUS.ACTIVE,
+      });
+      if (otherActiveGov < 1) {
+        return sendError(response, 409, 'Cannot demote Super Admin: At least one other active platform administrator must remain.');
+      }
+    }
+  } else if (requestingActor.role !== ROLES.ROOT_ADMIN && actorRoleLevel <= targetRoleLevel) {
     await writeControllerDeniedAudit(
       request, requestingActor, targetUser,
       'HIERARCHY_VIOLATION_AUTHORITY_GRANT_BLOCKED',

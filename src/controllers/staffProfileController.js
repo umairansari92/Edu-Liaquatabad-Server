@@ -10,6 +10,7 @@ import ProfileAccessRequest from '../models/ProfileAccessRequest.js';
 import { ROLES, SCOPES, USER_STATUS, TEACHING_ASSIGNMENT_STATUS } from '../../config/constants.js';
 import { maskCnic, maskBankAccount } from './approvalController.js';
 import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
+import { isTargetProtectedFromActor } from '../middlewares/authorizeHierarchy.js';
 
 /**
  * Access Control Evaluator for Staff Profile
@@ -82,6 +83,11 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
     return sendError(response, 404, 'Staff member not found.');
   }
 
+  // Identity Protection Policy: Return 404 if target is protected/invisible to actor
+  if (isTargetProtectedFromActor(actor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
   const targetProfile = await TeacherProfile.findOne({ userId: targetUserId })
     .populate('currentSchoolId', 'name code')
     .lean();
@@ -127,12 +133,15 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
       .lean();
   }
 
-  // ─── Apply Field-Level Privacy Rules Over Authorization ───────────────────
-  // Rule: Privacy is NOT authorization; both must agree.
-  const showPhone = isSelf || isPrivilegedAdmin || (privacy.phoneNumber === 'SCHOOL' && access.canView);
-  const showEmail = isSelf || isPrivilegedAdmin || (privacy.email === 'SCHOOL' && access.canView);
-  const showPhoto = isSelf || isPrivilegedAdmin || privacy.profilePhoto !== 'PRIVATE';
-  const showQual = isSelf || isPrivilegedAdmin || privacy.qualification !== 'PRIVATE';
+  // ─── Absolute Privacy Policy: User's explicit PRIVATE settings are respected even by ROOT_ADMIN ───
+  const showPhone = isSelf || (privacy.phoneNumber !== 'PRIVATE' && (isPrivilegedAdmin || (privacy.phoneNumber === 'SCHOOL' && access.canView)));
+  const showEmail = isSelf || (privacy.email !== 'PRIVATE' && (isPrivilegedAdmin || (privacy.email === 'SCHOOL' && access.canView)));
+  const showPhoto = isSelf || privacy.profilePhoto !== 'PRIVATE';
+  const showQual = isSelf || privacy.qualification !== 'PRIVATE';
+
+  // Sensitive fields: If set to PRIVATE, ONLY self can view unmasked. Even ROOT_ADMIN receives masked values.
+  const canRevealCnic = isSelf || (privacy.cnic !== 'PRIVATE' && access.canViewSensitive);
+  const canRevealBank = isSelf || (privacy.bankDetails !== 'PRIVATE' && access.canViewSensitive);
 
   const responseData = {
     user: {
@@ -160,21 +169,11 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
           lifecycleStatus: targetProfile.lifecycleStatus,
           profilePhoto: showPhoto ? targetProfile.profilePhoto : { secureUrl: '', publicId: '' },
           // Sensitive Fields: returned unmasked ONLY if authorized AND not set to PRIVATE
-          cnic: (access.canViewSensitive && (isSelf || isPrivilegedAdmin || privacy.cnic !== 'PRIVATE'))
-            ? targetProfile.cnic
-            : maskCnic(targetProfile.cnic),
-          bankName: (access.canViewSensitive && (isSelf || isPrivilegedAdmin || privacy.bankDetails !== 'PRIVATE'))
-            ? targetProfile.bankName
-            : (targetProfile.bankName ? 'Provided' : ''),
-          branchName: (access.canViewSensitive && (isSelf || isPrivilegedAdmin || privacy.bankDetails !== 'PRIVATE'))
-            ? targetProfile.branchName
-            : '****',
-          accountNumber: (access.canViewSensitive && (isSelf || isPrivilegedAdmin || privacy.bankDetails !== 'PRIVATE'))
-            ? targetProfile.accountNumber
-            : maskBankAccount(targetProfile.accountNumber),
-          accountTitle: (access.canViewSensitive && (isSelf || isPrivilegedAdmin || privacy.bankDetails !== 'PRIVATE'))
-            ? targetProfile.accountTitle
-            : '****',
+          cnic: canRevealCnic ? targetProfile.cnic : maskCnic(targetProfile.cnic),
+          bankName: canRevealBank ? targetProfile.bankName : (targetProfile.bankName ? 'Provided' : ''),
+          branchName: canRevealBank ? targetProfile.branchName : '****',
+          accountNumber: canRevealBank ? targetProfile.accountNumber : maskBankAccount(targetProfile.accountNumber),
+          accountTitle: canRevealBank ? targetProfile.accountTitle : '****',
           correctionRemarks: targetProfile.correctionRemarks,
           approvalHistory: (targetProfile.approvalHistory || []).map((h) => ({
             action: h.action,
@@ -308,6 +307,10 @@ export const handleRequestPdfAccess = asyncHandler(async (request, response) => 
     return sendError(response, 404, 'Staff member not found.');
   }
 
+  if (isTargetProtectedFromActor(actor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
   const targetProfile = await TeacherProfile.findOne({ userId: targetUserId });
   const access = evaluateProfileAccess(actor, targetUser, targetProfile);
 
@@ -398,8 +401,13 @@ export const handleGetStaffAccessHistory = asyncHandler(async (request, response
   const isSelf = String(actor._id) === String(targetUserId);
   const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actor.role);
 
-  if (!isSelf && !isPrivilegedAdmin) {
-    return sendError(response, 403, 'Unauthorized to view staff access history.');
+  const targetUser = await User.findById(targetUserId).lean();
+  if (!targetUser) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  if (isTargetProtectedFromActor(actor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
   }
 
   const [requests, downloads] = await Promise.all([
@@ -447,6 +455,11 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
     return sendError(response, 404, 'Staff member not found.');
   }
 
+  // Identity Protection Policy: Return 404 if target is protected/invisible to actor
+  if (isTargetProtectedFromActor(actor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
   const targetProfile = await TeacherProfile.findOne({ userId: targetUserId }).lean();
   const access = evaluateProfileAccess(actor, targetUser, targetProfile);
 
@@ -457,6 +470,16 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
   const isSelf = String(actor._id) === String(targetUser._id);
   const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actor.role);
   const preAllowed = !!targetProfile?.privacySettings?.allowAuthorizedPdfDownload;
+  const privacy = targetProfile?.privacySettings?.fieldVisibility || {
+    profilePhoto: 'PUBLIC',
+    designation: 'PUBLIC',
+    qualification: 'PUBLIC',
+    phoneNumber: 'SCHOOL',
+    email: 'SCHOOL',
+    cnic: 'AUTHORIZED_ROLE',
+    bankDetails: 'AUTHORIZED_ROLE',
+    residentialAddress: 'AUTHORIZED_ROLE',
+  };
 
   let activeApproval = null;
   if (!isSelf && !isPrivilegedAdmin && !preAllowed) {
@@ -533,10 +556,11 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
   yPos += 20;
 
   doc.fontSize(9).font('Helvetica');
+  const showCnicInPdf = isSelf || (privacy.cnic !== 'PRIVATE' && access.canViewSensitive);
   const personalInfo = [
     ['Full Name:', targetUser.fullName || 'N/A', "Father's Name:", targetProfile?.fatherName || 'N/A'],
     ['Official Email:', targetUser.email || 'N/A', 'Contact Phone:', targetUser.phoneNumber || 'N/A'],
-    ['Date of Birth:', targetProfile?.dateOfBirth ? new Date(targetProfile.dateOfBirth).toLocaleDateString() : 'N/A', 'CNIC:', access.canViewSensitive ? (targetProfile?.cnic || 'N/A') : maskCnic(targetProfile?.cnic)],
+    ['Date of Birth:', targetProfile?.dateOfBirth ? new Date(targetProfile.dateOfBirth).toLocaleDateString() : 'N/A', 'CNIC:', showCnicInPdf ? (targetProfile?.cnic || 'N/A') : maskCnic(targetProfile?.cnic)],
     ['Institution/School:', targetUser.schoolId?.name || 'Unassigned / Claimed', 'School Code:', targetUser.schoolId?.code || 'N/A'],
     ['Date of Appointment:', targetProfile?.appointmentDate ? new Date(targetProfile.appointmentDate).toLocaleDateString() : 'N/A', 'Qualification:', targetProfile?.qualification || 'N/A'],
     ['Staff Classification:', targetProfile?.isTeachingStaff ? 'Teaching Faculty' : 'Non-Teaching Support Staff', 'System Role:', targetUser.role],
@@ -552,12 +576,13 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
 
   yPos += 10;
 
-  // ─── Section 2: Bank & Payroll Details (Only if authorized) ───────────────────
+  // ─── Section 2: Bank & Payroll Details (Only if authorized and not PRIVATE) ───
   doc.fillColor('#0f172a').fontSize(11).font('Helvetica-Bold').text('2. BANK & DISBURSEMENT DETAILS', 40, yPos);
   doc.moveTo(40, yPos + 14).lineTo(555, yPos + 14).strokeColor('#cbd5e1').stroke();
   yPos += 20;
 
-  if (access.canViewSensitive) {
+  const showBankInPdf = isSelf || (privacy.bankDetails !== 'PRIVATE' && access.canViewSensitive);
+  if (showBankInPdf) {
     const bankInfo = [
       ['Bank Name:', targetProfile?.bankName || 'Not Provided', 'Branch Name:', targetProfile?.branchName || 'Not Provided'],
       ['Account Title:', targetProfile?.accountTitle || 'Not Provided', 'Account Number:', targetProfile?.accountNumber || 'Not Provided'],
@@ -572,7 +597,7 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
     }
   } else {
     doc.font('Helvetica-Oblique').fontSize(8).fillColor('#64748b')
-      .text('Bank details are restricted to authorized payroll and treasury personnel only.', 40, yPos);
+      .text('Bank details are restricted under platform privacy policy or authorized treasury access.', 40, yPos);
     yPos += 16;
   }
 
