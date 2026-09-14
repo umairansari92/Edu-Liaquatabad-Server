@@ -96,13 +96,15 @@ export const sendOtpEmail = async (email, plainOtp, purpose = 'REGISTRATION') =>
     ? process.env.EMAIL_FROM.replace(/^["']|["']$/g, '')
     : '"Education Department DMC" <liaquatabadeducation@gmail.com>';
 
-  // Prominent terminal logging for instant developer visibility
-  console.log('\n======================================================');
-  console.log('📨 [OTP DISPATCH ATTEMPT]');
-  console.log(`🎯 Recipient:    ${email}`);
-  console.log(`🔑 6-DIGIT CODE: ${plainOtp}`);
-  console.log(`📋 Purpose:      ${purpose}`);
-  console.log('======================================================\n');
+  // Developer logging only for local testing — suppressed in production
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('\n======================================================');
+    console.log('📨 [DEV OTP DISPATCH ATTEMPT]');
+    console.log(`🎯 Recipient:    ${email}`);
+    console.log(`🔑 6-DIGIT CODE: ${plainOtp}`);
+    console.log(`📋 Purpose:      ${purpose}`);
+    console.log('======================================================\n');
+  }
 
   try {
     const info = await transporter.sendMail({
@@ -115,7 +117,9 @@ export const sendOtpEmail = async (email, plainOtp, purpose = 'REGISTRATION') =>
     return true;
   } catch (error) {
     console.error('❌ [Nodemailer OTP Error]:', error.message);
-    console.log(`💡 [DEV OTP FALLBACK] -> To: ${email} | Code: ${plainOtp}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`💡 [DEV OTP FALLBACK] -> To: ${email} | Code: ${plainOtp}`);
+    }
     return true;
   }
 };

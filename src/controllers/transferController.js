@@ -8,6 +8,7 @@ import TeachingAssignment from '../models/TeachingAssignment.js';
 import TeacherProfile from '../models/TeacherProfile.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, TRANSFER_STATUS, TEACHING_ASSIGNMENT_STATUS } from '../../config/constants.js';
+import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
 
 /**
  * POST /api/v1/transfers
@@ -205,6 +206,23 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
     // Commit all operations atomically
     await session.commitTransaction();
     session.endSession();
+
+    // Dispatch notification to transferred teacher (governance event)
+    await dispatchNotificationEvent({
+      eventType: 'TRANSFER_STATUS',
+      category: 'GOVERNANCE',
+      title: 'Faculty Transfer Order Issued',
+      message: `You have been officially transferred to ${targetSchool.name}. Please report to your new institution.`,
+      actionLink: '/transfers',
+      rawMetadata: {
+        transferRequestId: String(transferRecord._id),
+        teacherName: targetTeacher.fullName,
+        fromSchool: targetTeacher.schoolId?.name || String(sourceSchoolId),
+        toSchool: targetSchool.name,
+        orderNumber: officialOrderNumber || '',
+      },
+      recipientUserIds: [String(teacherUserId)],
+    });
 
     return sendSuccess(
       response,

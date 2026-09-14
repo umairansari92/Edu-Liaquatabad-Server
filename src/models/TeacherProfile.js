@@ -30,6 +30,22 @@ const TeacherProfileSchema = new mongoose.Schema({
   accountNumber: { type: String, trim: true, default: '' },
   accountTitle: { type: String, trim: true, default: '' },
 
+  // ─── Privacy & Access Control Settings ──────────────────────────────────────
+  privacySettings: {
+    fieldVisibility: {
+      profilePhoto: { type: String, enum: ['PUBLIC', 'SCHOOL', 'PRIVATE'], default: 'PUBLIC' },
+      designation: { type: String, enum: ['PUBLIC', 'SCHOOL'], default: 'PUBLIC' },
+      qualification: { type: String, enum: ['PUBLIC', 'SCHOOL', 'PRIVATE'], default: 'PUBLIC' },
+      phoneNumber: { type: String, enum: ['SCHOOL', 'PRIVATE'], default: 'SCHOOL' },
+      email: { type: String, enum: ['SCHOOL', 'PRIVATE'], default: 'SCHOOL' },
+      cnic: { type: String, enum: ['AUTHORIZED_ROLE', 'PRIVATE'], default: 'AUTHORIZED_ROLE' },
+      bankDetails: { type: String, enum: ['AUTHORIZED_ROLE', 'PRIVATE'], default: 'AUTHORIZED_ROLE' },
+      residentialAddress: { type: String, enum: ['AUTHORIZED_ROLE', 'PRIVATE'], default: 'AUTHORIZED_ROLE' },
+    },
+    allowAuthorizedPdfDownload: { type: Boolean, default: false },
+    updatedAt: { type: Date, default: Date.now },
+  },
+
   // ─── Lifecycle & Approval State ─────────────────────────────────────────────
   lifecycleStatus: {
     type: String,

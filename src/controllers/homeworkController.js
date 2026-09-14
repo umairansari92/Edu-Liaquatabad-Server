@@ -8,6 +8,7 @@ import Section from '../models/Section.js';
 import Subject from '../models/Subject.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, TEACHING_ASSIGNMENT_STATUS, STUDENT_STATUS } from '../../config/constants.js';
+import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECURITY INVARIANTS (enforced on every write operation):
@@ -157,6 +158,30 @@ export const handleCreateHomework = asyncHandler(async (request, response) => {
     ipAddress: request.ip || '',
     userAgent: request.headers['user-agent'] || '',
     requestId: request.headers['x-request-id'] || '',
+  });
+
+  // ── Central Notification Dispatch (Students & Parents) ──────────────────────
+  await dispatchNotificationEvent({
+    eventType: 'HOMEWORK_CREATED',
+    category: 'ACADEMIC',
+    title: `New Homework: ${homework.title}`,
+    message: `${targetSubject?.name || 'Subject'} homework assigned. Due: ${new Date(dueDate).toLocaleDateString()}.`,
+    actionLink: `/homework`,
+    rawMetadata: {
+      homeworkId: String(homework._id),
+      title: homework.title,
+      subjectName: targetSubject?.name || 'General',
+      className: targetClass?.name || 'Class',
+      sectionName: targetSection?.name || 'A',
+      dueDate: homework.dueDate,
+      teacherName: actor.fullName,
+    },
+    audienceCriteria: {
+      type: 'CLASS_STUDENTS_AND_PARENTS',
+      schoolId: actorSchoolId,
+      classId,
+      sectionId,
+    },
   });
 
   return sendSuccess(response, 201, 'Homework created successfully.', homework);
