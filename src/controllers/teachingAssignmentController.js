@@ -109,7 +109,7 @@ export const handleGetMyAssignments = asyncHandler(async (request, response) => 
  */
 export const handleAddTeachingAssignment = asyncHandler(async (request, response) => {
   const actor = request.user;
-  const {
+  let {
     teacherId,
     schoolId,
     classId,
@@ -118,6 +118,17 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     academicSession,
     remarks = '',
   } = request.body;
+
+  if (actor.role === ROLES.HM) {
+    const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
+    if (!actorSchoolId) {
+      return sendError(response, 403, 'Your HM account has no school assignment.');
+    }
+    if (schoolId && String(schoolId) !== actorSchoolId) {
+      return sendError(response, 403, 'Access denied. You cannot assign teaching duties outside your authorized school/jurisdiction.');
+    }
+    schoolId = actorSchoolId;
+  }
 
   if (!teacherId || !schoolId || !classId || !sectionId || !subjectId || !academicSession) {
     return sendError(response, 400, 'All fields (teacherId, schoolId, classId, sectionId, subjectId, academicSession) are required.');
@@ -132,6 +143,12 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
   const targetUser = await User.findById(teacherId);
   if (!targetUser) {
     return sendError(response, 404, 'Teacher not found.');
+  }
+
+  // STRICT INVARIANT: Target teacher must belong to the school
+  const teacherSchoolId = String(targetUser.schoolId?._id || targetUser.schoolId || '');
+  if (teacherSchoolId !== String(schoolId)) {
+    return sendError(response, 400, 'Target faculty member does not belong to this school.');
   }
 
   // STRICT INVARIANT: Non-teaching staff (Peons, Clerks, Accountants) cannot receive teaching assignments
@@ -269,4 +286,42 @@ export const handleEndTeachingAssignment = asyncHandler(async (request, response
   });
 
   return sendSuccess(response, 200, 'Teaching assignment ended and archived into history successfully.', assignment);
+});
+
+/**
+ * GET /api/v1/assignments/school
+ * Retrieves all active and historical teaching assignments within the actor's authorized school.
+ * For HM: strictly bounded to req.user.schoolId.
+ */
+export const handleGetSchoolTeachingAssignments = asyncHandler(async (request, response) => {
+  const actor = request.user;
+  let targetSchoolId = request.query.schoolId;
+
+  if (actor.role === ROLES.HM) {
+    targetSchoolId = actor.schoolId?._id || actor.schoolId;
+  }
+
+  if (!targetSchoolId || !canManageSchoolAssignments(actor, targetSchoolId)) {
+    return sendError(response, 403, 'Access denied. You cannot view teaching assignments for this school.');
+  }
+
+  const assignments = await TeachingAssignment.find({ schoolId: targetSchoolId })
+    .populate('teacherId', 'fullName email designation')
+    .populate('classId', 'name numericGrade code')
+    .populate('sectionId', 'name roomNumber')
+    .populate('subjectId', 'name code')
+    .populate('assignedBy', 'fullName designation')
+    .sort({ status: 1, createdAt: -1 })
+    .lean();
+
+  const activeAssignments = assignments.filter((item) => item.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const historicalAssignments = assignments.filter((item) => item.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+
+  return sendSuccess(response, 200, 'School teaching assignments retrieved successfully.', {
+    schoolId: targetSchoolId,
+    activeCount: activeAssignments.length,
+    historyCount: historicalAssignments.length,
+    activeAssignments,
+    historicalAssignments,
+  });
 });

@@ -10,6 +10,7 @@ import {
   handleCreateSubject,
   handleUpdateSubject,
   handleGetTeacherSummary,
+  handleGetHmSchoolSummary,
 } from '../controllers/academicController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
@@ -31,7 +32,7 @@ router.use(authenticate);
 // ─── Classes ──────────────────────────────────────────────────────────────────
 router.get('/classes', authorizePermissions(PERMISSIONS.SCHOOLS_VIEW), handleGetClasses);
 router.post('/classes',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(createClassSchema),
   handleCreateClass
@@ -77,5 +78,8 @@ router.patch('/subjects/:id',
 // Only accessible by authenticated users with attendance.view permission
 // Derives scope exclusively from JWT token — client cannot supply teacherId
 router.get('/teacher-summary', authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW), handleGetTeacherSummary);
+
+// ─── Head Master School Command Center Summary (HM-scoped, strictly own school) ─
+router.get('/hm-summary', authorizeRoles(ROLES.HM), handleGetHmSchoolSummary);
 
 export default router;

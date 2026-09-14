@@ -10,6 +10,7 @@ import AuditLog from '../models/AuditLog.js';
 import {
   ROLES,
   SCOPES,
+  ROLE_HIERARCHY,
   USER_STATUS,
   TEACHER_STATUS,
   STUDENT_STATUS,
@@ -65,10 +66,17 @@ export const isAuthorizedApprover = (actor, targetUser, targetProfile) => {
       const assigned = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool._id || assignedSchool));
       return assigned.includes(String(targetSchoolId));
 
-    case ROLES.HM:
-      // STRICT SCHOOL BOUNDARY: HM can ONLY approve staff claiming their exact assigned school
+    case ROLES.HM: {
+      // 1. STRICT SCHOOL BOUNDARY: HM can ONLY approve applicants claiming their exact assigned school
       if (!actor.schoolId || !targetSchoolId) return false;
-      return String(actor.schoolId._id || actor.schoolId) === String(targetSchoolId);
+      const sameSchool = String(actor.schoolId._id || actor.schoolId) === String(targetSchoolId);
+      if (!sameSchool) return false;
+
+      // 2. STRICT HIERARCHY: Target must be strictly subordinate to HM according to centralized ROLE_HIERARCHY
+      const hmLevel = ROLE_HIERARCHY[ROLES.HM] || 50;
+      const targetLevel = ROLE_HIERARCHY[targetUser?.role] ?? 0;
+      return targetLevel < hmLevel;
+    }
 
     default:
       return false;

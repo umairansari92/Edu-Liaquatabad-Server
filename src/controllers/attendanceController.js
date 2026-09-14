@@ -762,3 +762,156 @@ export const handleGetMonthlySummary = asyncHandler(async (request, response) =>
     students,
   });
 });
+
+/**
+ * PATCH /api/v1/attendance/:id/verify
+ * Allows Head Master (HM) or higher authority to verify a daily attendance record.
+ * Status: PENDING_VERIFICATION -> VERIFIED.
+ */
+export const handleVerifyAttendance = asyncHandler(async (request, response) => {
+  const actor = request.user;
+  const { id } = request.params;
+  const { remarks = '' } = request.body;
+
+  if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
+    return sendError(response, 400, 'Invalid attendance ID format.');
+  }
+
+  const attendanceRecord = await Attendance.findById(id);
+  if (!attendanceRecord) {
+    return sendError(response, 404, 'Attendance record not found.');
+  }
+
+  // School boundary check
+  if (actor.role === ROLES.HM) {
+    const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(attendanceRecord.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only verify attendance for your assigned school.');
+    }
+  }
+
+  // Future date rejection
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+  if (attendanceRecord.date && new Date(attendanceRecord.date) > todayEnd) {
+    return sendError(response, 400, 'Attendance record cannot be verified for a future date.');
+  }
+
+  // Idempotency guard: already verified record cannot be re-verified
+  if (attendanceRecord.verificationStatus === 'VERIFIED') {
+    return sendError(response, 409, 'Attendance record is already verified.');
+  }
+
+  const previousState = {
+    verificationStatus: attendanceRecord.verificationStatus,
+    verifiedBy: attendanceRecord.verifiedBy,
+  };
+
+  attendanceRecord.verificationStatus = 'VERIFIED';
+  attendanceRecord.verifiedBy = actor._id;
+  await attendanceRecord.save();
+
+  await AuditLog.create({
+    actorId: actor._id,
+    actorRole: actor.role,
+    actorDesignation: actor.designation || '',
+    actorName: actor.fullName,
+    action: 'ATTENDANCE_VERIFIED',
+    targetModel: 'Attendance',
+    targetId: attendanceRecord._id,
+    schoolId: attendanceRecord.schoolId,
+    previousState,
+    newState: { verificationStatus: 'VERIFIED', verifiedBy: actor._id },
+    result: 'SUCCESS',
+    reason: remarks || `Attendance verified by ${actor.role}`,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Attendance record verified successfully.', { attendance: attendanceRecord });
+});
+
+/**
+ * POST /api/v1/attendance/upload-sheet
+ * Allows Head Master (HM) or authorized staff to upload/record a physical paper attendance register image.
+ */
+export const handleUploadAttendanceSheet = asyncHandler(async (request, response) => {
+  const actor = request.user;
+  const { sectionId, date, sheetImageUrl } = request.body;
+
+  if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, 'A valid sectionId is required.');
+  }
+  if (!sheetImageUrl || typeof sheetImageUrl !== 'string') {
+    return sendError(response, 400, 'A valid sheetImageUrl is required.');
+  }
+
+  const section = await Section.findById(sectionId).lean();
+  if (!section) {
+    return sendError(response, 404, 'Section not found.');
+  }
+
+  if (actor.role === ROLES.HM) {
+    const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(section.schoolId)) {
+      return sendError(response, 403, 'Access denied. Section belongs to a different school.');
+    }
+  }
+
+  const queryDate = date ? new Date(date) : new Date();
+  if (isNaN(queryDate.getTime())) {
+    return sendError(response, 400, 'Invalid date format.');
+  }
+
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+  if (queryDate > todayEnd) {
+    return sendError(response, 400, 'Attendance sheet cannot be uploaded for a future date.');
+  }
+
+  const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
+  const dayEnd = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
+
+  let record = await Attendance.findOne({
+    schoolId: section.schoolId,
+    sectionId: section._id,
+    attendanceType: 'STUDENT',
+    date: { $gte: dayStart, $lte: dayEnd },
+  });
+
+  if (record) {
+    record.sheetImageUrl = sheetImageUrl.trim();
+    record.entryMode = 'SHEET_IMAGE_UPLOAD';
+    await record.save();
+  } else {
+    record = await Attendance.create({
+      schoolId: section.schoolId,
+      attendanceType: 'STUDENT',
+      date: dayStart,
+      classId: section.classId,
+      sectionId: section._id,
+      records: [],
+      entryMode: 'SHEET_IMAGE_UPLOAD',
+      sheetImageUrl: sheetImageUrl.trim(),
+      recordedBy: actor._id,
+      verificationStatus: 'PENDING_VERIFICATION',
+    });
+  }
+
+  await AuditLog.create({
+    actorId: actor._id,
+    actorRole: actor.role,
+    actorDesignation: actor.designation || '',
+    actorName: actor.fullName,
+    action: 'ATTENDANCE_SHEET_UPLOADED',
+    targetModel: 'Attendance',
+    targetId: record._id,
+    schoolId: section.schoolId,
+    newState: { entryMode: 'SHEET_IMAGE_UPLOAD', sheetImageUrl: record.sheetImageUrl },
+    result: 'SUCCESS',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Attendance sheet uploaded and recorded successfully.', { attendance: record });
+});

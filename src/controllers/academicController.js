@@ -4,10 +4,19 @@ import Class from '../models/Class.js';
 import Section from '../models/Section.js';
 import Subject from '../models/Subject.js';
 import School from '../models/School.js';
+import User from '../models/User.js';
+import TransferRequest from '../models/TransferRequest.js';
 import Attendance from '../models/Attendance.js';
 import StudentProfile from '../models/StudentProfile.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES, SCOPES, ATTENDANCE_STATUS, STUDENT_STATUS } from '../../config/constants.js';
+import {
+  ROLES,
+  SCOPES,
+  ATTENDANCE_STATUS,
+  STUDENT_STATUS,
+  USER_STATUS,
+  TRANSFER_STATUS,
+} from '../../config/constants.js';
 
 // ─── Helper: Write Academic Audit Event ──────────────────────────────────────
 const writeAcademicAudit = async ({ actorId, actorRole, actorName, action, targetModel, targetId, targetName, schoolId, previousState, newState, result, reason, ipAddress, userAgent }) => {
@@ -71,6 +80,14 @@ export const handleCreateClass = asyncHandler(async (request, response) => {
     return sendError(response, 404, 'School not found. Cannot create class for non-existent school.');
   }
 
+  // Server-Enforced HM School Jurisdiction Guard
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only create classes within your assigned school.');
+    }
+  }
+
   // Prevent duplicate class (same grade in same school)
   const existingClass = await Class.findOne({ schoolId, numericGrade }).lean();
   if (existingClass) {
@@ -119,6 +136,14 @@ export const handleUpdateClass = asyncHandler(async (request, response) => {
 
   const classRecord = await Class.findById(id);
   if (!classRecord) return sendError(response, 404, 'Class not found.');
+
+  // Server-Enforced HM School Jurisdiction Guard
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(classRecord.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only modify classes within your assigned school.');
+    }
+  }
 
   const previousState = { name: classRecord.name, numericGrade: classRecord.numericGrade, status: classRecord.status };
 
@@ -185,6 +210,14 @@ export const handleCreateSection = asyncHandler(async (request, response) => {
 
   const targetSchoolId = schoolId || classRecord.schoolId;
 
+  // Server-Enforced HM School Jurisdiction Guard
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(targetSchoolId)) {
+      return sendError(response, 403, 'Access denied. You can only create sections within your assigned school.');
+    }
+  }
+
   const existingSection = await Section.findOne({
     classId,
     name: { $regex: new RegExp(`^${name.trim()}$`, 'i') },
@@ -236,6 +269,14 @@ export const handleUpdateSection = asyncHandler(async (request, response) => {
   const { name, classTeacherId, capacity, roomNumber, status, reason } = request.body;
   const sectionRecord = await Section.findById(id);
   if (!sectionRecord) return sendError(response, 404, 'Section not found.');
+
+  // Server-Enforced HM School Jurisdiction Guard
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(sectionRecord.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only modify sections within your assigned school.');
+    }
+  }
 
   const previousState = { name: sectionRecord.name, status: sectionRecord.status };
 
@@ -299,6 +340,14 @@ export const handleCreateSubject = asyncHandler(async (request, response) => {
 
   const validClassId = (classId && /^[0-9a-fA-F]{24}$/.test(classId)) ? classId : null;
 
+  // Server-Enforced HM School Jurisdiction Guard
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only create subjects within your assigned school.');
+    }
+  }
+
   const newSubject = await Subject.create({
     schoolId,
     classId: validClassId,
@@ -342,6 +391,14 @@ export const handleUpdateSubject = asyncHandler(async (request, response) => {
   const { name, code, isElective, totalMarks, passingMarks, status, reason } = request.body;
   const subjectRecord = await Subject.findById(id);
   if (!subjectRecord) return sendError(response, 404, 'Subject not found.');
+
+  // Server-Enforced HM School Jurisdiction Guard
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== String(subjectRecord.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only modify subjects within your assigned school.');
+    }
+  }
 
   const previousState = { name: subjectRecord.name, status: subjectRecord.status };
 
@@ -499,5 +556,115 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     homework: { available: false, message: 'Homework management is in the academic roadmap.' },
     // Leave: No leave model exists in this version.
     leave:    { available: false, message: 'Leave management is in the academic roadmap.' },
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// HEAD MASTER SCHOOL COMMAND CENTER SUMMARY
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/academic/hm-summary
+ * Aggregates live school operational metrics strictly bounded by req.user.schoolId.
+ * No client-supplied schoolId is ever trusted.
+ * Zero sensitive staff fields (no credentials, CNIC, bank details).
+ */
+export const handleGetHmSchoolSummary = asyncHandler(async (request, response) => {
+  const actor = request.user;
+  const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
+
+  if (!actorSchoolId) {
+    return sendError(response, 403, 'Your HM account has no school assignment. Contact platform administrators.');
+  }
+
+  const school = await School.findById(actorSchoolId).select('name code dmcRegion schoolType status address phone email timings').lean();
+  if (!school) {
+    return sendError(response, 404, 'Assigned school entity not found in municipal registry.');
+  }
+
+  const today = new Date();
+  const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+  const dayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+  // Parallel count queries — strictly scoped to actorSchoolId
+  const [
+    totalStudents,
+    teachingStaff,
+    nonTeachingStaff,
+    totalClasses,
+    totalSections,
+    pendingStaffApprovals,
+    pendingStudentAdmissions,
+    pendingIncomingTransfers,
+    todayAttendanceRecords,
+  ] = await Promise.all([
+    StudentProfile.countDocuments({ schoolId: actorSchoolId, lifecycleStatus: STUDENT_STATUS.ACTIVE }),
+    User.countDocuments({ schoolId: actorSchoolId, role: ROLES.TEACHER, status: USER_STATUS.ACTIVE }),
+    User.countDocuments({ schoolId: actorSchoolId, role: ROLES.PEON, status: USER_STATUS.ACTIVE }),
+    Class.countDocuments({ schoolId: actorSchoolId, status: { $ne: 'ARCHIVED' } }),
+    Section.countDocuments({ schoolId: actorSchoolId, status: { $ne: 'ARCHIVED' } }),
+    User.countDocuments({ claimedSchoolId: actorSchoolId, status: USER_STATUS.PENDING_APPROVAL, role: { $in: [ROLES.TEACHER, ROLES.PEON] } }),
+    User.countDocuments({ claimedSchoolId: actorSchoolId, status: USER_STATUS.PENDING_APPROVAL, role: ROLES.STUDENT }),
+    TransferRequest.countDocuments({ toSchoolId: actorSchoolId, status: TRANSFER_STATUS.AWAITING_DESTINATION_HM }),
+    Attendance.find({ schoolId: actorSchoolId, attendanceType: 'STUDENT', date: { $gte: dayStart, $lte: dayEnd } }).select('verificationStatus records sectionId').lean(),
+  ]);
+
+  // Aggregate today's student attendance from actual daily records
+  let todaySubmittedRecords = 0;
+  let todayPresent = 0;
+  let todayAbsent = 0;
+  let todayLeave = 0;
+  let unverifiedAttendanceCount = 0;
+
+  for (const record of todayAttendanceRecords) {
+    todaySubmittedRecords++;
+    if (record.verificationStatus === 'PENDING_VERIFICATION') {
+      unverifiedAttendanceCount++;
+    }
+    for (const entry of (record.records || [])) {
+      if (entry.status === ATTENDANCE_STATUS.PRESENT) todayPresent++;
+      else if (entry.status === ATTENDANCE_STATUS.ABSENT) todayAbsent++;
+      else if (entry.status === ATTENDANCE_STATUS.LEAVE) todayLeave++;
+    }
+  }
+
+  const todayMarkedStudents = todayPresent + todayAbsent + todayLeave;
+  const todayPresentPct = todayMarkedStudents > 0
+    ? Number(((todayPresent / todayMarkedStudents) * 100).toFixed(1))
+    : null;
+
+  return sendSuccess(response, 200, 'Head Master school command center summary retrieved.', {
+    school: {
+      _id: school._id,
+      name: school.name,
+      code: school.code,
+      dmcRegion: school.dmcRegion,
+      schoolType: school.schoolType,
+      timings: school.timings,
+    },
+    metrics: {
+      totalStudents,
+      teachingStaff,
+      nonTeachingStaff,
+      totalStaff: teachingStaff + nonTeachingStaff,
+      totalClasses,
+      totalSections,
+      todaySubmittedSections: todaySubmittedRecords,
+      unsubmittedSections: Math.max(0, totalSections - todaySubmittedRecords),
+      todayAttendance: {
+        present: todayPresent,
+        absent: todayAbsent,
+        leave: todayLeave,
+        totalMarked: todayMarkedStudents,
+        attendancePercentage: todayPresentPct,
+      },
+      pendingQueues: {
+        staffApprovals: pendingStaffApprovals,
+        studentAdmissions: pendingStudentAdmissions,
+        incomingTransfers: pendingIncomingTransfers,
+        unverifiedAttendance: unverifiedAttendanceCount,
+        totalPendingActions: pendingStaffApprovals + pendingStudentAdmissions + pendingIncomingTransfers + unverifiedAttendanceCount,
+      },
+    },
   });
 });

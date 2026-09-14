@@ -111,6 +111,10 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
   session.startTransaction();
 
   try {
+    const initialStatus = isEmergencyOverride
+      ? TRANSFER_STATUS.OVERRIDDEN_AND_TRANSFERRED
+      : TRANSFER_STATUS.AWAITING_DESTINATION_HM;
+
     // 1. Create TransferRequest record
     const [transferRecord] = await TransferRequest.create(
       [{
@@ -123,53 +127,57 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
         overrideJustification: overrideJustification || '',
         reason:               reason.trim(),
         officialOrderNumber:  officialOrderNumber || '',
-        status:               TRANSFER_STATUS.INITIATED,
+        status:               initialStatus,
       }],
       { session }
     );
 
-    // 2. Update teacher's schoolId
-    await User.findByIdAndUpdate(
-      teacherUserId,
-      { $set: { schoolId: targetSchoolId } },
-      { session }
-    );
+    let expiredAssignmentsCount = 0;
 
-    // 3. Expire ALL ACTIVE teaching assignments at the old school → TRANSFERRED
-    //    Historical records are preserved; only status + effectiveTo change.
-    //    New school assignments must be created by destination HM after joining.
-    const expiredAssignmentsResult = await TeachingAssignment.updateMany(
-      {
-        teacherId: teacherUserId,
-        schoolId:  sourceSchoolId,
-        status:    TEACHING_ASSIGNMENT_STATUS.ACTIVE,
-      },
-      {
-        $set: {
-          status:      TEACHING_ASSIGNMENT_STATUS.TRANSFERRED,
-          effectiveTo: new Date(),
-          remarks:     `Auto-expired on approved transfer to ${targetSchool.name}. Transfer ID: ${transferRecord._id}`,
+    // If emergency override, execute atomic reassignment immediately
+    if (isEmergencyOverride) {
+      // 2. Update teacher's schoolId
+      await User.findByIdAndUpdate(
+        teacherUserId,
+        { $set: { schoolId: targetSchoolId } },
+        { session }
+      );
+
+      // 3. Expire ALL ACTIVE teaching assignments at the old school → TRANSFERRED
+      const expiredAssignmentsResult = await TeachingAssignment.updateMany(
+        {
+          teacherId: teacherUserId,
+          schoolId:  sourceSchoolId,
+          status:    TEACHING_ASSIGNMENT_STATUS.ACTIVE,
         },
-      },
-      { session }
-    );
-
-    // 4. Sync TeacherProfile: update currentSchoolId + append transferHistory
-    await TeacherProfile.findOneAndUpdate(
-      { userId: teacherUserId },
-      {
-        $set: { currentSchoolId: targetSchoolId },
-        $push: {
-          transferHistory: {
-            fromSchoolId:      sourceSchoolId,
-            toSchoolId:        targetSchoolId,
-            transferRequestId: transferRecord._id,
-            relievedDate:      new Date(),
+        {
+          $set: {
+            status:      TEACHING_ASSIGNMENT_STATUS.TRANSFERRED,
+            effectiveTo: new Date(),
+            remarks:     `Auto-expired on emergency transfer to ${targetSchool.name}. Transfer ID: ${transferRecord._id}`,
           },
         },
-      },
-      { session }
-    );
+        { session }
+      );
+      expiredAssignmentsCount = expiredAssignmentsResult.modifiedCount;
+
+      // 4. Sync TeacherProfile: update currentSchoolId + append transferHistory
+      await TeacherProfile.findOneAndUpdate(
+        { userId: teacherUserId },
+        {
+          $set: { currentSchoolId: targetSchoolId },
+          $push: {
+            transferHistory: {
+              fromSchoolId:      sourceSchoolId,
+              toSchoolId:        targetSchoolId,
+              transferRequestId: transferRecord._id,
+              relievedDate:      new Date(),
+            },
+          },
+        },
+        { session }
+      );
+    }
 
     // 5. Write immutable audit log
     await AuditLog.create(
@@ -178,7 +186,7 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
         actorRole:        requestingActor.role,
         actorDesignation: requestingActor.designation || '',
         actorName:        requestingActor.fullName || '',
-        action:           'TEACHER_TRANSFER_INITIATED',
+        action:           isEmergencyOverride ? 'TEACHER_TRANSFER_EMERGENCY_OVERRIDDEN' : 'TEACHER_TRANSFER_INITIATED',
         targetModel:      'User',
         targetId:         targetTeacher._id,
         targetName:       targetTeacher.fullName,
@@ -192,7 +200,8 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
           schoolId:              targetSchoolId,
           schoolName:            targetSchool.name,
           transferRequestId:     String(transferRecord._id),
-          expiredAssignments:    expiredAssignmentsResult.modifiedCount,
+          status:                initialStatus,
+          expiredAssignments:    expiredAssignmentsCount,
         },
         result:    'SUCCESS',
         reason:    reason.trim(),
@@ -211,8 +220,10 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
     await dispatchNotificationEvent({
       eventType: 'TRANSFER_STATUS',
       category: 'GOVERNANCE',
-      title: 'Faculty Transfer Order Issued',
-      message: `You have been officially transferred to ${targetSchool.name}. Please report to your new institution.`,
+      title: isEmergencyOverride ? 'Emergency Faculty Transfer Executed' : 'Faculty Transfer Order Issued',
+      message: isEmergencyOverride
+        ? `You have been immediately transferred to ${targetSchool.name} under administrative emergency override.`
+        : `A transfer order to ${targetSchool.name} has been initiated. Awaiting Destination HM physical joining approval.`,
       actionLink: '/transfers',
       rawMetadata: {
         transferRequestId: String(transferRecord._id),
@@ -227,9 +238,9 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
     return sendSuccess(
       response,
       201,
-      `Teacher "${targetTeacher.fullName}" transferred to "${targetSchool.name}" successfully. ` +
-      `${expiredAssignmentsResult.modifiedCount} teaching assignment(s) archived. ` +
-      `Destination HM must assign new classes/sections/subjects.`,
+      isEmergencyOverride
+        ? `Teacher "${targetTeacher.fullName}" transferred immediately to "${targetSchool.name}". ${expiredAssignmentsCount} assignment(s) archived.`
+        : `Transfer order for "${targetTeacher.fullName}" issued successfully. Status: Awaiting Destination HM joining approval.`,
       {
         transferRequest: {
           _id:                  transferRecord._id,
@@ -238,7 +249,7 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
           fromSchool:           targetTeacher.schoolId?.name || String(sourceSchoolId),
           toSchool:             targetSchool.name,
           reason:               transferRecord.reason,
-          expiredAssignments:   expiredAssignmentsResult.modifiedCount,
+          expiredAssignments:   expiredAssignmentsCount,
           createdAt:            transferRecord.createdAt,
         },
       }
@@ -275,9 +286,11 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
 
 /**
  * GET /api/v1/transfers
- * List transfer requests with filters: teacherUserId, status, schoolId, limit, skip
+ * List transfer requests with filters: teacherUserId, status, fromSchoolId, toSchoolId, limit, skip
+ * Strictly enforces school boundaries for HM actors.
  */
 export const handleGetTransfers = asyncHandler(async (request, response) => {
+  const actor = request.user;
   const { teacherUserId, status, fromSchoolId, toSchoolId, limit = 50, skip = 0 } = request.query;
 
   const queryFilter = {};
@@ -286,10 +299,16 @@ export const handleGetTransfers = asyncHandler(async (request, response) => {
   if (fromSchoolId && /^[0-9a-fA-F]{24}$/.test(fromSchoolId)) queryFilter.fromSchoolId = fromSchoolId;
   if (toSchoolId   && /^[0-9a-fA-F]{24}$/.test(toSchoolId))   queryFilter.toSchoolId   = toSchoolId;
 
+  // Server-Enforced HM School Jurisdiction Guard
+  if (actor.role === ROLES.HM) {
+    const actorSchoolId = actor.schoolId?._id || actor.schoolId;
+    queryFilter.$or = [{ fromSchoolId: actorSchoolId }, { toSchoolId: actorSchoolId }];
+  }
+
   const transfers = await TransferRequest.find(queryFilter)
     .populate('teacherUserId', 'fullName email designation')
-    .populate('fromSchoolId',  'name schoolCode')
-    .populate('toSchoolId',    'name schoolCode')
+    .populate('fromSchoolId',  'name schoolCode code')
+    .populate('toSchoolId',    'name schoolCode code')
     .populate('initiatedBy',   'fullName role')
     .sort({ createdAt: -1 })
     .limit(Number(limit))
@@ -302,5 +321,189 @@ export const handleGetTransfers = asyncHandler(async (request, response) => {
     transfers,
     total: totalCount,
   });
+});
+
+/**
+ * PATCH /api/v1/transfers/:id/approve-joining
+ * Destination Head Master (HM) certifies physical arrival and approves faculty joining.
+ * Exact State Machine Check: only transfers in AWAITING_DESTINATION_HM can be approved.
+ */
+export const handleApproveJoining = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id } = request.params;
+  const { joiningDate, remarks = '' } = request.body;
+
+  if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
+    return sendError(response, 400, 'Invalid transfer request ID format.');
+  }
+
+  const transferRecord = await TransferRequest.findById(id)
+    .populate('fromSchoolId', 'name schoolCode code')
+    .populate('toSchoolId', 'name schoolCode code')
+    .populate('teacherUserId', 'fullName email schoolId role');
+
+  if (!transferRecord) {
+    return sendError(response, 404, 'Transfer request not found.');
+  }
+
+  // Exact State Machine Check (Guardrail 2)
+  if (transferRecord.status !== TRANSFER_STATUS.AWAITING_DESTINATION_HM) {
+    return sendError(
+      response,
+      400,
+      `Transfer cannot be approved for joining. Current status is "${transferRecord.status}", required status is "${TRANSFER_STATUS.AWAITING_DESTINATION_HM}".`
+    );
+  }
+
+  // Destination HM Boundary Check
+  const destinationSchoolId = String(transferRecord.toSchoolId?._id || transferRecord.toSchoolId);
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== destinationSchoolId) {
+      return sendError(
+        response,
+        403,
+        'Access denied. Only the Destination Head Master (HM) can approve faculty joining for this school.'
+      );
+    }
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const effectiveJoiningDate = joiningDate ? new Date(joiningDate) : new Date();
+
+    // 1. Atomically transition transfer record status from AWAITING_DESTINATION_HM to JOINING_APPROVED
+    // Guarantees that if two concurrent requests attempt approval, exactly ONE succeeds.
+    const updatedTransfer = await TransferRequest.findOneAndUpdate(
+      {
+        _id: transferRecord._id,
+        status: TRANSFER_STATUS.AWAITING_DESTINATION_HM,
+      },
+      {
+        $set: {
+          status: TRANSFER_STATUS.JOINING_APPROVED,
+          destinationHMReview: {
+            reviewedBy: requestingActor._id,
+            reviewedAt: new Date(),
+            joiningDateConfirmed: effectiveJoiningDate,
+            hmRemarks: remarks.trim(),
+          },
+        },
+      },
+      { session, new: true }
+    );
+
+    if (!updatedTransfer) {
+      await session.abortTransaction();
+      session.endSession();
+      return sendError(
+        response,
+        409,
+        'Concurrent modification conflict: This transfer was already processed or is no longer awaiting joining approval.'
+      );
+    }
+
+    // 2. Update User.schoolId to destination school
+    await User.findByIdAndUpdate(
+      transferRecord.teacherUserId._id,
+      { $set: { schoolId: transferRecord.toSchoolId._id } },
+      { session }
+    );
+
+    // 3. Expire all active teaching assignments at the old school
+    const expiredAssignmentsResult = await TeachingAssignment.updateMany(
+      {
+        teacherId: transferRecord.teacherUserId._id,
+        schoolId: transferRecord.fromSchoolId._id,
+        status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+      },
+      {
+        $set: {
+          status: TEACHING_ASSIGNMENT_STATUS.TRANSFERRED,
+          effectiveTo: effectiveJoiningDate,
+          remarks: `Auto-expired on approved transfer joining at ${transferRecord.toSchoolId.name}. Transfer ID: ${transferRecord._id}`,
+        },
+      },
+      { session }
+    );
+
+    // 4. Sync TeacherProfile: update currentSchoolId + append transferHistory
+    await TeacherProfile.findOneAndUpdate(
+      { userId: transferRecord.teacherUserId._id },
+      {
+        $set: { currentSchoolId: transferRecord.toSchoolId._id },
+        $push: {
+          transferHistory: {
+            fromSchoolId: transferRecord.fromSchoolId._id,
+            toSchoolId: transferRecord.toSchoolId._id,
+            transferRequestId: transferRecord._id,
+            relievedDate: transferRecord.createdAt,
+            joiningDate: effectiveJoiningDate,
+          },
+        },
+      },
+      { session }
+    );
+
+    // 5. Immutable Audit Log
+    await AuditLog.create(
+      [{
+        actorId: requestingActor._id,
+        actorRole: requestingActor.role,
+        actorDesignation: requestingActor.designation || '',
+        actorName: requestingActor.fullName || '',
+        action: 'TEACHER_JOINING_CONFIRMED',
+        targetModel: 'TransferRequest',
+        targetId: transferRecord._id,
+        targetName: transferRecord.teacherUserId.fullName,
+        schoolId: transferRecord.toSchoolId._id,
+        previousState: {
+          status: TRANSFER_STATUS.AWAITING_DESTINATION_HM,
+          schoolId: String(transferRecord.fromSchoolId._id),
+          schoolName: transferRecord.fromSchoolId.name,
+        },
+        newState: {
+          status: TRANSFER_STATUS.JOINING_APPROVED,
+          schoolId: String(transferRecord.toSchoolId._id),
+          schoolName: transferRecord.toSchoolId.name,
+          joiningDate: effectiveJoiningDate,
+          expiredAssignments: expiredAssignmentsResult.modifiedCount,
+        },
+        result: 'SUCCESS',
+        reason: remarks.trim() || `Joining confirmed by Destination ${requestingActor.role}`,
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+      }],
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // 6. Notify teacher
+    await dispatchNotificationEvent({
+      eventType: 'TRANSFER_STATUS',
+      category: 'GOVERNANCE',
+      title: 'Faculty Joining Approved',
+      message: `Your physical arrival at ${transferRecord.toSchoolId.name} has been verified and approved by the Head Master.`,
+      actionLink: '/transfers',
+      rawMetadata: {
+        transferRequestId: String(transferRecord._id),
+        joiningDate: effectiveJoiningDate.toISOString(),
+      },
+      recipientUserIds: [String(transferRecord.teacherUserId._id)],
+    });
+
+    return sendSuccess(response, 200, 'Faculty joining approved and records activated successfully.', {
+      transferRequest: updatedTransfer,
+      expiredAssignments: expiredAssignmentsResult.modifiedCount,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    return sendError(response, 500, `Joining approval failed: ${error.message}`);
+  }
 });
 

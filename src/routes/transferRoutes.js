@@ -1,5 +1,9 @@
 import express from 'express';
-import { handleInitiateTransfer, handleGetTransfers } from '../controllers/transferController.js';
+import {
+  handleInitiateTransfer,
+  handleGetTransfers,
+  handleApproveJoining,
+} from '../controllers/transferController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
@@ -23,6 +27,14 @@ router.post(
   authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.USERS_SUSPEND), // governance-level action
   handleInitiateTransfer
+);
+
+// ─── Destination HM Approves Joining ───────────────────────────────────────────
+router.patch(
+  '/:id/approve-joining',
+  authorizeRoles(ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
+  authorizePermissions(PERMISSIONS.TRANSFERS_APPROVE_JOINING),
+  handleApproveJoining
 );
 
 export default router;

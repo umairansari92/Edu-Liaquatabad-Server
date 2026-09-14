@@ -6,6 +6,8 @@ import {
   handleGetAttendanceRegister,
   handleGetMonthlySummary,
   handleGetAttendanceWindowStatus,
+  handleVerifyAttendance,
+  handleUploadAttendanceSheet,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -52,6 +54,22 @@ router.post(
   "/submit",
   authorizePermissions(PERMISSIONS.ATTENDANCE_MARK),
   handleSubmitAttendance
+);
+
+// ─── PATCH Verify Attendance Record ───────────────────────────────────────────
+// Head Master / Supervisor signs off and verifies daily attendance.
+router.patch(
+  "/:id/verify",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
+  handleVerifyAttendance
+);
+
+// ─── POST Upload Paper Attendance Sheet Image ─────────────────────────────────
+// Records paper attendance register image snapshot.
+router.post(
+  "/upload-sheet",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
+  handleUploadAttendanceSheet
 );
 
 // ─── GET Monthly Attendance Register (official P/A/L grid) ───────────────────

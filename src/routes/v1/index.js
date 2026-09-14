@@ -19,6 +19,8 @@ import homeworkRoutes from '../homeworkRoutes.js';
 import holidayRoutes from '../holidayRoutes.js';
 import announcementRoutes from '../announcementRoutes.js';
 import notificationRoutes from '../notificationRoutes.js';
+import examRoutes from '../examRoutes.js';
+import documentRoutes from '../documentRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -85,6 +87,12 @@ router.use('/announcements', announcementRoutes);
 
 // Central In-App Notifications & PDF Consent Actions
 router.use('/notifications', notificationRoutes);
+
+// Examination schedules & student marks verification
+router.use('/exams', examRoutes);
+
+// Official Documents, circulars & school notices
+router.use('/documents', documentRoutes);
 
 export default router;
 
