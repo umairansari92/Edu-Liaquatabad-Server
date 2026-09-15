@@ -47,7 +47,7 @@ async function runAuthSuite() {
   console.log('--- 1. Password Hashing & Pepper Verification ---');
   const plainPassword = 'AdminSecret@2026';
   const hashed = await hashPassword(plainPassword);
-  assert(hashed !== plainPassword, 'Password is salted and hashed (Bcrypt cost 12)');
+  assert(hashed !== plainPassword, 'Password is salted and hashed (Argon2id + pepper)');
   assert(await verifyPassword(plainPassword, hashed), 'Password matches when verified with server PEPPER');
   assert(!(await verifyPassword('WrongPassword123', hashed)), 'Wrong password correctly rejected');
 

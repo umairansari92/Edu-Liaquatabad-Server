@@ -5,7 +5,7 @@ import { isDisposableEmail } from '../utils/disposableEmailValidator.js';
 import { verifyMathCaptcha, generateMathCaptcha } from '../utils/customMathCaptcha.js';
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import { checkEmailLockout, recordFailedLogin, clearLoginLockout } from '../middlewares/tripleLockRateLimiter.js';
-import { hashPassword, verifyPassword } from '../utils/passwordUtils.js';
+import { hashPassword, verifyPassword, needsPasswordRehash } from '../utils/passwordUtils.js';
 import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken, hashToken } from '../utils/tokenUtils.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
@@ -725,6 +725,24 @@ export const handleResubmitCorrection = asyncHandler(async (request, response) =
     return sendError(response, 401, 'Invalid credentials.');
   }
 
+  // Opportunistic Password Migration: Rehash legacy bcrypt or suboptimal hashes using atomic conditional update
+  if (needsPasswordRehash(user.passwordHash)) {
+    try {
+      const verifiedLegacyHash = user.passwordHash;
+      const newArgon2idHash = await hashPassword(password);
+      const updateResult = await User.findOneAndUpdate(
+        { _id: user._id, passwordHash: verifiedLegacyHash },
+        { $set: { passwordHash: newArgon2idHash } },
+        { new: true }
+      );
+      if (updateResult) {
+        user.passwordHash = newArgon2idHash;
+      }
+    } catch (migrationError) {
+      console.error('[SECURITY WARNING] Opportunistic password migration failed during correction resubmission:', migrationError.message);
+    }
+  }
+
   if (user.status !== USER_STATUS.REQUIRES_CORRECTION) {
     return sendError(response, 400, `Account is in ${user.status} state, not REQUIRES_CORRECTION.`);
   }
@@ -848,6 +866,26 @@ export const handleLogin = asyncHandler(async (request, response) => {
 
   // 5. Password Verified — Clear Lockout Counters
   await clearLoginLockout(normalizedEmail);
+
+  // Opportunistic Password Migration: Transparently upgrade legacy bcrypt or suboptimal hashes
+  // Uses atomic conditional update matching verified legacy hash to guarantee race condition safety
+  if (needsPasswordRehash(user.passwordHash)) {
+    try {
+      const verifiedLegacyHash = user.passwordHash;
+      const newArgon2idHash = await hashPassword(password);
+      const updateResult = await User.findOneAndUpdate(
+        { _id: user._id, passwordHash: verifiedLegacyHash },
+        { $set: { passwordHash: newArgon2idHash } },
+        { new: true }
+      );
+      if (updateResult) {
+        user.passwordHash = newArgon2idHash;
+      }
+    } catch (migrationError) {
+      // Opportunistic migration failure must fail-open for user session without aborting legitimate login
+      console.error('[SECURITY WARNING] Opportunistic password migration failed:', migrationError.message);
+    }
+  }
 
   // 6. Account Lifecycle Status Verification
   if (user.status === USER_STATUS.PENDING_APPROVAL) {
