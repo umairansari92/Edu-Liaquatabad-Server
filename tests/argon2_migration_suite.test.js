@@ -72,7 +72,7 @@ async function runArgon2MigrationSuite() {
   console.log('--- 1. New Argon2id Password Creation ---');
   const argonHash1 = await hashPassword(testPassword);
   assert(isArgon2idHash(argonHash1), 'Generated hash matches Argon2id format ($argon2id$)');
-  assert(argonHash1.startsWith('$argon2id$v=19$m=19456,t=2,p=1$'), 'Hash matches OWASP 2026 parameters (m=19456, t=2, p=1)');
+  assert(argonHash1.startsWith('$argon2id$v=19$m=19456,t=2,p=1$'), 'Hash matches OWASP-aligned baseline parameters (m=19456, t=2, p=1)');
   assert(!argonHash1.includes(testPassword), 'Hash never includes raw plaintext password');
 
   // Salt uniqueness check

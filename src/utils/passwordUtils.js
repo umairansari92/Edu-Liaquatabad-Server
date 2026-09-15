@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { hash as argon2Hash, verify as argon2Verify, parseOptions, Algorithm } from '@node-rs/argon2';
 
 /**
- * OWASP 2026 Recommended Baseline Parameters for Argon2id
+ * OWASP-Aligned Recommended Baseline Parameters for Argon2id
  * - Memory cost: 19456 KiB (~19 MiB)
  * - Time cost / Iterations: 2 passes
  * - Parallelism: 1 thread
