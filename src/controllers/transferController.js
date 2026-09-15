@@ -405,25 +405,32 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
       );
     }
 
+    const targetTeacherUserId = transferRecord.teacherUserId?._id || transferRecord.teacherUserId;
+    const sourceSchoolId = transferRecord.fromSchoolId?._id || transferRecord.fromSchoolId;
+    const targetSchoolId = transferRecord.toSchoolId?._id || transferRecord.toSchoolId;
+    const sourceSchoolName = transferRecord.fromSchoolId?.name || 'Previous School';
+    const targetSchoolName = transferRecord.toSchoolId?.name || 'New School';
+    const targetTeacherName = transferRecord.teacherUserId?.fullName || 'Faculty Member';
+
     // 2. Update User.schoolId to destination school
     await User.findByIdAndUpdate(
-      transferRecord.teacherUserId._id,
-      { $set: { schoolId: transferRecord.toSchoolId._id } },
+      targetTeacherUserId,
+      { $set: { schoolId: targetSchoolId } },
       { session }
     );
 
     // 3. Expire all active teaching assignments at the old school
     const expiredAssignmentsResult = await TeachingAssignment.updateMany(
       {
-        teacherId: transferRecord.teacherUserId._id,
-        schoolId: transferRecord.fromSchoolId._id,
+        teacherId: targetTeacherUserId,
+        schoolId: sourceSchoolId,
         status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
       },
       {
         $set: {
           status: TEACHING_ASSIGNMENT_STATUS.TRANSFERRED,
           effectiveTo: effectiveJoiningDate,
-          remarks: `Auto-expired on approved transfer joining at ${transferRecord.toSchoolId.name}. Transfer ID: ${transferRecord._id}`,
+          remarks: `Auto-expired on approved transfer joining at ${targetSchoolName}. Transfer ID: ${transferRecord._id}`,
         },
       },
       { session }
@@ -431,13 +438,13 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
 
     // 4. Sync TeacherProfile: update currentSchoolId + append transferHistory
     await TeacherProfile.findOneAndUpdate(
-      { userId: transferRecord.teacherUserId._id },
+      { userId: targetTeacherUserId },
       {
-        $set: { currentSchoolId: transferRecord.toSchoolId._id },
+        $set: { currentSchoolId: targetSchoolId },
         $push: {
           transferHistory: {
-            fromSchoolId: transferRecord.fromSchoolId._id,
-            toSchoolId: transferRecord.toSchoolId._id,
+            fromSchoolId: sourceSchoolId,
+            toSchoolId: targetSchoolId,
             transferRequestId: transferRecord._id,
             relievedDate: transferRecord.createdAt,
             joiningDate: effectiveJoiningDate,
@@ -457,17 +464,17 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
         action: 'TEACHER_JOINING_CONFIRMED',
         targetModel: 'TransferRequest',
         targetId: transferRecord._id,
-        targetName: transferRecord.teacherUserId.fullName,
-        schoolId: transferRecord.toSchoolId._id,
+        targetName: targetTeacherName,
+        schoolId: targetSchoolId,
         previousState: {
           status: TRANSFER_STATUS.AWAITING_DESTINATION_HM,
-          schoolId: String(transferRecord.fromSchoolId._id),
-          schoolName: transferRecord.fromSchoolId.name,
+          schoolId: String(sourceSchoolId),
+          schoolName: sourceSchoolName,
         },
         newState: {
           status: TRANSFER_STATUS.JOINING_APPROVED,
-          schoolId: String(transferRecord.toSchoolId._id),
-          schoolName: transferRecord.toSchoolId.name,
+          schoolId: String(targetSchoolId),
+          schoolName: targetSchoolName,
           joiningDate: effectiveJoiningDate,
           expiredAssignments: expiredAssignmentsResult.modifiedCount,
         },
@@ -487,13 +494,13 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
       eventType: 'TRANSFER_STATUS',
       category: 'GOVERNANCE',
       title: 'Faculty Joining Approved',
-      message: `Your physical arrival at ${transferRecord.toSchoolId.name} has been verified and approved by the Head Master.`,
+      message: `Your physical arrival at ${targetSchoolName} has been verified and approved by the Head Master.`,
       actionLink: '/transfers',
       rawMetadata: {
         transferRequestId: String(transferRecord._id),
         joiningDate: effectiveJoiningDate.toISOString(),
       },
-      recipientUserIds: [String(transferRecord.teacherUserId._id)],
+      recipientUserIds: [String(targetTeacherUserId)],
     });
 
     return sendSuccess(response, 200, 'Faculty joining approved and records activated successfully.', {
