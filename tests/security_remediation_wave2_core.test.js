@@ -258,6 +258,24 @@ async function runSecurityRemediationSuite() {
     }
   }
 
+  // Explicit Fail-Closed Test: Verify that in-memory fallback is strictly blocked in production
+  const prevEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    // Mongoose is disconnected here
+    const prodCaptcha = generateMathCaptcha();
+    const prodMatch = prodCaptcha.question.match(/(\d+)\s*\+\s*(\d+)/);
+    const prodAnswer = parseInt(prodMatch[1], 10) + parseInt(prodMatch[2], 10);
+
+    const failClosedResult = await verifyMathCaptchaAsync(prodAnswer, prodCaptcha.challengeToken);
+    testAssert(
+      failClosedResult === false,
+      'SEC-HIGH-03: In production, verifyMathCaptchaAsync strictly fails closed (in-memory fallback is refused if DB is disconnected)'
+    );
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+  }
+
   console.log('\n==============================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} SECURITY REMEDIATION TESTS PASSED PERFECTLY!`);
   console.log('   ✅ SEC-CRIT-01: Root Admin Invariant Protection');

@@ -154,8 +154,18 @@ export const verifyMathCaptchaAsync = async (userAnswer, challengeToken) => {
       return false;
     }
 
-    // 3. Distributed persistent replay check (SEC-HIGH-03)
-    if (mongoose.connection && mongoose.connection.readyState === 1) {
+    // 3. SEC-HIGH-03 Production Invariant: Explicit Fail-Closed Gating
+    const isProduction = process.env.NODE_ENV === 'production';
+    const isDbConnected = Boolean(mongoose.connection && mongoose.connection.readyState === 1);
+
+    if (isProduction && !isDbConnected) {
+      // In production, distributed persistence is mandatory; fail-closed immediately if DB is unreachable.
+      // In-memory fallback is strictly prohibited in production to prevent multi-container replay.
+      return false;
+    }
+
+    // 4. Distributed persistent replay check in MongoDB
+    if (isDbConnected) {
       const existingNonce = await CaptchaNonce.findOne({ nonce }).lean();
       if (existingNonce) {
         consumedNonces.set(nonce, expiry);
@@ -163,7 +173,7 @@ export const verifyMathCaptchaAsync = async (userAnswer, challengeToken) => {
       }
     }
 
-    // 4. Verify cryptographic envelope signature
+    // 5. Verify cryptographic envelope signature
     const expectedPayload = `${nonce}:${expiryStr}:${expectedAnswerHash}`;
     const calculatedSignature = crypto
       .createHmac('sha256', CAPTCHA_SECRET)
@@ -174,7 +184,7 @@ export const verifyMathCaptchaAsync = async (userAnswer, challengeToken) => {
       return false;
     }
 
-    // 5. Verify mathematical answer via HMAC comparison (Timing-Safe)
+    // 6. Verify mathematical answer via HMAC comparison (Timing-Safe)
     const numericAnswer = parseInt(String(userAnswer).trim(), 10);
     if (isNaN(numericAnswer)) return false;
 
@@ -190,22 +200,23 @@ export const verifyMathCaptchaAsync = async (userAnswer, challengeToken) => {
       return false;
     }
 
-    // 6. Mark nonce as consumed in memory
+    // 7. Mark nonce as consumed in memory
     consumedNonces.set(nonce, expiry);
 
-    // 7. Atomically persist nonce in MongoDB with unique constraint
-    if (mongoose.connection && mongoose.connection.readyState === 1) {
+    // 8. Atomically persist nonce in MongoDB with unique constraint
+    if (isDbConnected) {
       try {
         await CaptchaNonce.create({
           nonce,
           expiresAt: new Date(expiry),
         });
       } catch (dbError) {
-        if (dbError.code === 11000) {
-          // Replay caught by MongoDB unique index constraint
-          return false;
-        }
+        // Replay caught by unique index constraint (E11000) or DB write failure: strictly fail-closed
+        return false;
       }
+    } else if (isProduction) {
+      // In production, failure to persist to MongoDB is a fatal invariant breach
+      return false;
     }
 
     return true;
