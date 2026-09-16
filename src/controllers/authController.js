@@ -7,7 +7,7 @@ import { verifyMathCaptcha, generateMathCaptcha } from '../utils/customMathCaptc
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import { checkEmailLockout, recordFailedLogin, clearLoginLockout } from '../middlewares/tripleLockRateLimiter.js';
 import { hashPassword, verifyPassword, needsPasswordRehash } from '../utils/passwordUtils.js';
-import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken, hashToken, parseDeviceLabel } from '../utils/tokenUtils.js';
+import { signAccessToken, signRefreshToken, signMfaPendingToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken, hashToken, parseDeviceLabel } from '../utils/tokenUtils.js';
 
 // Multi-Device Refresh Token Rotation (RTR) Configuration
 const MAX_ACTIVE_SESSIONS = 5;
@@ -845,15 +845,15 @@ export const handleLogin = asyncHandler(async (request, response) => {
     }
   }
 
-  // 3. User Lookup (including passwordHash, refreshTokenHash, activeSessions & tokenVersion)
-  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +activeSessions +tokenVersion');
+  // 3. User Lookup (including passwordHash, activeSessions, tokenVersion & mfa.enabled)
+  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +activeSessions +tokenVersion +mfa.enabled');
 
   if (!user && !normalizedEmail.includes('@')) {
     const parsedGrNumber = parseInt(normalizedEmail.replace(/\D/g, ''), 10);
     const grNumberQuery = parsedGrNumber ? { $in: [parsedGrNumber, normalizedEmail] } : normalizedEmail;
     const studentProfile = await StudentProfile.findOne({ grNumber: grNumberQuery });
     if (studentProfile) {
-      user = await User.findById(studentProfile.userId).select('+passwordHash +refreshTokenHash +activeSessions +tokenVersion');
+      user = await User.findById(studentProfile.userId).select('+passwordHash +activeSessions +tokenVersion +mfa.enabled');
     }
   }
 
@@ -919,7 +919,47 @@ export const handleLogin = asyncHandler(async (request, response) => {
     return sendError(response, 403, 'This account is inactive.');
   }
 
-  // 7. Generate JWT Tokens with Authoritative Claims
+  // 7. Check Multi-Factor Authentication (MFA) Policy
+  // MANDATE: Root Admin MFA is unconditional by authorization policy (even if mfa.enabled is false/missing).
+  const isRootAdmin = user.role === ROLES.ROOT_ADMIN;
+  const isMfaEnrolled = user.mfa?.enabled === true;
+
+  if (isRootAdmin || isMfaEnrolled) {
+    const mfaPendingToken = signMfaPendingToken({
+      userId: user._id,
+      role: user.role,
+      tokenVersion: user.tokenVersion || 0,
+      requiresSetup: isRootAdmin && !isMfaEnrolled,
+    });
+
+    await AuditLog.create({
+      actorId: user._id,
+      actorRole: user.role,
+      actorDesignation: user.designation || '',
+      actorName: user.fullName,
+      action: isRootAdmin && !isMfaEnrolled ? 'MFA_SETUP_REQUIRED' : 'MFA_CHALLENGE_ISSUED',
+      targetModel: 'User',
+      targetId: user._id,
+      targetName: user.fullName,
+      townId: user.townId,
+      schoolId: user.schoolId || null,
+      result: 'SUCCESS',
+      ipAddress: clientIp,
+      userAgent: request.headers['user-agent'] || '',
+      requestId: request.headers['x-request-id'] || '',
+    });
+
+    return sendSuccess(response, 200, isRootAdmin && !isMfaEnrolled
+      ? 'Root Admin Multi-Factor Authentication setup required. Please enroll an authenticator app.'
+      : 'Multi-Factor Authentication code required.', {
+      mfaRequired: true,
+      setupRequired: isRootAdmin && !isMfaEnrolled,
+      mfaPendingToken,
+      mfaType: 'TOTP',
+    });
+  }
+
+  // 8. Generate JWT Tokens with Authoritative Claims
   const permissions = getEffectivePermissions(user);
   const roleLevel = ROLE_HIERARCHY[user.role] || 0;
 
@@ -936,6 +976,7 @@ export const handleLogin = asyncHandler(async (request, response) => {
     townId: user.townId,
     schoolId: user.schoolId,
     assignedSchools: user.assignedSchools || [],
+    mfaVerified: true,
   };
 
   // 8. Multi-Device Session Generation (Unique sessionId & tokenFamilyId per login)
@@ -977,8 +1018,6 @@ export const handleLogin = asyncHandler(async (request, response) => {
     lastUsedAt: new Date(),
   });
 
-  // Maintain legacy field for backward compatibility
-  user.refreshTokenHash = hashedRefreshToken;
   user.lastLoginAt = new Date();
   await user.save();
 
@@ -1169,7 +1208,6 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
 
   // 2. Global session invalidation (active attack containment)
   user.tokenVersion = (user.tokenVersion || 0) + 1;
-  user.refreshTokenHash = null;
   await user.save();
 
   clearRefreshCookie(response);
@@ -1240,7 +1278,7 @@ export const handleLogout = asyncHandler(async (request, response) => {
 
   if (request.user && (request.user.userId || request.user._id)) {
     const targetUserId = request.user.userId || request.user._id;
-    const user = await User.findById(targetUserId).select('+activeSessions +refreshTokenHash');
+    const user = await User.findById(targetUserId).select('+activeSessions');
 
     if (user) {
       if (callerSessionId && Array.isArray(user.activeSessions)) {
@@ -1251,9 +1289,6 @@ export const handleLogout = asyncHandler(async (request, response) => {
         user.activeSessions.pop();
       }
 
-      if (!user.activeSessions || user.activeSessions.length === 0) {
-        user.refreshTokenHash = null;
-      }
       await user.save();
     }
 

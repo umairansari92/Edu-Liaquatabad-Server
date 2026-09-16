@@ -1,4 +1,5 @@
 import express from 'express';
+import mfaRoutes from './mfaRoutes.js';
 import {
   handleGetCaptcha,
   handleSendOtp,
@@ -62,6 +63,9 @@ router.post('/logout', authenticate, handleLogout);
 // ─── Multi-Device Session Management ──────────────────────────────────────────
 router.get('/sessions', authenticate, handleGetActiveSessions);
 router.delete('/sessions/:sessionId', authenticate, handleTerminateSession);
+
+// ─── Multi-Factor Authentication (MFA) ────────────────────────────────────────
+router.use('/mfa', mfaRoutes);
 
 router.get('/me', authenticate, handleGetMe);
 

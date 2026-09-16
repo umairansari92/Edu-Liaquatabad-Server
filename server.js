@@ -20,6 +20,21 @@ import v1Routes from './src/routes/v1/index.js';
 
 dotenv.config();
 
+// ─── Production Fail-Closed Security Validation ──────────────────────────────
+if (process.env.NODE_ENV === 'production') {
+  const missingCriticalVars = [];
+  if (!process.env.MFA_ENCRYPTION_KEY) missingCriticalVars.push('MFA_ENCRYPTION_KEY');
+  if (!process.env.JWT_MFA_PENDING_SECRET) missingCriticalVars.push('JWT_MFA_PENDING_SECRET');
+  if (!process.env.JWT_ACCESS_SECRET) missingCriticalVars.push('JWT_ACCESS_SECRET');
+  if (!process.env.JWT_REFRESH_SECRET) missingCriticalVars.push('JWT_REFRESH_SECRET');
+  if (!process.env.PASSWORD_PEPPER) missingCriticalVars.push('PASSWORD_PEPPER');
+
+  if (missingCriticalVars.length > 0) {
+    logger.error(`FATAL PRODUCTION SECURITY ERROR: Missing required environment variable(s): ${missingCriticalVars.join(', ')}`);
+    process.exit(1);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 

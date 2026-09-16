@@ -122,6 +122,45 @@ export const refreshTokenLimiter = rateLimit({
   },
 });
 
+// Dedicated MFA Verification Limiter (Strict protection against 6-digit TOTP guessing)
+export const mfaVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 50 : 5, // 5 attempts per 15 min in prod
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many invalid MFA verification attempts. Please wait 15 minutes before trying again.',
+  },
+});
+
+// Dedicated MFA Emergency Recovery Limiter
+export const mfaRecoveryLimiter = rateLimit({
+  windowMs: 30 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 30 : 3, // 3 attempts per 30 min in prod
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many recovery code attempts. Please wait 30 minutes before trying again.',
+  },
+});
+
+// Dedicated MFA Setup Limiter
+export const mfaSetupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 50 : 5, // 5 requests per hour in prod
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many MFA configuration requests. Please try again in an hour.',
+  },
+});
+
 /**
  * Lock 3: Account-Centric Global Brute-Force Lockout (MongoDB-Backed)
  * Survives Serverless Cold Starts on Vercel

@@ -1,6 +1,6 @@
 import { verifyAccessToken } from '../utils/tokenUtils.js';
 import { sendError } from '../utils/apiResponse.js';
-import { USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import { USER_STATUS, ROLE_HIERARCHY, ROLES } from '../../config/constants.js';
 import { getEffectivePermissions } from '../config/permissions.js';
 import User from '../models/User.js';
 
@@ -17,12 +17,12 @@ export const authenticate = async (request, response, nextFunction) => {
     const bearerToken = authorizationHeader.split(' ')[1];
     const decodedTokenPayload = verifyAccessToken(bearerToken);
 
-    if (!decodedTokenPayload || !decodedTokenPayload.userId) {
-      return sendError(response, 401, 'Invalid or expired session token.');
+    if (decodedTokenPayload.tokenType === 'MFA_PENDING') {
+      return sendError(response, 401, 'Intermediate MFA authentication ticket cannot access application endpoints.');
     }
 
     // Verify current authoritative user status & token version in MongoDB
-    const authenticatedUser = await User.findById(decodedTokenPayload.userId).select('+tokenVersion');
+    const authenticatedUser = await User.findById(decodedTokenPayload.userId).select('+tokenVersion +mfa.enabled');
     if (!authenticatedUser) {
       return sendError(response, 401, 'User account not found.');
     }
@@ -58,6 +58,8 @@ export const authenticate = async (request, response, nextFunction) => {
       assignedSchools: authenticatedUser.assignedSchools || [],
       permissions: effectivePermissions,
       tokenVersion: authenticatedUser.tokenVersion,
+      mfaVerified: decodedTokenPayload.mfaVerified === true,
+      mfaEnforced: authenticatedUser.role === ROLES.ROOT_ADMIN || authenticatedUser.mfa?.enabled === true,
     };
 
     nextFunction();

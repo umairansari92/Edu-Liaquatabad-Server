@@ -12,6 +12,39 @@ const ActiveSessionSchema = new mongoose.Schema({
   lastUsedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
+const MfaRecoveryCodeSchema = new mongoose.Schema({
+  codeHash: { type: String, required: true },
+  usedAt: { type: Date, default: null },
+}, { _id: true });
+
+const MfaSchema = new mongoose.Schema({
+  enabled: { type: Boolean, default: false },
+  enrolledAt: { type: Date, default: null },
+  lastUsedAt: { type: Date, default: null },
+  lastConsumedWindow: { type: Number, default: 0 },
+  secretCiphertext: { type: String, select: false },
+  secretIv: { type: String, select: false },
+  secretTag: { type: String, select: false },
+  pendingSecret: {
+    ciphertext: { type: String, select: false },
+    iv: { type: String, select: false },
+    tag: { type: String, select: false },
+    expiresAt: { type: Date, select: false },
+  },
+  recoveryCodes: { type: [MfaRecoveryCodeSchema], select: false, default: [] },
+  webAuthnCredentials: {
+    type: [{
+      credentialId: { type: String, required: true },
+      publicKey: { type: String, required: true },
+      counter: { type: Number, default: 0 },
+      deviceLabel: { type: String },
+      createdAt: { type: Date, default: Date.now },
+    }],
+    select: false,
+    default: [],
+  },
+}, { _id: false });
+
 const UserSchema = new mongoose.Schema({
   organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
   townId: { type: mongoose.Schema.Types.ObjectId, ref: 'Town', index: true },
@@ -81,6 +114,7 @@ const UserSchema = new mongoose.Schema({
   lastLoginAt: { type: Date },
   refreshTokenHash: { type: String, select: false },
   activeSessions: { type: [ActiveSessionSchema], default: [], select: false },
+  mfa: { type: MfaSchema, default: () => ({}) },
 }, { timestamps: true });
 
 // Virtual to easily read numerical hierarchy level

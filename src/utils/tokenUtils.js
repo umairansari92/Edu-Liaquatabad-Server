@@ -26,6 +26,17 @@ const getRefreshSecret = () => {
   return secret;
 };
 
+const getMfaPendingSecret = () => {
+  const secret = process.env.JWT_MFA_PENDING_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('FATAL SECURITY ERROR: JWT_MFA_PENDING_SECRET is required in production.');
+    }
+    return 'dev_fallback_mfa_pending_secret_min_32_chars';
+  }
+  return secret;
+};
+
 export const signAccessToken = (payload) => {
   return jwt.sign(payload, getAccessSecret(), {
     algorithm: 'HS256',
@@ -44,12 +55,34 @@ export const signRefreshToken = (payload) => {
   });
 };
 
+export const signMfaPendingToken = (payload) => {
+  return jwt.sign(
+    {
+      ...payload,
+      tokenType: 'MFA_PENDING',
+    },
+    getMfaPendingSecret(),
+    {
+      algorithm: 'HS256',
+      expiresIn: '5m', // Short-lived 5-minute boundary
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    }
+  );
+};
+
 export const verifyAccessToken = (token) => {
-  return jwt.verify(token, getAccessSecret(), {
+  const decoded = jwt.verify(token, getAccessSecret(), {
     algorithms: ['HS256'],
     issuer: JWT_ISSUER,
     audience: JWT_AUDIENCE,
   });
+
+  if (decoded && decoded.tokenType === 'MFA_PENDING') {
+    throw new Error('Security Error: Intermediate MFA token cannot be used as an access token');
+  }
+
+  return decoded;
 };
 
 export const verifyRefreshToken = (token) => {
@@ -58,6 +91,20 @@ export const verifyRefreshToken = (token) => {
     issuer: JWT_ISSUER,
     audience: JWT_AUDIENCE,
   });
+};
+
+export const verifyMfaPendingToken = (token) => {
+  const decoded = jwt.verify(token, getMfaPendingSecret(), {
+    algorithms: ['HS256'],
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
+
+  if (!decoded || decoded.tokenType !== 'MFA_PENDING') {
+    throw new Error('Security Error: Invalid token type for MFA pending ticket');
+  }
+
+  return decoded;
 };
 
 /**

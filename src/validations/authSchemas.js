@@ -285,3 +285,27 @@ export const passwordResetConfirmSchema = z
     message: 'Passwords do not match.',
     path: ['confirmPassword'],
   });
+
+// ─── Multi-Factor Authentication (MFA) Schemas ────────────────────────────────
+export const mfaConfirmSetupSchema = z.object({
+  totpCode: z.string().trim().regex(/^\d{6}$/, 'Authentication code must be exactly 6 digits.'),
+});
+
+export const mfaVerifyLoginSchema = z.object({
+  totpCode: z.string().trim().regex(/^\d{6}$/, 'Authentication code must be exactly 6 digits.'),
+  mfaPendingToken: z.string().trim().optional(),
+});
+
+export const mfaRecoveryLoginSchema = z.object({
+  recoveryCode: z.string().trim().min(16, 'Recovery code must be 16 characters (e.g. ABCD-EFGH-1234-5678).').max(25),
+  mfaPendingToken: z.string().trim().optional(),
+});
+
+export const mfaStepUpPasswordSchema = z.object({
+  password: z.string().min(1, 'Password confirmation is required for this operation.').max(128),
+});
+
+export const adminMfaResetSchema = z.object({
+  reason: safeString(300, 5, 'A clear justification reason (minimum 5 characters) is mandatory for resetting MFA.'),
+});
+
