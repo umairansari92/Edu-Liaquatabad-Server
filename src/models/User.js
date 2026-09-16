@@ -26,10 +26,13 @@ const MfaSchema = new mongoose.Schema({
   secretIv: { type: String, select: false },
   secretTag: { type: String, select: false },
   pendingSecret: {
-    ciphertext: { type: String, select: false },
-    iv: { type: String, select: false },
-    tag: { type: String, select: false },
-    expiresAt: { type: Date, select: false },
+    type: new mongoose.Schema({
+      ciphertext: { type: String },
+      iv: { type: String },
+      tag: { type: String },
+      expiresAt: { type: Date },
+    }, { _id: false }),
+    select: false,
   },
   recoveryCodes: { type: [MfaRecoveryCodeSchema], select: false, default: [] },
   webAuthnCredentials: {

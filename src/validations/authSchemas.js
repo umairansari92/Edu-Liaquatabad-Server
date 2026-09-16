@@ -88,8 +88,12 @@ const loginIdentifierField = z
 export const loginSchema = z.object({
   email: loginIdentifierField,
   password: z.string().min(1, 'Password is required').max(128, 'Password too long'),
-  captchaAnswer: z.union([z.string(), z.number()]).optional(),
-  captchaChallengeToken: z.string().trim().optional(),
+  captchaAnswer: process.env.NODE_ENV === 'production'
+    ? z.union([z.string(), z.number()]).refine((val) => String(val).trim().length > 0, 'CAPTCHA answer is required.')
+    : z.union([z.string(), z.number()]).optional(),
+  captchaChallengeToken: process.env.NODE_ENV === 'production'
+    ? z.string().trim().min(1, 'CAPTCHA challenge token is required.')
+    : z.string().trim().optional(),
   _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
 });
 
@@ -289,6 +293,7 @@ export const passwordResetConfirmSchema = z
 // ─── Multi-Factor Authentication (MFA) Schemas ────────────────────────────────
 export const mfaConfirmSetupSchema = z.object({
   totpCode: z.string().trim().regex(/^\d{6}$/, 'Authentication code must be exactly 6 digits.'),
+  mfaPendingToken: z.string().trim().optional(),
 });
 
 export const mfaVerifyLoginSchema = z.object({

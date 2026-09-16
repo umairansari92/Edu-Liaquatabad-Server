@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
+import CaptchaNonce from '../models/CaptchaNonce.js';
 
 const CAPTCHA_SECRET = process.env.JWT_ACCESS_SECRET || 'liaquatabad_dmc_math_captcha_secret_2026';
 
@@ -49,8 +51,8 @@ export const generateMathCaptcha = () => {
 };
 
 /**
- * Validates the user's submitted CAPTCHA answer against the signed token.
- * Enforces single-use nonce tracking and constant-time hash comparison.
+ * Synchronously validates user's submitted CAPTCHA answer.
+ * Enforces memory nonce tracking and triggers background persistent storage.
  *
  * @param {number|string} userAnswer 
  * @param {string} challengeToken 
@@ -74,7 +76,7 @@ export const verifyMathCaptcha = (userAnswer, challengeToken) => {
       return false;
     }
 
-    // 2. Prevent replay attack: Check if nonce was already used
+    // 2. Prevent replay attack: Check if nonce was already used in memory
     if (consumedNonces.has(nonce)) {
       return false;
     }
@@ -106,10 +108,109 @@ export const verifyMathCaptcha = (userAnswer, challengeToken) => {
       return false;
     }
 
-    // 5. Mark nonce as consumed for the remainder of its lifetime
+    // 5. Mark nonce as consumed in memory
     consumedNonces.set(nonce, expiry);
+
+    // 6. Asynchronously persist to MongoDB collection if connected
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      CaptchaNonce.create({ nonce, expiresAt: new Date(expiry) }).catch(() => {});
+    }
+
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 };
+
+/**
+ * Distributed persistent verification of CAPTCHA answer (SEC-HIGH-03).
+ * Queries and atomically records consumed nonces in MongoDB to prevent
+ * cross-process or multi-container replay attacks.
+ *
+ * @param {number|string} userAnswer 
+ * @param {string} challengeToken 
+ * @returns {Promise<boolean>}
+ */
+export const verifyMathCaptchaAsync = async (userAnswer, challengeToken) => {
+  if (userAnswer === undefined || userAnswer === null || userAnswer === '' || !challengeToken) {
+    return false;
+  }
+
+  try {
+    const decoded = Buffer.from(challengeToken, 'base64').toString('utf8');
+    const parts = decoded.split(':');
+    if (parts.length !== 4) return false;
+
+    const [nonce, expiryStr, expectedAnswerHash, receivedSignature] = parts;
+    const expiry = parseInt(expiryStr, 10);
+
+    // 1. Validate expiration
+    if (isNaN(expiry) || Date.now() > expiry) {
+      return false;
+    }
+
+    // 2. Fast-path memory replay check
+    if (consumedNonces.has(nonce)) {
+      return false;
+    }
+
+    // 3. Distributed persistent replay check (SEC-HIGH-03)
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const existingNonce = await CaptchaNonce.findOne({ nonce }).lean();
+      if (existingNonce) {
+        consumedNonces.set(nonce, expiry);
+        return false;
+      }
+    }
+
+    // 4. Verify cryptographic envelope signature
+    const expectedPayload = `${nonce}:${expiryStr}:${expectedAnswerHash}`;
+    const calculatedSignature = crypto
+      .createHmac('sha256', CAPTCHA_SECRET)
+      .update(expectedPayload)
+      .digest('hex');
+
+    if (calculatedSignature !== receivedSignature) {
+      return false;
+    }
+
+    // 5. Verify mathematical answer via HMAC comparison (Timing-Safe)
+    const numericAnswer = parseInt(String(userAnswer).trim(), 10);
+    if (isNaN(numericAnswer)) return false;
+
+    const calculatedAnswerHash = crypto
+      .createHmac('sha256', CAPTCHA_SECRET)
+      .update(`${numericAnswer}:${nonce}:${expiryStr}`)
+      .digest('hex');
+
+    const expectedBuf = Buffer.from(expectedAnswerHash, 'hex');
+    const calculatedBuf = Buffer.from(calculatedAnswerHash, 'hex');
+
+    if (expectedBuf.length !== calculatedBuf.length || !crypto.timingSafeEqual(expectedBuf, calculatedBuf)) {
+      return false;
+    }
+
+    // 6. Mark nonce as consumed in memory
+    consumedNonces.set(nonce, expiry);
+
+    // 7. Atomically persist nonce in MongoDB with unique constraint
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        await CaptchaNonce.create({
+          nonce,
+          expiresAt: new Date(expiry),
+        });
+      } catch (dbError) {
+        if (dbError.code === 11000) {
+          // Replay caught by MongoDB unique index constraint
+          return false;
+        }
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+

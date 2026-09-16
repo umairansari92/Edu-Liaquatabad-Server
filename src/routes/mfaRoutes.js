@@ -69,8 +69,8 @@ router.post(
 router.post(
   '/confirm',
   mfaSetupLimiter,
-  validate(mfaConfirmSetupSchema),
   authenticateSessionOrMfaPending,
+  validate(mfaConfirmSetupSchema),
   handleMfaConfirm
 );
 

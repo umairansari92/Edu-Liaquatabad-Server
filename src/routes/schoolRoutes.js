@@ -54,6 +54,7 @@ router.patch(
   '/:id/timings',
   authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
+  authorizeScope,
   handleUpdateSchoolTimings
 );
 

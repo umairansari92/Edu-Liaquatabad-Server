@@ -29,7 +29,7 @@ export const authenticateMfaPending = async (request, response, nextFunction) =>
 
     // Load user context with MFA secret and recovery code material
     const user = await User.findById(decoded.userId).select(
-      '+mfa.secretCiphertext +mfa.secretIv +mfa.secretTag +mfa.pendingSecret +mfa.recoveryCodes +tokenVersion'
+      '+mfa.secretCiphertext +mfa.secretIv +mfa.secretTag +mfa.pendingSecret +mfa.pendingSecret.ciphertext +mfa.pendingSecret.iv +mfa.pendingSecret.tag +mfa.pendingSecret.expiresAt +mfa.recoveryCodes +tokenVersion'
     );
 
     if (!user) {

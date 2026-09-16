@@ -3,7 +3,7 @@ import asyncHandler from 'express-async-handler';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import { requestOtp, verifyOtp } from '../services/otpService.js';
 import { isDisposableEmail } from '../utils/disposableEmailValidator.js';
-import { verifyMathCaptcha, generateMathCaptcha } from '../utils/customMathCaptcha.js';
+import { verifyMathCaptcha, verifyMathCaptchaAsync, generateMathCaptcha } from '../utils/customMathCaptcha.js';
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import { checkEmailLockout, recordFailedLogin, clearLoginLockout } from '../middlewares/tripleLockRateLimiter.js';
 import { hashPassword, verifyPassword, needsPasswordRehash } from '../utils/passwordUtils.js';
@@ -140,7 +140,7 @@ export const handleRegisterStudent = asyncHandler(async (request, response) => {
 
   // 1. Math CAPTCHA validation (if provided)
   if (captchaChallengeToken || captchaAnswer) {
-    if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+    if (!(await verifyMathCaptchaAsync(captchaAnswer, captchaChallengeToken))) {
       return sendError(response, 400, 'Mathematical security CAPTCHA verification failed.');
     }
   }
@@ -495,7 +495,7 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
 
   // 1. Math CAPTCHA validation
   if (captchaChallengeToken || captchaAnswer) {
-    if (!verifyMathCaptcha(captchaAnswer, captchaChallengeToken)) {
+    if (!(await verifyMathCaptchaAsync(captchaAnswer, captchaChallengeToken))) {
       return sendError(response, 400, 'Mathematical security CAPTCHA verification failed.');
     }
   }
@@ -835,13 +835,11 @@ export const handleLogin = asyncHandler(async (request, response) => {
     );
   }
 
-  // 2. Math CAPTCHA verification — only validate if BOTH token and a non-empty answer are present
-  const hasCaptchaToken = !!captchaChallengeToken;
-  const hasCaptchaAnswer = captchaAnswer !== undefined && captchaAnswer !== null && String(captchaAnswer).trim() !== '';
-  if (hasCaptchaToken && hasCaptchaAnswer) {
-    if (!verifyMathCaptcha(String(captchaAnswer).trim(), captchaChallengeToken)) {
+  // 2. Math CAPTCHA verification (SEC-HIGH-01 Mandatory Verification)
+  if (process.env.NODE_ENV === 'production' || captchaChallengeToken || captchaAnswer) {
+    if (!captchaChallengeToken || !captchaAnswer || !(await verifyMathCaptchaAsync(String(captchaAnswer).trim(), captchaChallengeToken))) {
       await recordFailedLogin(normalizedEmail, clientIp);
-      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed. Please check your answer.');
+      return sendError(response, 400, 'Mathematical security CAPTCHA verification failed or missing.');
     }
   }
 
@@ -953,6 +951,7 @@ export const handleLogin = asyncHandler(async (request, response) => {
       ? 'Root Admin Multi-Factor Authentication setup required. Please enroll an authenticator app.'
       : 'Multi-Factor Authentication code required.', {
       mfaRequired: true,
+      requiresSetup: isRootAdmin && !isMfaEnrolled,
       setupRequired: isRootAdmin && !isMfaEnrolled,
       mfaPendingToken,
       mfaType: 'TOTP',

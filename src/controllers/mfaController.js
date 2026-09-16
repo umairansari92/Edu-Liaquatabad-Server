@@ -102,7 +102,7 @@ export const handleMfaSetup = asyncHandler(async (request, response) => {
 export const handleMfaConfirm = asyncHandler(async (request, response) => {
   const { totpCode } = request.body;
   const user = request.mfaUser || (await User.findById(request.user?.userId).select(
-    '+mfa.secretCiphertext +mfa.secretIv +mfa.secretTag +mfa.pendingSecret +mfa.recoveryCodes +tokenVersion'
+    '+mfa.secretCiphertext +mfa.secretIv +mfa.secretTag +mfa.pendingSecret +mfa.pendingSecret.ciphertext +mfa.pendingSecret.iv +mfa.pendingSecret.tag +mfa.pendingSecret.expiresAt +mfa.recoveryCodes +tokenVersion'
   ));
 
   if (!user || !user.mfa?.pendingSecret?.ciphertext) {
@@ -164,6 +164,84 @@ export const handleMfaConfirm = asyncHandler(async (request, response) => {
     userAgent: request.headers['user-agent'] || '',
     requestId: request.headers['x-request-id'] || '',
   });
+
+  // If user enrolled via intermediate MFA_PENDING ticket during login, establish session immediately
+  if (request.mfaUser) {
+    const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+    const tokenPayload = {
+      userId: user._id,
+      role: user.role,
+      roleLevel,
+      designation: user.designation || '',
+      scope: user.scope,
+      tokenVersion: user.tokenVersion || 0,
+      organizationId: user.organizationId,
+      townId: user.townId,
+      schoolId: user.schoolId,
+      assignedSchools: user.assignedSchools || [],
+      mfaVerified: true,
+    };
+
+    const sessionId = crypto.randomUUID();
+    const tokenFamilyId = crypto.randomUUID();
+    const deviceLabel = parseDeviceLabel(request.headers['user-agent']);
+
+    const refreshToken = signRefreshToken({
+      userId: user._id,
+      tokenVersion: user.tokenVersion || 0,
+      sessionId,
+      tokenFamilyId,
+    });
+
+    const hashedRefreshToken = hashToken(refreshToken);
+
+    if (!Array.isArray(user.activeSessions)) {
+      user.activeSessions = [];
+    }
+
+    if (user.activeSessions.length >= MAX_ACTIVE_SESSIONS) {
+      user.activeSessions.sort((a, b) => new Date(a.lastUsedAt || a.createdAt).getTime() - new Date(b.lastUsedAt || b.createdAt).getTime());
+      user.activeSessions.shift();
+    }
+
+    user.activeSessions.push({
+      sessionId,
+      tokenFamilyId,
+      refreshTokenHash: hashedRefreshToken,
+      previousRefreshTokenHash: null,
+      tokenRotatedAt: null,
+      deviceLabel,
+      createdAt: new Date(),
+      lastUsedAt: new Date(),
+    });
+
+    user.lastLoginAt = new Date();
+    await user.save();
+
+    setRefreshCookie(response, refreshToken);
+    const accessToken = signAccessToken(tokenPayload);
+
+    return sendSuccess(response, 200, 'Multi-Factor Authentication enabled successfully. Store these recovery codes in a secure vault; they will never be displayed again.', {
+      accessToken,
+      recoveryCodes: recResult.plainCodes,
+      user: {
+        _id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+        designation: user.designation || '',
+        baseRole: user.baseRole,
+        role: user.role,
+        roleLevel,
+        scope: user.scope,
+        permissions: getEffectivePermissions(user),
+        status: user.status,
+        schoolId: user.schoolId,
+        townId: user.townId,
+        assignedSchools: user.assignedSchools || [],
+        mfaVerified: true,
+      },
+    });
+  }
 
   return sendSuccess(response, 200, 'Multi-Factor Authentication enabled successfully. Store these recovery codes in a secure vault; they will never be displayed again.', {
     recoveryCodes: recResult.plainCodes,

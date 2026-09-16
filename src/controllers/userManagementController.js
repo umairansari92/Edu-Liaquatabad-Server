@@ -390,7 +390,10 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     query.schoolId = { $in: request.user.assignedSchools || [] };
   } else if ([ROLES.HM, ROLES.TEACHER].includes(request.user.role)) {
     query.schoolId = request.user.schoolId;
-  } else if (request.user.role === ROLES.ADMIN && request.user.townId) {
+  } else if (request.user.role === ROLES.ADMIN) {
+    if (!request.user.townId) {
+      return sendError(response, 403, 'Access denied. Town Administrator must be assigned to a valid town to query users.');
+    }
     query.townId = request.user.townId;
   }
 
