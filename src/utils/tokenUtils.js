@@ -86,3 +86,48 @@ export const clearRefreshCookie = (res) => {
     path: '/api/v1/auth',
   });
 };
+
+/**
+ * Derives a clean, human-readable device label from a User-Agent string
+ * e.g., "Google Chrome on Windows 10/11", "Apple Safari on iOS", etc.
+ */
+export const parseDeviceLabel = (userAgent) => {
+  if (!userAgent || typeof userAgent !== 'string') {
+    return 'Unknown Device';
+  }
+
+  const ua = userAgent.trim();
+
+  // Browser detection
+  let browser = 'Web Browser';
+  if (ua.includes('Edg/')) {
+    browser = 'Microsoft Edge';
+  } else if (ua.includes('Chrome/') && !ua.includes('Chromium')) {
+    browser = 'Google Chrome';
+  } else if (ua.includes('Firefox/')) {
+    browser = 'Mozilla Firefox';
+  } else if (ua.includes('Safari/') && !ua.includes('Chrome')) {
+    browser = 'Apple Safari';
+  } else if (ua.includes('PostmanRuntime/')) {
+    browser = 'Postman Client';
+  }
+
+  // Operating System detection
+  let os = 'Unknown OS';
+  if (ua.includes('Windows NT 10.0') || ua.includes('Windows NT 11.0')) {
+    os = 'Windows';
+  } else if (ua.includes('Windows')) {
+    os = 'Windows';
+  } else if (ua.includes('iPhone') || ua.includes('iPad')) {
+    os = 'iOS';
+  } else if (ua.includes('Macintosh') || ua.includes('Mac OS X')) {
+    os = 'macOS';
+  } else if (ua.includes('Android')) {
+    os = 'Android';
+  } else if (ua.includes('Linux')) {
+    os = 'Linux';
+  }
+
+  return `${browser} on ${os}`;
+};
+

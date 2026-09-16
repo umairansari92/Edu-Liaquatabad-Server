@@ -1,6 +1,17 @@
 import mongoose from 'mongoose';
 import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 
+const ActiveSessionSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true },
+  tokenFamilyId: { type: String, required: true },
+  refreshTokenHash: { type: String, required: true },
+  previousRefreshTokenHash: { type: String, default: null },
+  tokenRotatedAt: { type: Date, default: null },
+  deviceLabel: { type: String, default: 'Unknown Device' },
+  createdAt: { type: Date, default: Date.now },
+  lastUsedAt: { type: Date, default: Date.now },
+}, { _id: false });
+
 const UserSchema = new mongoose.Schema({
   organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
   townId: { type: mongoose.Schema.Types.ObjectId, ref: 'Town', index: true },
@@ -69,6 +80,7 @@ const UserSchema = new mongoose.Schema({
   tokenVersion: { type: Number, default: 0 },
   lastLoginAt: { type: Date },
   refreshTokenHash: { type: String, select: false },
+  activeSessions: { type: [ActiveSessionSchema], default: [], select: false },
 }, { timestamps: true });
 
 // Virtual to easily read numerical hierarchy level

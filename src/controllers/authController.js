@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import asyncHandler from 'express-async-handler';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import { requestOtp, verifyOtp } from '../services/otpService.js';
@@ -6,7 +7,11 @@ import { verifyMathCaptcha, generateMathCaptcha } from '../utils/customMathCaptc
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import { checkEmailLockout, recordFailedLogin, clearLoginLockout } from '../middlewares/tripleLockRateLimiter.js';
 import { hashPassword, verifyPassword, needsPasswordRehash } from '../utils/passwordUtils.js';
-import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken, hashToken } from '../utils/tokenUtils.js';
+import { signAccessToken, signRefreshToken, setRefreshCookie, clearRefreshCookie, verifyRefreshToken, hashToken, parseDeviceLabel } from '../utils/tokenUtils.js';
+
+// Multi-Device Refresh Token Rotation (RTR) Configuration
+const MAX_ACTIVE_SESSIONS = 5;
+const REFRESH_TOKEN_GRACE_WINDOW_MS = 3000; // 3 seconds tolerance window for multi-tab and network retries
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import TeacherProfile from '../models/TeacherProfile.js';
@@ -840,15 +845,15 @@ export const handleLogin = asyncHandler(async (request, response) => {
     }
   }
 
-  // 3. User Lookup (including passwordHash, refreshTokenHash & tokenVersion)
-  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +tokenVersion');
+  // 3. User Lookup (including passwordHash, refreshTokenHash, activeSessions & tokenVersion)
+  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +refreshTokenHash +activeSessions +tokenVersion');
 
   if (!user && !normalizedEmail.includes('@')) {
     const parsedGrNumber = parseInt(normalizedEmail.replace(/\D/g, ''), 10);
     const grNumberQuery = parsedGrNumber ? { $in: [parsedGrNumber, normalizedEmail] } : normalizedEmail;
     const studentProfile = await StudentProfile.findOne({ grNumber: grNumberQuery });
     if (studentProfile) {
-      user = await User.findById(studentProfile.userId).select('+passwordHash +refreshTokenHash +tokenVersion');
+      user = await User.findById(studentProfile.userId).select('+passwordHash +refreshTokenHash +activeSessions +tokenVersion');
     }
   }
 
@@ -933,15 +938,51 @@ export const handleLogin = asyncHandler(async (request, response) => {
     assignedSchools: user.assignedSchools || [],
   };
 
-  const accessToken = signAccessToken(tokenPayload);
-  const refreshToken = signRefreshToken({ userId: user._id, tokenVersion: user.tokenVersion || 0 });
+  // 8. Multi-Device Session Generation (Unique sessionId & tokenFamilyId per login)
+  const sessionId = crypto.randomUUID();
+  const tokenFamilyId = crypto.randomUUID();
+  const deviceLabel = parseDeviceLabel(request.headers['user-agent']);
 
-  // Store SHA-256 hash of active refresh token on user for reuse detection
-  user.refreshTokenHash = hashToken(refreshToken);
+  const accessToken = signAccessToken(tokenPayload);
+  const refreshToken = signRefreshToken({
+    userId: user._id,
+    tokenVersion: user.tokenVersion || 0,
+    sessionId,
+    tokenFamilyId,
+  });
+
+  const hashedRefreshToken = hashToken(refreshToken);
+
+  // Initialize activeSessions array if null/undefined
+  if (!Array.isArray(user.activeSessions)) {
+    user.activeSessions = [];
+  }
+
+  // Enforce Max Concurrent Active Sessions (Cap: 5) via LRU Eviction
+  if (user.activeSessions.length >= MAX_ACTIVE_SESSIONS) {
+    // Sort ascending by lastUsedAt (oldest first) and evict least-recently-used session
+    user.activeSessions.sort((a, b) => new Date(a.lastUsedAt || a.createdAt).getTime() - new Date(b.lastUsedAt || b.createdAt).getTime());
+    user.activeSessions.shift();
+  }
+
+  // Append new session entry
+  user.activeSessions.push({
+    sessionId,
+    tokenFamilyId,
+    refreshTokenHash: hashedRefreshToken,
+    previousRefreshTokenHash: null,
+    tokenRotatedAt: null,
+    deviceLabel,
+    createdAt: new Date(),
+    lastUsedAt: new Date(),
+  });
+
+  // Maintain legacy field for backward compatibility
+  user.refreshTokenHash = hashedRefreshToken;
   user.lastLoginAt = new Date();
   await user.save();
 
-  // 8. Set Secure HttpOnly Refresh Cookie
+  // 9. Set Secure HttpOnly Refresh Cookie
   setRefreshCookie(response, refreshToken);
 
   // 10. Write Immutable Audit Log
@@ -986,7 +1027,8 @@ export const handleLogin = asyncHandler(async (request, response) => {
 });
 
 /**
- * Rotate Access Token via HttpOnly Refresh Cookie
+ * Rotate Access Token via HttpOnly Refresh /**
+ * Refresh Access Token & Perform Isolated Per-Session Rotation (RTR)
  * POST /api/v1/auth/refresh-token
  */
 export const handleRefreshToken = asyncHandler(async (request, response) => {
@@ -1004,56 +1046,39 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     return sendError(response, 401, 'Session token expired or invalid. Please sign in again.');
   }
 
-  const user = await User.findById(decoded.userId).select('+refreshTokenHash +tokenVersion');
+  const user = await User.findById(decoded.userId).select('+activeSessions +tokenVersion');
   if (!user || user.status !== USER_STATUS.ACTIVE) {
     clearRefreshCookie(response);
     return sendError(response, 401, 'Account session revoked or account is no longer active.');
   }
 
-  // Verify tokenVersion to reject revoked tokens
+  // 1. Verify global tokenVersion to reject revoked tokens (e.g. password changes or prior theft events)
   if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
     clearRefreshCookie(response);
     return sendError(response, 401, 'Session has been invalidated due to a security update. Please sign in again.');
   }
 
-  // Refresh Token Reuse Detection
   const incomingHash = hashToken(token);
-  if (user.refreshTokenHash && user.refreshTokenHash !== incomingHash) {
-    // Replay/Theft detected: Revoke all active sessions for this account immediately
-    user.tokenVersion = (user.tokenVersion || 0) + 1;
-    user.refreshTokenHash = null;
-    await user.save();
+
+  // 2. Multi-Device Session Lookup (Strict: requires embedded sessionId in token)
+  if (!Array.isArray(user.activeSessions) || !decoded.sessionId) {
     clearRefreshCookie(response);
-
-    await AuditLog.create({
-      actorId: user._id,
-      actorRole: user.role,
-      actorDesignation: user.designation || '',
-      actorName: user.fullName,
-      action: 'SECURITY_TOKEN_REUSE_DETECTED',
-      targetModel: 'User',
-      targetId: user._id,
-      targetName: user.fullName,
-      townId: user.townId,
-      schoolId: user.schoolId || null,
-      result: 'DENIED',
-      reason: 'Refresh token reuse detected. All user sessions invalidated immediately.',
-      ipAddress: request.ip || '',
-      userAgent: request.headers['user-agent'] || '',
-      requestId: request.headers['x-request-id'] || '',
-    });
-
-    return sendError(response, 401, 'Security alert: Token reuse detected. All active sessions have been invalidated.');
+    return sendError(response, 401, 'Session has expired or was terminated from this device. Please sign in again.');
   }
 
-  // Generate fresh token pair (Rotation)
-  const permissions = getEffectivePermissions(user);
-  const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+  const sessionIndex = user.activeSessions.findIndex(s => s.sessionId === decoded.sessionId);
+  if (sessionIndex === -1) {
+    clearRefreshCookie(response);
+    return sendError(response, 401, 'Session has expired or was terminated from this device. Please sign in again.');
+  }
 
+  const session = user.activeSessions[sessionIndex];
+
+  // 3. Per-Session Rotation, Grace Window, and Reuse Detection Evaluation
   const tokenPayload = {
     userId: user._id,
     role: user.role,
-    roleLevel,
+    roleLevel: ROLE_HIERARCHY[user.role] || 0,
     designation: user.designation || '',
     scope: user.scope,
     tokenVersion: user.tokenVersion || 0,
@@ -1063,49 +1088,174 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     assignedSchools: user.assignedSchools || [],
   };
 
-  const newAccessToken = signAccessToken(tokenPayload);
-  const newRefreshToken = signRefreshToken({ userId: user._id, tokenVersion: user.tokenVersion || 0 });
+  // ─── Scenario A: Current Active Token Presented (Legitimate Routine Rotation) ───
+  if (incomingHash === session.refreshTokenHash) {
+    session.previousRefreshTokenHash = session.refreshTokenHash;
+    session.tokenRotatedAt = new Date();
+    session.lastUsedAt = new Date();
 
-  // Update stored refresh token hash with newly rotated token
-  user.refreshTokenHash = hashToken(newRefreshToken);
+    const newRefreshToken = signRefreshToken({
+      userId: user._id,
+      tokenVersion: user.tokenVersion || 0,
+      sessionId: session.sessionId,
+      tokenFamilyId: session.tokenFamilyId,
+    });
+
+    session.refreshTokenHash = hashToken(newRefreshToken);
+    await user.save();
+
+    setRefreshCookie(response, newRefreshToken);
+    const newAccessToken = signAccessToken(tokenPayload);
+
+    return sendSuccess(response, 200, 'Session token refreshed.', {
+      accessToken: newAccessToken,
+      user: {
+        _id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+        designation: user.designation || '',
+        role: user.role,
+        roleLevel: ROLE_HIERARCHY[user.role] || 0,
+        scope: user.scope,
+        permissions: getEffectivePermissions(user),
+        status: user.status,
+        schoolId: user.schoolId,
+        townId: user.townId,
+        assignedSchools: user.assignedSchools || [],
+      },
+    });
+  }
+
+  // ─── Scenario B: Previous Token Presented (Grace Window Evaluation) ───
+  if (session.previousRefreshTokenHash && incomingHash === session.previousRefreshTokenHash) {
+    const elapsedMs = session.tokenRotatedAt ? (Date.now() - new Date(session.tokenRotatedAt).getTime()) : Infinity;
+
+    if (elapsedMs <= REFRESH_TOKEN_GRACE_WINDOW_MS) {
+      // Legitimate concurrent request within 3000ms grace window (e.g. multi-tab restore or network retry).
+      // Acknowledge session and return fresh access token without secondary rotation or tokenVersion increment.
+      session.lastUsedAt = new Date();
+      await user.save();
+
+      const existingAccessToken = signAccessToken(tokenPayload);
+      return sendSuccess(response, 200, 'Session active (concurrency grace window applied).', {
+        accessToken: existingAccessToken,
+        user: {
+          _id: user._id,
+          fullName: user.fullName,
+          email: user.email,
+          designation: user.designation || '',
+          role: user.role,
+          roleLevel: ROLE_HIERARCHY[user.role] || 0,
+          scope: user.scope,
+          permissions: getEffectivePermissions(user),
+          status: user.status,
+          schoolId: user.schoolId,
+          townId: user.townId,
+          assignedSchools: user.assignedSchools || [],
+        },
+      });
+    }
+  }
+
+  // ─── Scenario C: Theft Confirmed (Outside Grace Window or Mismatched Token) ───
+  // A token was replayed outside the grace window, or an unknown token was presented for this active session.
+  // Active attack signal: Deliberately remove the compromised session AND increment global tokenVersion
+  // to immediately lock out the adversary across all devices.
+  const compromisedSessionId = session.sessionId;
+  const compromisedDevice = session.deviceLabel;
+
+  // 1. Remove the compromised session entry
+  user.activeSessions.splice(sessionIndex, 1);
+
+  // 2. Global session invalidation (active attack containment)
+  user.tokenVersion = (user.tokenVersion || 0) + 1;
+  user.refreshTokenHash = null;
   await user.save();
 
-  setRefreshCookie(response, newRefreshToken);
+  clearRefreshCookie(response);
 
-  return sendSuccess(response, 200, 'Session token refreshed.', {
-    accessToken: newAccessToken,
-    user: {
-      _id: user._id,
-      fullName: user.fullName,
-      email: user.email,
-      designation: user.designation || '',
-      role: user.role,
-      roleLevel,
-      scope: user.scope,
-      permissions,
-      status: user.status,
-      schoolId: user.schoolId,
-      townId: user.townId,
-      assignedSchools: user.assignedSchools || [],
-    },
+  // 3. Write immutable AuditLog entry
+  await AuditLog.create({
+    actorId: user._id,
+    actorRole: user.role,
+    actorDesignation: user.designation || '',
+    actorName: user.fullName,
+    action: 'REFRESH_TOKEN_REUSE_DETECTED',
+    targetModel: 'User',
+    targetId: user._id,
+    targetName: user.fullName,
+    townId: user.townId,
+    schoolId: user.schoolId || null,
+    result: 'DENIED',
+    reason: `Refresh token reuse detected on session ${compromisedSessionId} (${compromisedDevice}). Global tokenVersion incremented to contain suspected compromise.`,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
   });
+
+  // 4. Dispatch Security Alert Notification to affected user
+  await Notification.create({
+    recipientUserId: user._id,
+    title: 'Security Alert: Token Reuse Detected',
+    message: `A replayed refresh token was detected from ${compromisedDevice}. For your safety, all active sessions on all devices have been terminated. Please sign in again.`,
+    notificationType: 'SECURITY_ALERT',
+    actionLink: '/login',
+  });
+
+  // If high-privilege account (roleLevel >= 80), notify all active Super Admins
+  const userRoleLevel = ROLE_HIERARCHY[user.role] || 0;
+  if (userRoleLevel >= 80) {
+    const superAdmins = await User.find({ role: ROLES.SUPER_ADMIN, status: USER_STATUS.ACTIVE });
+    for (const sa of superAdmins) {
+      await Notification.create({
+        recipientUserId: sa._id,
+        title: 'Critical Security Alert: Privileged Account Token Reuse',
+        message: `Token reuse detected on privileged account ${user.fullName} (${user.role}) from device "${compromisedDevice}". All sessions were globally terminated.`,
+        notificationType: 'SECURITY_ALERT',
+        actionLink: '/dashboard',
+      });
+    }
+  }
+
+  return sendError(response, 401, 'Security alert: Token reuse detected. All active sessions have been invalidated.');
 });
 
 /**
- * User Logout & Active Database Session Revocation
+ * Routine Single-Device User Logout
  * POST /api/v1/auth/logout
  */
 export const handleLogout = asyncHandler(async (request, response) => {
+  const token = request.cookies?.refreshToken || request.body?.refreshToken;
   clearRefreshCookie(response);
+
+  let callerSessionId = null;
+  if (token) {
+    try {
+      const decoded = verifyRefreshToken(token);
+      callerSessionId = decoded.sessionId || null;
+    } catch {
+      // Refresh token expired or malformed
+    }
+  }
 
   if (request.user && (request.user.userId || request.user._id)) {
     const targetUserId = request.user.userId || request.user._id;
+    const user = await User.findById(targetUserId).select('+activeSessions +refreshTokenHash');
 
-    // Immediately revoke server-side sessions by incrementing tokenVersion and wiping token hash
-    await User.findByIdAndUpdate(targetUserId, {
-      $inc: { tokenVersion: 1 },
-      $unset: { refreshTokenHash: 1 },
-    });
+    if (user) {
+      if (callerSessionId && Array.isArray(user.activeSessions)) {
+        // Routine single-device logout: Remove ONLY the calling session!
+        // Deliberate design decision: DO NOT increment tokenVersion — sibling devices remain fully logged in!
+        user.activeSessions = user.activeSessions.filter(s => s.sessionId !== callerSessionId);
+      } else if (Array.isArray(user.activeSessions) && user.activeSessions.length > 0) {
+        user.activeSessions.pop();
+      }
+
+      if (!user.activeSessions || user.activeSessions.length === 0) {
+        user.refreshTokenHash = null;
+      }
+      await user.save();
+    }
 
     await AuditLog.create({
       actorId: targetUserId,
@@ -1125,7 +1275,7 @@ export const handleLogout = asyncHandler(async (request, response) => {
     });
   }
 
-  return sendSuccess(response, 200, 'Signed out successfully.');
+  return sendSuccess(response, 200, 'Successfully signed out from this device.');
 });
 
 /**
@@ -1224,3 +1374,92 @@ export const handleResetPassword = asyncHandler(async (request, response) => {
 
   return sendSuccess(response, 200, 'Password has been successfully updated. You may now sign in with your new password.');
 });
+
+/**
+ * List Active Sessions for Current Authenticated User
+ * GET /api/v1/auth/sessions
+ */
+export const handleGetActiveSessions = asyncHandler(async (request, response) => {
+  const targetUserId = request.user?.userId || request.user?._id;
+  const user = await User.findById(targetUserId).select('+activeSessions');
+  if (!user) {
+    return sendError(response, 404, 'User account not found.');
+  }
+
+  const currentToken = request.cookies?.refreshToken || request.body?.refreshToken;
+  let currentSessionId = null;
+  if (currentToken) {
+    try {
+      const decoded = verifyRefreshToken(currentToken);
+      currentSessionId = decoded.sessionId || null;
+    } catch {
+      // Ignore unverified/expired cookie
+    }
+  }
+
+  const sessions = (user.activeSessions || []).map(session => ({
+    sessionId: session.sessionId,
+    deviceLabel: session.deviceLabel,
+    createdAt: session.createdAt,
+    lastUsedAt: session.lastUsedAt,
+    isCurrentSession: session.sessionId === currentSessionId,
+  }));
+
+  return sendSuccess(response, 200, 'Active sessions retrieved successfully.', { sessions });
+});
+
+/**
+ * Terminate a Specific Remote Session
+ * DELETE /api/v1/auth/sessions/:sessionId
+ */
+export const handleTerminateSession = asyncHandler(async (request, response) => {
+  const targetUserId = request.user?.userId || request.user?._id;
+  const { sessionId } = request.params;
+
+  const user = await User.findById(targetUserId).select('+activeSessions');
+  if (!user) {
+    return sendError(response, 404, 'User account not found.');
+  }
+
+  const initialCount = user.activeSessions?.length || 0;
+  user.activeSessions = (user.activeSessions || []).filter(s => s.sessionId !== sessionId);
+
+  if (user.activeSessions.length === initialCount) {
+    return sendError(response, 404, 'Session not found or already terminated.');
+  }
+
+  await user.save();
+
+  // If the user terminated their current active session, clear the refresh cookie
+  const currentToken = request.cookies?.refreshToken || request.body?.refreshToken;
+  if (currentToken) {
+    try {
+      const decoded = verifyRefreshToken(currentToken);
+      if (decoded.sessionId === sessionId) {
+        clearRefreshCookie(response);
+      }
+    } catch {
+      // Ignore unverified or expired token
+    }
+  }
+
+  await AuditLog.create({
+    actorId: targetUserId,
+    actorRole: request.user.role,
+    actorDesignation: request.user.designation || '',
+    actorName: request.user.fullName || '',
+    action: 'SESSION_TERMINATED',
+    targetModel: 'User',
+    targetId: targetUserId,
+    targetName: request.user.fullName || '',
+    townId: request.user.townId,
+    schoolId: request.user.schoolId || null,
+    result: 'SUCCESS',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Remote session terminated successfully.');
+});
+

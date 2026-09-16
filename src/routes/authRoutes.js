@@ -14,6 +14,8 @@ import {
   handleForgotPassword,
   handleResetPassword,
   handleResubmitCorrection,
+  handleGetActiveSessions,
+  handleTerminateSession,
 } from '../controllers/authController.js';
 import {
   authLimiter,
@@ -56,6 +58,10 @@ router.post(
 router.post('/refresh-token', refreshTokenLimiter, handleRefreshToken);
 
 router.post('/logout', authenticate, handleLogout);
+
+// ─── Multi-Device Session Management ──────────────────────────────────────────
+router.get('/sessions', authenticate, handleGetActiveSessions);
+router.delete('/sessions/:sessionId', authenticate, handleTerminateSession);
 
 router.get('/me', authenticate, handleGetMe);
 
