@@ -396,7 +396,8 @@ export const handleGetSystemAuditLogs = asyncHandler(async (request, response) =
     searchFilterQuery.result = String(request.query.result).toUpperCase();
   }
   if (request.query.action) {
-    searchFilterQuery.action = { $regex: String(request.query.action), $options: 'i' };
+    const escapedAction = String(request.query.action).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    searchFilterQuery.action = { $regex: escapedAction, $options: 'i' };
   }
 
   // Consequential governance actions taken by ROOT_ADMIN or other platform authorities
@@ -444,6 +445,10 @@ export const handleGetPendingUsers = asyncHandler(async (request, response) => {
 export const handleFlushSecurityLockouts = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
   const { reason } = request.body;
+
+  if (requestingActor.role !== ROLES.ROOT_ADMIN) {
+    return sendError(response, 403, 'Forbidden: Only ROOT_ADMIN is authorized to execute global security lockout flushes.');
+  }
 
   const deleteResult = await SecurityLockout.deleteMany({});
 

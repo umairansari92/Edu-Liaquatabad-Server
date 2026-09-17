@@ -64,7 +64,7 @@ router.get('/pending-users', handleGetPendingUsers);
  * Clear security IP lockouts and failed login strikes
  * Hardened: requires validate(flushLockoutsSchema) with typed reason and explicit confirmation
  */
-router.post('/flush-lockouts', validate(flushLockoutsSchema), handleFlushSecurityLockouts);
+router.post('/flush-lockouts', authorizeRoles(ROLES.ROOT_ADMIN), validate(flushLockoutsSchema), handleFlushSecurityLockouts);
 
 /**
  * POST /api/v1/admin/super-admins/broadcast

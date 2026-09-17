@@ -34,11 +34,11 @@ let total = 0;
 function assert(condition, testName) {
   total++;
   if (!condition) {
-    console.error(`❌ FAIL: ${testName}`);
+    console.error(`❌ FAIL [${total}]: ${testName}`);
     throw new Error(`Assertion failed: ${testName}`);
   }
   passed++;
-  console.log(`✅ PASS: ${testName}`);
+  console.log(`✅ PASS [${total}]: ${testName}`);
 }
 
 async function runSecuritySuite() {

@@ -1,0 +1,1357 @@
+
+> school-management-system-server@1.0.0 test
+> node tests/auth_suite.test.js && node tests/argon2_migration_suite.test.js && node tests/refresh_token_rotation_suite.test.js && node tests/root_admin_mfa_suite.test.js && node tests/authority_model_suite.test.js && node tests/auth_hierarchy_suite.test.js && node tests/security_suite.test.js && node tests/security_remediation_wave1.test.js && node tests/root_admin_module_suite.test.js && node tests/authority_negative_security_suite.test.js && node tests/authority_transition_matrix.test.js && node tests/teacher_attendance_security.test.js && node tests/seed_data_validation.test.js && node tests/staff_profile_and_approval_workflow.test.js && node tests/staff_profile_controller_integration.test.js && node tests/attendance_analytics_suite.test.js && node tests/town_holiday_and_timing_policy.test.js && node tests/announcement_and_public_stats.test.js && node tests/student_onboarding_flows.test.js && node tests/privacy_and_notifications.test.js && node tests/security_and_regression_verification.test.js && node tests/root_admin_privacy_and_dashboard_authority.test.js && node tests/hm_operational_authority_and_security.test.js && node tests/security_remediation_wave2_core.test.js
+
+
+======================================================
+🔒 EXECUTING COMPREHENSIVE AUTH V1 & RBAC VERIFICATION
+======================================================
+
+--- 1. Password Hashing & Pepper Verification ---
+✅ PASS: Password is salted and hashed (Argon2id + pepper)
+✅ PASS: Password matches when verified with server PEPPER
+✅ PASS: Wrong password correctly rejected
+
+--- 2. JWT Token Issuance & Claim Payload ---
+✅ PASS: Access token contains correct userId claim
+✅ PASS: Access token contains ADMIN role (DDO is a designation, ADMIN is the role)
+✅ PASS: Access token contains correct scope (TOWN)
+✅ PASS: Refresh token verifies and holds identity claim
+
+--- 3. Math CAPTCHA Security Challenge ---
+✅ PASS: Math challenge and HMAC token generated
+✅ PASS: Math challenge matches question format
+✅ PASS: Correct CAPTCHA answer verified
+✅ PASS: Wrong CAPTCHA answer rejected
+
+--- 4. Disposable Email Rejection ---
+✅ PASS: tempmail.com is blocked
+✅ PASS: 10minutemail.com is blocked
+✅ PASS: Official gov.pk domain allowed
+✅ PASS: Standard email allowed
+
+--- 5. Zod Validation Schemas & Honeypot Guard ---
+✅ PASS: Valid login payload passes schema
+✅ PASS: Honeypot injected payload is rejected by schema
+✅ PASS: Script injection in email is strictly rejected by schema
+
+--- 6. 9-Role Definitive System Hierarchy (Designation ≠ Role) ---
+✅ PASS: Exact 9 system roles codified in constants
+✅ PASS: Role ROOT_ADMIN is verified in constants
+✅ PASS: Role SUPER_ADMIN is verified in constants
+✅ PASS: Role ADMIN is verified in constants
+✅ PASS: Role SUPERVISOR is verified in constants
+✅ PASS: Role HM is verified in constants
+✅ PASS: Role TEACHER is verified in constants
+✅ PASS: Role PEON is verified in constants
+✅ PASS: Role STUDENT is verified in constants
+✅ PASS: Role PARENT is verified in constants
+
+--- 7. Account Lifecycle States ---
+✅ PASS: ACTIVE state verified
+✅ PASS: PENDING_APPROVAL state verified
+✅ PASS: REQUIRES_CORRECTION state verified
+✅ PASS: SUSPENDED state verified
+✅ PASS: TRANSFERRED state verified
+✅ PASS: RETIRED state verified
+✅ PASS: INACTIVE state verified
+
+======================================================
+🎉 ALL 35/35 UNIT & INTEGRATION TESTS PASSED!
+======================================================
+
+
+======================================================
+🛡️  ARGON2ID MIGRATION & SECURITY SUITE VERIFICATION
+======================================================
+
+--- 1. New Argon2id Password Creation ---
+✅ PASS [1]: Generated hash matches Argon2id format ($argon2id$)
+✅ PASS [2]: Hash matches OWASP-aligned baseline parameters (m=19456, t=2, p=1)
+✅ PASS [3]: Hash never includes raw plaintext password
+✅ PASS [4]: Unique cryptographic salt generated per hash invocation
+
+--- 2. Correct and Incorrect Argon2id Verification ---
+✅ PASS [5]: Correct plaintext verifies against Argon2id hash
+✅ PASS [6]: Incorrect password fails Argon2id verification
+✅ PASS [7]: Empty password fails verification
+✅ PASS [8]: Empty hash fails verification
+✅ PASS [9]: Tampered hash fails closed
+
+--- 3. Legacy Bcrypt Verification ---
+✅ PASS [10]: Legacy hash identified as bcrypt ($2a$/$2b$/$2y$)
+✅ PASS [11]: Legacy bcrypt hash is NOT identified as Argon2id
+✅ PASS [12]: Legacy bcrypt hash verified directly using server pepper
+✅ PASS [13]: Wrong password fails legacy bcrypt verification
+
+--- 4. Zero Double-Hashing Verification ---
+✅ PASS [14]: Argon2id hash validates directly against plaintext without bcrypt layer
+
+--- 5. needsPasswordRehash Policy Check ---
+✅ PASS [15]: Legacy bcrypt hash triggers needsPasswordRehash
+✅ PASS [16]: Current Argon2id hash does NOT trigger needsPasswordRehash
+✅ PASS [17]: Null hash safely returns false
+✅ PASS [18]: Empty hash safely returns false
+
+--- 6. Opportunistic Bcrypt Migration Flow ---
+✅ PASS [19]: Step A: User requires hash migration
+✅ PASS [20]: Step B: User password verifies against legacy bcrypt hash
+✅ PASS [21]: Step C: Atomic conditional update succeeds
+✅ PASS [22]: Step D: User passwordHash is now Argon2id
+✅ PASS [23]: Step E: User no longer requires rehash
+✅ PASS [24]: Step F: Subsequent login verifies directly against new Argon2id hash
+
+--- 7. Failed Bcrypt Verification with NO Migration ---
+✅ PASS [25]: Password verification fails
+✅ PASS [26]: Legacy hash remains unchanged after failed authentication
+✅ PASS [27]: Database retains legacy bcrypt hash with zero modification
+
+--- 8. Concurrent Migration Race Condition Prevention ---
+✅ PASS [28]: Both concurrent requests verify legacy hash
+✅ PASS [29]: Request A atomically commits Argon2id hash
+✅ PASS [30]: Request B conditional query matches 0 documents because hash already migrated
+✅ PASS [31]: Request A Argon2id hash is preserved; Request B does NOT overwrite it
+
+--- 9. No Argon2id Downgrade ---
+✅ PASS [32]: Argon2id hash does not need rehash
+✅ PASS [33]: Argon2id hash is untouched on routine login
+
+--- 10. Password Change Path ---
+✅ PASS [34]: Password change generates Argon2id hash directly
+✅ PASS [35]: New changed password verifies successfully
+
+--- 11. Password Reset Path ---
+✅ PASS [36]: Password reset generates Argon2id hash directly
+✅ PASS [37]: Reset password verifies successfully
+
+--- 12. Registration Path ---
+✅ PASS [38]: Registration generates Argon2id hash directly
+✅ PASS [39]: Registered password verifies successfully
+
+--- 13. Portal Activation Path ---
+✅ PASS [40]: Portal activation generates Argon2id hash directly
+✅ PASS [41]: Activation password verifies successfully
+
+--- 14. Missing Production Pepper Fail-Closed ---
+✅ PASS [42]: Production throws fatal security exception when pepper missing
+✅ PASS [43]: Fails closed in production when PASSWORD_PEPPER is missing
+
+--- 15. Information Non-Disclosure ---
+✅ PASS [44]: passwordHash is excluded from serialized output
+✅ PASS [45]: serverPepper is never exposed in user object
+✅ PASS [46]: plaintext password is never stored or exposed
+
+--- 16. TokenVersion Session Revocation ---
+✅ PASS [47]: tokenVersion incremented on credential change, invalidating existing JWTs
+
+--- 17. CAPTCHA Behavior Invariant ---
+✅ PASS [48]: CAPTCHA failure blocks authentication before any password verification or migration
+
+--- 18. Triple-Lock Rate Limiting Invariant ---
+✅ PASS [49]: Rate limit middleware blocks requests before reaching password handler
+
+--- 19. Account Lockout Invariant ---
+✅ PASS [50]: Account lockout status verified before password verification executes
+
+--- 20. Uniform Authentication Error Messages ---
+✅ PASS [51]: Non-existent user and wrong bcrypt password share identical message
+✅ PASS [52]: Bcrypt user error and Argon2id user error share identical message
+✅ PASS [53]: Error message leaks zero cryptographic detail
+
+======================================================
+🎉 ALL 53/53 ARGON2ID MIGRATION TESTS PASSED!
+======================================================
+
+
+================================================================
+🔄 EXECUTING MULTI-DEVICE REFRESH TOKEN ROTATION (RTR) SUITE
+================================================================
+
+--- 1. Device Label Parsing from User-Agent ---
+✅ PASS [1]: Chrome on Windows correctly parsed
+✅ PASS [2]: Safari on iOS correctly parsed
+✅ PASS [3]: Firefox on macOS correctly parsed
+✅ PASS [4]: Empty User-Agent falls back to Unknown Device
+
+--- 2. Multi-Device Simultaneous Logins ---
+✅ PASS [5]: User holds 2 active sessions simultaneously
+✅ PASS [6]: Session IDs are distinct
+✅ PASS [7]: Token family IDs are independent per login
+
+--- 3. Isolated Per-Session Token Rotation ---
+✅ PASS [8]: Device B refresh token hash is completely unchanged by Device A rotation
+✅ PASS [9]: Device A successfully rotated to v2
+✅ PASS [10]: Device A previous token hash saved for grace window
+
+--- 4. Concurrency Grace Window (3,000 ms Tolerance) ---
+✅ PASS [11]: Request arrived within 3000ms grace window
+✅ PASS [12]: Token matches immediately prior rotated hash
+✅ PASS [13]: tokenVersion is NOT incremented in grace window
+✅ PASS [14]: refreshTokenHash is NOT re-rotated in grace window
+✅ PASS [15]: No sessions evicted during grace window hit
+
+--- 5. Confirmed Theft Outside Grace Window ---
+✅ PASS [16]: Token presented outside grace window (>3000ms)
+✅ PASS [17]: Compromised Device A session removed from activeSessions
+✅ PASS [18]: User tokenVersion incremented to 2 on confirmed theft
+✅ PASS [19]: Audit log written with REFRESH_TOKEN_REUSE_DETECTED
+✅ PASS [20]: Security alert notification dispatched
+
+--- 6. Global Theft Response: Device B Invalidation Verification ---
+✅ PASS [21]: Device B tokenVersion (1) mismatches user tokenVersion (2) -> Device B is logged out
+
+--- 7. Routine Single-Device Logout Isolation ---
+✅ PASS [22]: Device 1 session removed from activeSessions
+✅ PASS [23]: Device 2 session remains active
+✅ PASS [24]: tokenVersion remains 1 (NOT incremented on routine logout)
+✅ PASS [25]: Device 2 tokenVersion matches user tokenVersion -> Device 2 remains 100% active
+
+--- 8. Max Concurrent Session Cap (5) & LRU Eviction ---
+✅ PASS [26]: User reaches cap of 5 sessions
+✅ PASS [27]: Least-recently-used session (session-1) is evicted
+✅ PASS [28]: Session count remains capped at 5
+✅ PASS [29]: Newest session-6 is present
+✅ PASS [30]: Evicted session-1 is absent
+
+--- 9. Session Management Endpoints Data Contract ---
+✅ PASS [31]: Raw refreshTokenHash never exposed in session list
+✅ PASS [32]: previousRefreshTokenHash never exposed in session list
+✅ PASS [33]: tokenFamilyId never exposed in session list
+✅ PASS [34]: Human-readable device label provided
+✅ PASS [35]: Current session boolean flag correctly identified
+✅ PASS [36]: Remote session successfully terminated
+
+--- 10. BOLA/IDOR Scoping: Actor A Cannot Delete Actor B Session ---
+✅ PASS [37]: Actor A filtering did NOT find Actor B sessionId (evaluates to 404 Not Found)
+✅ PASS [38]: Actor B sessions remain 100% untouched and intact
+✅ PASS [39]: Actor B target session remains active
+✅ PASS [40]: Actor A successfully terminated own session
+✅ PASS [41]: Actor A phone session was removed
+✅ PASS [42]: Actor A laptop session remains active
+
+--- 11. Legacy refreshTokenHash Fallback Elimination ---
+✅ PASS [43]: Legacy token contains no sessionId
+✅ PASS [44]: handleRefreshToken strictly rejects legacy token without sessionId (HTTP 401)
+✅ PASS [45]: No on-the-fly session created from legacy refreshTokenHash
+
+--- 12. Wave 1 Argon2id Compatibility Invariance ---
+✅ PASS [46]: Argon2id password verification operates completely unaffected by RTR changes
+
+================================================================
+🎉 ALL 46/46 MULTI-DEVICE RTR TESTS PASSED PERFECTLY!
+================================================================
+
+================================================================
+🔐 EXECUTING ROOT ADMIN MANDATORY MFA SUITE (WAVE 3)
+================================================================
+
+--- 1. Root Admin Mandatory Policy: Password-Only Prohibited ---
+✅ PASS [1]: Root Admin unconditionally requires MFA by authorization policy
+✅ PASS [2]: Unenrolled Root Admin identified as requiring setup
+✅ PASS [3]: Ephemeral token has tokenType MFA_PENDING
+✅ PASS [4]: Ticket carries requiresSetup claim
+
+--- 2. MFA_PENDING Token Isolation: Application Access Denied ---
+✅ PASS [5]: Standard verifyAccessToken strictly rejects MFA_PENDING ticket
+
+--- 3. Cryptographic Storage: AES-256-GCM Secret Encryption ---
+✅ PASS [6]: Ciphertext is generated
+✅ PASS [7]: Unique IV is generated
+✅ PASS [8]: GCM Authentication Tag is generated
+✅ PASS [9]: Plaintext secret is not stored directly
+✅ PASS [10]: Decrypted secret matches original plaintext
+
+--- 4. Fail-Safe Key Management & Corruption Resistance ---
+✅ PASS [11]: Corrupted ciphertext fails authenticated decryption safely
+✅ PASS [12]: Corrupted authentication tag fails decryption safely
+
+--- 5. RFC 6238 TOTP Validation & Clock Drift Handling ---
+✅ PASS [13]: Generated TOTP token is exactly 6 digits
+✅ PASS [14]: Valid 6-digit TOTP token in current window succeeds
+✅ PASS [15]: Allowed clock drift (-30 seconds) succeeds
+✅ PASS [16]: Allowed clock drift (+30 seconds) succeeds
+✅ PASS [17]: Excessive past clock drift (-60 seconds) fails
+✅ PASS [18]: Excessive future clock drift (+60 seconds) fails
+
+--- 6. Monotonic Window Replay Protection ---
+✅ PASS [19]: Window W successfully validated
+✅ PASS [20]: Replay of same window W is strictly rejected
+✅ PASS [21]: Rejection reason is WINDOW_ALREADY_CONSUMED
+✅ PASS [22]: Older window W-1 submitted after W is strictly rejected (Monotonic Safety)
+✅ PASS [23]: Forward window W+1 successfully validated after W
+
+--- 7. Race-Safe Atomic Persistence Concurrency Test ---
+✅ PASS [24]: Concurrent identical window submissions permit EXACTLY ONE consumption
+✅ PASS [25]: Atomic condition guarantees the second concurrent request fails without exception
+
+--- 8. Emergency Break-Glass Recovery Codes (Argon2id Hashed) ---
+✅ PASS [26]: Generates exactly 8 plaintext recovery codes
+✅ PASS [27]: Generates exactly 8 hashed recovery code entries
+✅ PASS [28]: Recovery codes are hashed with Argon2id
+✅ PASS [29]: Plaintext recovery code is never stored in DB
+✅ PASS [30]: Valid plaintext recovery code matches stored Argon2id hash
+✅ PASS [31]: Invalid recovery code fails verification
+✅ PASS [32]: Already consumed recovery code cannot be reused
+
+--- 8B. Recovery-Code Atomic Concurrency Replay Protection ---
+✅ PASS [33]: Concurrent requests using the EXACT SAME recovery code produce EXACTLY ONE consumption
+✅ PASS [34]: Atomic condition guarantees the second concurrent request is rejected with null/failure
+
+--- 9. Session Invalidation (tokenVersion Revocation Across All State Changes) ---
+✅ PASS [35]: Initial session is valid before state changes
+✅ PASS [36]: MFA enrollment / enable invalidates prior session
+✅ PASS [37]: Re-issued token valid after enrollment
+✅ PASS [38]: MFA disable invalidates prior session
+✅ PASS [39]: Re-issued token valid after disable
+✅ PASS [40]: Admin MFA reset invalidates prior session
+✅ PASS [41]: Re-issued token valid after re-enrollment
+✅ PASS [42]: Recovery code regeneration / secret replacement invalidates prior session
+
+--- 10. Wave 1 (Argon2id) & Wave 2 (RTR) Compatibility Invariance ---
+✅ PASS [43]: Argon2id password verification operates completely unaffected
+✅ PASS [44]: Token hashing operates completely unaffected
+
+--- 11. mfaVerified Cryptographic Trust Boundary ---
+✅ PASS [45]: requireMfaVerified strictly blocks: Attacker injects mfaVerified: true in body
+✅ PASS [46]: requireMfaVerified strictly blocks: Attacker injects mfaVerified: "true" in query
+✅ PASS [47]: requireMfaVerified strictly blocks: Attacker injects X-MFA-Verified: true in headers
+✅ PASS [48]: requireMfaVerified strictly blocks: Attacker injects mfaVerified: true in custom header
+✅ PASS [49]: requireMfaVerified strictly blocks: Attacker passes client Redux state payload
+✅ PASS [50]: requireMfaVerified strictly blocks: Attacker supplies cookie other than authenticated JWT
+✅ PASS [51]: Cryptographically verified JWT with mfaVerified: true successfully authorizes
+
+--- 12. MFA Enrollment Step-Up & Setup Ticket Isolation ---
+✅ PASS [52]: First-time setup ticket is explicitly tokenType MFA_PENDING
+✅ PASS [53]: Setup ticket contains single-purpose requiresSetup claim
+✅ PASS [54]: MFA_PENDING setup ticket is strictly rejected from Normal App Route: /api/v1/users
+✅ PASS [55]: MFA_PENDING setup ticket is strictly rejected from Admin Route: /api/v1/admin/super-admins/overview
+✅ PASS [56]: MFA_PENDING setup ticket is strictly rejected from System Control: /api/v1/system-control/toggle
+✅ PASS [57]: MFA_PENDING setup ticket is strictly rejected from Emergency Lockdown: /api/v1/auth/lockdown
+✅ PASS [58]: MFA_PENDING setup ticket is strictly rejected from User Management: /api/v1/users/bulk
+✅ PASS [59]: Valid password provides required step-up re-authentication
+✅ PASS [60]: Invalid password rejects step-up re-authentication
+
+--- 13. Production Fail-Closed Security Key Verification ---
+✅ PASS [61]: Missing MFA_ENCRYPTION_KEY in production strictly fails closed (Throws Fatal Error)
+
+================================================================
+🎉 ALL 61/61 ROOT ADMIN MFA TESTS PASSED PERFECTLY!
+================================================================
+
+
+======================================================================
+🔒 FINAL AUTHORITY MODEL SECURITY SUITE
+   ROOT_ADMIN(100) > SUPER_ADMIN(90) > ADMIN(80) > SUPERVISOR(60) > HM(50) > TEACHER(30) > STUDENT|PARENT(10)
+   Role ≠ Designation. Authorization is role-based, not designation-based.
+======================================================================
+
+--- 1. ROOT_ADMIN Creation Protection ---
+✅ PASS: AM-01: TEACHER body injection of ROOT_ADMIN role is blocked
+✅ PASS: AM-02: ADMIN body injection of ROOT_ADMIN role is blocked
+✅ PASS: AM-03: SUPER_ADMIN body injection of ROOT_ADMIN role is blocked
+✅ PASS: AM-04: ROOT_ADMIN itself is not blocked from ROOT_ADMIN operations (emergency recovery)
+✅ PASS: AM-05: STUDENT cannot self-assign SUPER_ADMIN role (privilege escalation blocked)
+✅ PASS: AM-06: TEACHER cannot self-assign SUPER_ADMIN role (privilege escalation blocked)
+
+--- 2. SUPER_ADMIN Management Safeguards ---
+✅ PASS: AM-07: ROOT_ADMIN can provision a new SUPER_ADMIN account
+✅ PASS: AM-08a: Generic hierarchy guard: SUPER_ADMIN cannot grant SUPER_ADMIN via standard role-assignment endpoint
+✅ PASS: AM-08b: SUPER_ADMIN is authorized for the dedicated Super Admin creation endpoint
+✅ PASS: AM-09: ADMIN is not authorized for the Super Admin creation endpoint
+✅ PASS: AM-10: SUPER_ADMIN cannot promote itself to ROOT_ADMIN
+✅ PASS: AM-11: SUPER_ADMIN cannot modify ROOT_ADMIN account
+
+--- 3. SUPER_ADMIN Disable Safeguards ---
+✅ PASS: AM-12: SUPER_ADMIN self-disable is blocked
+✅ PASS: AM-13: Disabling the final active SUPER_ADMIN is blocked (recovery path protection)
+✅ PASS: AM-14: ROOT_ADMIN can disable the final SUPER_ADMIN (emergency recovery)
+✅ PASS: AM-15: Disable requires mandatory reason of at least 10 characters
+✅ PASS: AM-16: Valid SUPER_ADMIN disable succeeds with all safeguards met
+
+--- 4. ADMIN Authority Ceiling ---
+✅ PASS: AM-17: ADMIN body injection of ROOT_ADMIN is blocked
+✅ PASS: AM-18: ADMIN cannot elevate a user to SUPER_ADMIN (privilege escalation blocked)
+✅ PASS: AM-19: ADMIN is blocked from modifying SUPER_ADMIN accounts
+✅ PASS: AM-20: ADMIN permission ceiling blocks users.assign_role (reserved for SUPER_ADMIN+)
+
+--- 5. Designation Cannot Grant System Authority ---
+✅ PASS: AM-21: Changing designation to "Chairman" does NOT grant SUPER_ADMIN role
+✅ PASS: AM-22: User with designation "DDO" and role TEACHER cannot assign roles (designation has no authority)
+✅ PASS: AM-22b: User with designation "DDO" and role TEACHER has TEACHER permissions only
+✅ PASS: AM-23a: STUDENT has some permissions
+✅ PASS: AM-23b: User with designation "Super Admin" and role STUDENT cannot create users
+
+--- 6. Request-Body Injection Prevention ---
+✅ PASS: AM-24a: Injected USERS_ASSIGN_ROLE via customPermissions is ceiling-stripped for TEACHER
+✅ PASS: AM-24b: Safe customPermissions (attendance.mark) passes ceiling check for TEACHER
+✅ PASS: AM-25a: TEACHER effective scope remains CLASS_SECTION (body GLOBAL injection ignored)
+✅ PASS: AM-25b: Scope injection was detected and ignored
+✅ PASS: AM-26: HM schoolId manipulation to cross-school resource is blocked
+✅ PASS: AM-26b: SUPER_ADMIN is not restricted by schoolId boundaries
+
+--- 7. Audit Trail Immutability ---
+✅ PASS: AM-27a: Audit contains actorId
+✅ PASS: AM-27b: Audit contains actorRole
+✅ PASS: AM-27c: Audit contains action
+✅ PASS: AM-27d: Audit contains result
+✅ PASS: AM-27e: Audit contains reason
+✅ PASS: AM-27f: Audit does NOT contain passwords
+✅ PASS: AM-27g: Audit does NOT contain access tokens
+✅ PASS: AM-27h: Audit does NOT contain refresh tokens
+✅ PASS: AM-27i: Audit does NOT contain password hashes
+✅ PASS: AM-27j: Audit does NOT contain OTP secrets
+✅ PASS: AM-28: Audit captures designation as metadata; authority is the actorRole (SUPER_ADMIN), not the designation
+
+======================================================================
+🎉 ALL 43/43 FINAL AUTHORITY MODEL SECURITY TESTS PASSED!
+   ✅ ROOT_ADMIN body injection blocked for all non-root actors
+   ✅ SUPER_ADMIN self-disable and last-admin disable blocked
+   ✅ Designation changes do not grant system authority
+   ✅ Permission, scope, and schoolId injection all blocked
+   ✅ Audit records contain no credentials
+======================================================================
+
+
+======================================================================
+🔒 EXECUTING FULL AUTH, RBAC HIERARCHY, PERMISSIONS & AUDIT SUITE
+   8-Role System: ROOT_ADMIN > SUPER_ADMIN > ADMIN > SUPERVISOR > HM > TEACHER > STUDENT|PARENT
+   KEY: Designation ≠ Role (DDO → ADMIN, Chairman → SUPER_ADMIN)
+======================================================================
+
+--- 1. Role Hierarchy & Authority Levels ---
+✅ PASS: ROOT_ADMIN is Level 100 (CLI-only, emergency recovery)
+✅ PASS: SUPER_ADMIN is Level 90 (e.g., Town Chairman)
+✅ PASS: ADMIN is Level 80 (e.g., DDO — designation, not role name)
+✅ PASS: SUPERVISOR is Level 60 (e.g., Education Officer)
+✅ PASS: HM is Level 50 (e.g., Head Master or Asst. HM)
+✅ PASS: TEACHER is Level 30
+✅ PASS: STUDENT is Level 10
+✅ PASS: PARENT is Level 10
+✅ PASS: ROOT_ADMIN holds the highest authority level
+
+--- 2. Server Hierarchy Guard (Negative & Positive Bounds) ---
+✅ PASS: TC-01: ROOT_ADMIN can assign/manage SUPER_ADMIN
+✅ PASS: TC-02: SUPER_ADMIN is blocked from modifying ROOT_ADMIN
+✅ PASS: TC-03: SUPER_ADMIN is blocked from modifying equal SUPER_ADMIN
+✅ PASS: TC-04: ADMIN is blocked from modifying SUPER_ADMIN
+✅ PASS: TC-04b: ADMIN cannot elevate TEACHER to SUPER_ADMIN
+✅ PASS: TC-05: SUPER_ADMIN can assign ADMIN role to an HM (e.g., promotion)
+✅ PASS: TC-06: HM is blocked from modifying SUPERVISOR
+✅ PASS: TC-07: SUPERVISOR can manage HM
+✅ PASS: TC-08: HM can manage TEACHER
+
+--- 3. Permission Ceiling & Custom Capability Guard ---
+✅ PASS: TC-09: Permission ceiling detects forbidden permissions for TEACHER
+✅ PASS: USERS_ASSIGN_ROLE is rejected for TEACHER
+✅ PASS: TC-10: ADMIN cannot be granted users.assign_role (SUPER_ADMIN/ROOT_ADMIN only)
+✅ PASS: TC-11: Valid ADMIN-level permissions pass ceiling check
+✅ PASS: TC-12a: Teacher includes default attendance.mark
+✅ PASS: TC-12b: Teacher includes safe custom documents.publish
+✅ PASS: TC-12c: Teacher strictly excludes ceiling-violating users.assign_role
+
+--- 4. Dynamic Decoupled Designation Engine (Designation ≠ Role) ---
+✅ PASS: TC-13: Town Chairman is a civil designation; SUPER_ADMIN is the system role assigned to them
+✅ PASS: TC-14: DDO is a civil designation; ADMIN is the system role assigned to them (not a DDO role)
+✅ PASS: TC-15: Assistant HM is a civil designation; HM is the system role (no ASSISTANT_HM role needed)
+✅ PASS: TC-16: Vice Chairman is a civil designation; ROOT_ADMIN assigns SUPER_ADMIN or ADMIN role based on authority needed
+
+--- 5. JWT Token Versioning & Claim Verification ---
+✅ PASS: TC-17a: Token claims contain userId
+✅ PASS: TC-17b: Token claims contain dynamic civil designation
+✅ PASS: TC-17c: Token claims contain tokenVersion for session validation
+✅ PASS: TC-17d: Token role is ADMIN (not DDO)
+✅ PASS: TC-17e: Token roleLevel is 80 (ADMIN hierarchy level)
+
+--- 6. Math CAPTCHA Challenge ---
+✅ PASS: TC-18a: Math CAPTCHA challenge generated
+✅ PASS: TC-18b: Question matches expected addition format
+✅ PASS: TC-18c: Correct CAPTCHA answer verified
+✅ PASS: TC-18d: Incorrect CAPTCHA answer rejected
+
+--- 7. Git-like Append-Only Audit Schema Immutability ---
+✅ PASS: TC-19a: Audit captures actor civil designation at time of action
+✅ PASS: TC-19b: Audit captures system role (Town Chairman → SUPER_ADMIN)
+✅ PASS: TC-19c: Audit captures outcome result
+✅ PASS: TC-19d: Audit captures before/after role diff snapshot
+
+======================================================================
+🎉 ALL 42/42 INTEGRATION & HIERARCHY TESTS PASSED!
+   ROOT_ADMIN(100) > SUPER_ADMIN(90) > ADMIN(80) > SUPERVISOR(60) > HM(50) > TEACHER(30) > STUDENT|PARENT(10)
+   PRINCIPLE: DDO/Chairman/ViceChairman are DESIGNATIONS — ADMIN/SUPER_ADMIN are ROLES
+======================================================================
+
+
+======================================================
+🛡️ EXECUTING ENTERPRISE SECURITY HARDENING TEST SUITE
+======================================================
+
+--- 1. Cryptographic CAPTCHA & Anti-Replay Shield ---
+✅ PASS: CAPTCHA challenge and envelope generated
+✅ PASS: Plaintext answer is NOT exposed at start of token
+✅ PASS: Correct mathematical answer successfully verified
+✅ PASS: Replaying an already-used CAPTCHA token is strictly rejected
+✅ PASS: Empty answer rejected
+✅ PASS: Empty token rejected
+✅ PASS: Undefined parameters rejected
+
+--- 2. JWT Security & Issuer/Audience Verification ---
+✅ PASS: Token contains authoritative issuer (liaquatabad-education-dmc)
+✅ PASS: Token contains authoritative audience (liaquatabad-education-portal)
+✅ PASS: Refresh token generates 64-char SHA-256 hash
+✅ PASS: Token hash is deterministic
+
+--- 3. ReDoS Attack Vector Neutralization ---
+✅ PASS: Parentheses correctly escaped with backslashes
+✅ PASS: Plus quantifiers correctly escaped
+✅ PASS: ReDoS malicious input tested in under 10ms without catastrophic backtracking
+
+--- 4. Zod User Management Schemas & Privilege Guard ---
+✅ PASS: Valid role and scope assignment passes schema
+✅ PASS: Invalid / invented system role is strictly rejected
+✅ PASS: Sub-3 character justification reason rejected
+✅ PASS: Valid lifecycle suspension with reason passes schema
+
+--- 5. Binary Magic-Byte File Signature Verification ---
+✅ PASS: Valid PDF binary magic bytes (%PDF-) verified
+✅ PASS: MIME-spoofed PHP payload disguised as PNG correctly rejected by magic bytes
+
+--- 6. Audit Trail Immutability Pre-Hooks ---
+✅ PASS: deleteOne hook registered on AuditLog
+✅ PASS: deleteMany hook registered on AuditLog
+✅ PASS: findOneAndDelete hook registered on AuditLog
+✅ PASS: findOneAndUpdate hook registered on AuditLog
+
+======================================================
+🎉 ALL 24/24 SECURITY REGRESSION TESTS PASSED!
+   Defense in depth: Active & Enforced
+======================================================
+
+
+==============================================================================
+🛡️  SECURITY REMEDIATION WAVE 1 — AUTOMATED TEST SUITE
+   SEC-CRIT-01: Root Admin Self-Demotion / Self-Suspension
+   SEC-CRIT-02: BOLA/IDOR on Municipal School Updates
+==============================================================================
+
+--- SEC-CRIT-01: Root Admin Immutability & Self-Operation Prohibition ---
+✅ PASS [1]: TEST-01: Root Admin self-demote is rejected (role change on self)
+✅ PASS [2]: TEST-01: Rejection returns HTTP 403 Forbidden
+✅ PASS [3]: TEST-01: Reason is ROOT_ADMIN_IMMUTABILITY_VIOLATION
+✅ PASS [4]: TEST-02: Root Admin self-suspend is rejected (status mutation on ROOT_ADMIN target)
+✅ PASS [5]: TEST-02: Rejection returns HTTP 403 Forbidden
+✅ PASS [6]: TEST-02: Reason is ROOT_ADMIN_IMMUTABILITY_VIOLATION
+✅ PASS [7]: TEST-03: Super Admin cannot demote Root Admin (INVARIANT 1)
+✅ PASS [8]: TEST-03: Rejection returns HTTP 403 Forbidden
+✅ PASS [9]: TEST-04: Super Admin cannot suspend Root Admin (INVARIANT 1)
+✅ PASS [10]: TEST-04: Rejection returns HTTP 403 Forbidden
+✅ PASS [11]: TEST-05: ADMIN cannot demote Root Admin (INVARIANT 1 + INVARIANT 3)
+✅ PASS [12]: TEST-05: Rejection returns HTTP 403 Forbidden
+
+--- SEC-CRIT-01: Forged Body Parameter Rejection ---
+✅ PASS [13]: TEST-06a: Injecting role into lifecycle schema is rejected by .strict()
+✅ PASS [14]: TEST-06b: Injecting scope into lifecycle schema is rejected by .strict()
+✅ PASS [15]: TEST-06c: Injecting status into assignRole schema is rejected by .strict()
+✅ PASS [16]: TEST-06d: Valid assignRole body passes schema without injection
+✅ PASS [17]: TEST-06e: Injecting townId into school update schema is rejected by .strict()
+✅ PASS [18]: TEST-06f: Injecting organizationId into school update is rejected by .strict()
+
+--- SEC-CRIT-02: BOLA/IDOR Prevention on Municipal School Updates ---
+✅ PASS [19]: TEST-07: ADMIN updating own-town school is permitted (positive case)
+✅ PASS [20]: TEST-07: Success returns HTTP 200
+✅ PASS [21]: TEST-08: ADMIN cross-town school update is rejected (BOLA protection)
+✅ PASS [22]: TEST-08: Rejection returns HTTP 403 Forbidden
+✅ PASS [23]: TEST-08: Reason is ADMIN_CROSS_TOWN_SCHOOL_BOLA_VIOLATION
+✅ PASS [24]: TEST-09a: Tampered schoolId (non-hex) is rejected
+✅ PASS [25]: TEST-09a: Bad format returns HTTP 400 Bad Request
+✅ PASS [26]: TEST-09b: Tampered schoolId (too short) is rejected
+✅ PASS [27]: TEST-09b: Short ID returns HTTP 400 Bad Request
+✅ PASS [28]: TEST-09c: Missing/undefined schoolId is rejected
+✅ PASS [29]: TEST-09c: Missing ID returns HTTP 400 Bad Request
+✅ PASS [30]: TEST-10: Cross-town mutation is blocked (audit will be triggered)
+✅ PASS [31]: TEST-10: Blocked attempt returns 403 for audit
+✅ PASS [32]: TEST-10: Audit reason is ADMIN_CROSS_TOWN_SCHOOL_BOLA_VIOLATION (immutable DENIED record)
+✅ PASS [33]: TEST-10: Audit payload has result: DENIED
+✅ PASS [34]: TEST-10: Audit payload does not contain passwords
+✅ PASS [35]: TEST-10: Audit payload does not contain tokens
+✅ PASS [36]: TEST-10: Audit action is canonical BOLA violation identifier
+✅ PASS [37]: TEST-11: ROOT_ADMIN can manage any school regardless of town boundary
+✅ PASS [38]: TEST-11: ROOT_ADMIN global access returns HTTP 200
+✅ PASS [39]: TEST-12: ROOT_ADMIN can legitimately promote ADMIN to SUPER_ADMIN
+✅ PASS [40]: TEST-12: Legitimate ROOT_ADMIN operation returns HTTP 200
+✅ PASS [41]: TEST-13: SUPER_ADMIN self-suspension is rejected (INVARIANT 2)
+✅ PASS [42]: TEST-13: Reason is SELF_MUTATION_FORBIDDEN
+
+--- Regression: Permission Ceiling Intact After Wave 1 ---
+✅ PASS [43]: REGRESSION: ROOT_ADMIN retains users.assign_role after Wave 1
+✅ PASS [44]: REGRESSION: SUPER_ADMIN retains users.assign_role after Wave 1
+✅ PASS [45]: REGRESSION: ADMIN still cannot assign roles after Wave 1
+✅ PASS [46]: REGRESSION: SUPERVISOR still cannot assign roles after Wave 1
+✅ PASS [47]: REGRESSION: ROOT_ADMIN hierarchy level unchanged (100)
+✅ PASS [48]: REGRESSION: SUPER_ADMIN hierarchy level unchanged (90)
+✅ PASS [49]: REGRESSION: ADMIN hierarchy level unchanged (80)
+
+==============================================================================
+🎉 ALL 49/49 SECURITY WAVE 1 TESTS PASSED!
+   ✅ SEC-CRIT-01: ROOT_ADMIN immutability enforced via web APIs
+   ✅ SEC-CRIT-01: Self-operation prohibition (demote/suspend self blocked)
+   ✅ SEC-CRIT-01: SUPER_ADMIN/ADMIN cannot mutate ROOT_ADMIN accounts
+   ✅ SEC-CRIT-01: Forged body parameters rejected by .strict() schema
+   ✅ SEC-CRIT-02: ADMIN cross-town BOLA/IDOR blocked (jurisdictional enforcement)
+   ✅ SEC-CRIT-02: schoolId tampering / invalid format → 400
+   ✅ SEC-CRIT-02: Denied audit events contain DENIED result, no secrets
+   ✅ SEC-CRIT-02: ROOT_ADMIN global access preserved
+   ✅ Regression: Permission ceilings and hierarchy levels unchanged
+   🔒 Break-Glass CLI recovery script is the ONLY path to ROOT_ADMIN mutation
+==============================================================================
+
+
+============================================================
+🏛️  ROOT ADMIN MODULE COMPLETE FEATURE VALIDATION SUITE
+============================================================
+
+✅ PASS [1]: Valid class creation schema parses successfully
+✅ PASS [2]: Class schema .strict() rejects unauthorized injected fields
+✅ PASS [3]: Class update schema accepts status: ARCHIVED for soft-deletion
+✅ PASS [4]: Valid section creation schema parses successfully
+✅ PASS [5]: Section schema rejects capacity exceeding 120 seats
+✅ PASS [6]: Section update schema accepts soft-delete ARCHIVED status
+✅ PASS [7]: Valid subject creation schema parses successfully
+✅ PASS [8]: Subject schema rejects XSS/script patterns in course name
+✅ PASS [9]: Bulk user action schema parses valid APPROVE request
+✅ PASS [10]: Bulk user action schema parses valid SUSPEND request
+✅ PASS [11]: Bulk user action schema rejects empty userIds array
+✅ PASS [12]: Bulk user action schema .strict() blocks role promotion injection
+✅ PASS [13]: Municipal school update schema accepts status: ARCHIVED
+✅ PASS [14]: School update schema .strict() blocks townId body injection
+✅ PASS [15]: CSV cell escaping correctly doubles quotes and preserves commas within delimiters
+✅ PASS [16]: CSV escaping produces empty quoted cell for null/undefined
+
+------------------------------------------------------------
+🎉 ALL 16 OF 16 TESTS PASSED SUCCESSFULLY!
+============================================================
+
+==============================================================================
+🛡️  35 MANDATORY NEGATIVE SECURITY SCENARIOS — ENTERPRISE AUTHORIZATION SUITE
+==============================================================================
+
+✅ PASS [1]: Scenario 01: Teacher assigning ADMIN to self is strictly blocked (HTTP 403)
+✅ PASS [2]: Scenario 02: Peon assigning SUPER_ADMIN is strictly blocked (HTTP 403)
+✅ PASS [3]: Scenario 03: Admin creating or elevating to another ADMIN is strictly blocked (HTTP 403)
+✅ PASS [4]: Scenario 04: Admin suspending peer ADMIN is strictly blocked (HTTP 403)
+✅ PASS [5]: Scenario 05: Admin suspending superior SUPER_ADMIN is strictly blocked (HTTP 403)
+✅ PASS [6]: Scenario 06: Disabling final active Super Admin is strictly blocked (HTTP 409/403)
+✅ PASS [7]: Scenario 07: Root Admin self-demotion via web API is strictly blocked (HTTP 403)
+✅ PASS [8]: Scenario 08: Root Admin self-suspension via web API is strictly blocked (HTTP 403)
+✅ PASS [9]: Scenario 09: Registration payload submitting ROOT_ADMIN is rejected by schema
+✅ PASS [10]: Scenario 10: Registration payload submitting SUPER_ADMIN is rejected by schema
+✅ PASS [11]: Scenario 11: Registration payload submitting ADMIN is rejected by schema
+✅ PASS [12]: Scenario 12: Registration payload submitting HM is rejected by schema
+✅ PASS [13]: Scenario 13: HM creating another HM is strictly blocked (HTTP 403)
+✅ PASS [14]: Scenario 14: HM does not possess USERS_CREATE permission to create teachers
+✅ PASS [15]: Scenario 15: HM creating admin is strictly blocked (HTTP 403)
+✅ PASS [16]: Scenario 16: HM enrolling student in another school is strictly blocked (HTTP 403)
+✅ PASS [17]: Scenario 17: School A HM accessing School B resources is blocked (HTTP 403)
+✅ PASS [18]: Scenario 18: Supervisor accessing an unassigned school is blocked (HTTP 403)
+✅ PASS [19]: Scenario 19: Admin accessing resources in another town is blocked (HTTP 403)
+✅ PASS [20]: Scenario 20: Injected townId/schoolId in update payload rejected by .strict()
+✅ PASS [21]: Scenario 21: URL userId pointing to cross-school user intercepted by Scope Guard (HTTP 403)
+✅ PASS [22]: Scenario 22: Custom permissions exceeding role ceiling are flagged as invalid
+✅ PASS [23]: Scenario 22: Forbidden ceiling permission isolated
+✅ PASS [24]: Scenario 22: Ceiling violation stripped from effective permissions
+✅ PASS [25]: Scenario 23: Attacker request-body role ignored; server evaluates token authority
+✅ PASS [26]: Scenario 24: Attacker request-body scope ignored; server evaluates token scope
+✅ PASS [27]: Scenario 25: Mass assignment attack on lifecycle endpoint rejected by .strict()
+✅ PASS [28]: Scenario 26: Suspended user session rejected with HTTP 403
+✅ PASS [29]: Scenario 27: Old JWT with mismatched tokenVersion rejected with HTTP 401
+✅ PASS [30]: Scenario 28: Old JWT after suspension rejected immediately
+✅ PASS [31]: Scenario 29: State mutation triggers tokenVersion increment preventing replay attack state drift
+✅ PASS [32]: Scenario 30: Teacher role does not possess AUDIT_VIEW permission (HTTP 403)
+✅ PASS [33]: Scenario 31: Driver-level pre-hooks prohibit any update or deletion of audit records
+✅ PASS [34]: Scenario 32: Scoped user query strictly forces schoolId filter for school actors
+✅ PASS [35]: Scenario 33: Scoped user query strictly forces townId filter for Admin actors
+✅ PASS [36]: Scenario 34: Cross-town school mutation attempt blocked by jurisdictional scope check (HTTP 403)
+✅ PASS [37]: Scenario 35: Cross-school user resource manipulation blocked by jurisdictional scope check (HTTP 403)
+
+==============================================================================
+🎉 ALL 37/37 MANDATORY NEGATIVE SECURITY TESTS PASSED!
+   Model: DESIGNATION != BASE ROLE != GRANTED AUTHORITY != PERMISSION != SCOPE
+   NIST SP 800-162 / ANSI INCITS 359 / OWASP ASVS 5.0 Compliant
+==============================================================================
+
+============================================================
+🏛️  AUTHORITY TRANSITION MATRIX & RBAC RECONCILIATION SUITE
+============================================================
+
+--- 1. Schema Validation & Security Boundary Tests ---
+✅ PASS: Valid SUPER_ADMIN grant with GLOBAL scope parses successfully
+✅ PASS: Valid ADMIN grant with TOWN scope parses successfully
+✅ PASS: Non-canonical scope "ADMINISTRATIVE" is strictly rejected by schema
+✅ PASS: Schema .strict() rejects injected password/credential field
+✅ PASS: Schema .strict() rejects injected email field
+✅ PASS: Short reason (< 5 chars) is rejected
+✅ PASS: ROOT_ADMIN is rejected as an assignable authority in grantAuthoritySchema
+
+--- 2. Server Transition Policy Matrix Logic Tests ---
+✅ PASS: ROOT_ADMIN -> SUPER_ADMIN grant returns 200 OK
+✅ PASS: Target user role successfully elevated to SUPER_ADMIN
+✅ PASS: User designation remains 100% UNTOUCHED
+✅ PASS: User baseRole remains 100% UNTOUCHED
+✅ PASS: Target user tokenVersion incremented for session revocation
+✅ PASS: ROOT_ADMIN -> ADMIN is strictly rejected (Root Admin only delegates to Super Admins)
+✅ PASS: SUPER_ADMIN -> ADMIN grant returns 200 OK
+✅ PASS: Target user role successfully elevated to ADMIN
+✅ PASS: Designation Head Master preserved with ADMIN authority
+✅ PASS: Canonical TOWN scope assigned
+✅ PASS: tokenVersion incremented
+✅ PASS: SUPER_ADMIN -> SUPER_ADMIN co-delegation returns 200 OK
+✅ PASS: Target elevated to SUPER_ADMIN
+✅ PASS: SUPER_ADMIN cannot modify peer SUPER_ADMIN via authority grant endpoint
+✅ PASS: SUPER_ADMIN suspension of peer SUPER_ADMIN remains possible under Safeguards (A != B, activeCount > 1)
+✅ PASS: SUPER_ADMIN suspension increments target tokenVersion for session revocation
+✅ PASS: SUPER_ADMIN self-disable attempt is strictly blocked (HTTP 403)
+✅ PASS: Disabling final active SUPER_ADMIN is blocked to prevent recovery lockout (HTTP 409)
+✅ PASS: ROOT_ADMIN self-demotion invariant: web API blocks role/scope mutation on self (HTTP 403)
+✅ PASS: ROOT_ADMIN self-suspension invariant: web API blocks deactivation of ROOT_ADMIN (HTTP 403)
+✅ PASS: ADMIN is blocked from granting ADMIN authority (HTTP 403)
+✅ PASS: ADMIN is blocked from granting SUPER_ADMIN authority (HTTP 403)
+✅ PASS: TEACHER is strictly blocked from granting privileged authority (HTTP 403)
+✅ PASS: Self-grant attempt is strictly blocked (HTTP 403)
+✅ PASS: Targeting ROOT_ADMIN account is strictly blocked (HTTP 403)
+✅ PASS: Granting ROOT_ADMIN authority via web API is strictly blocked (HTTP 403)
+✅ PASS: Target user already holding requested authority returns 409 Conflict
+✅ PASS: Target in SUSPENDED status is rejected with 400 Bad Request
+✅ PASS: Authority grant to PENDING_APPROVAL user succeeds
+✅ PASS: User status explicitly transitioned from PENDING_APPROVAL to ACTIVE
+✅ PASS: Approval details record actor as approving authority
+✅ PASS: Approval details contain explicit administrative approval contract remarks and authority reference
+✅ PASS: Designation remains untouched
+
+--- 3. Lockout Flush Schema & Security Boundary Tests ---
+✅ PASS: Valid flush lockouts payload with typed reason and confirmation parses successfully
+✅ PASS: Flush lockouts payload missing mandatory reason is rejected by schema
+✅ PASS: Flush lockouts payload with reason under 5 characters is rejected by schema
+✅ PASS: Flush lockouts payload with confirmed: false is rejected by schema
+✅ PASS: Flush lockouts payload with injected fields is rejected by .strict() schema
+
+============================================================
+🎉 ALL 45 OF 45 AUTHORITY TRANSITION MATRIX TESTS PASSED!
+============================================================
+
+
+==============================================================================
+🛡️  10 MANDATORY TEACHER ATTENDANCE SECURITY & ISOLATION TESTS
+==============================================================================
+
+✅ PASS [1]: Scenario 01: Cross-school boundary check detects school mismatch
+✅ PASS [2]: Scenario 01: Teacher accessing another school section is strictly blocked (HTTP 403 boundary)
+✅ PASS [3]: Scenario 02: Same-school check succeeds, but assignment check isolates Teacher A from Teacher B
+✅ PASS [4]: Scenario 02: Teacher accessing same-school but unassigned section is strictly blocked (HTTP 403)
+✅ PASS [5]: Scenario 03: Submission on unassigned section fails authorization check (HTTP 403)
+✅ PASS [6]: Scenario 04: Foreign student ID detected in attendance roster payload
+✅ PASS [7]: Scenario 04: Cross-section student injection blocked with HTTP 403 roster integrity violation
+✅ PASS [8]: Scenario 05: req.body.teacherId is ignored; authoritative session identity is enforced
+✅ PASS [9]: Scenario 06: req.body.schoolId is ignored; authoritative session school is enforced
+✅ PASS [10]: Scenario 07a: Malformed sectionId rejected at input validation layer (HTTP 400)
+✅ PASS [11]: Scenario 07b: Non-existent sectionId triggers HTTP 404 Registry Not Found
+✅ PASS [12]: Scenario 08: Teacher with lifecycle status SUSPENDED is rejected with HTTP 403
+✅ PASS [13]: Scenario 08: Teacher with lifecycle status PENDING_APPROVAL is rejected with HTTP 403
+✅ PASS [14]: Scenario 08: Teacher with lifecycle status INACTIVE is rejected with HTTP 403
+✅ PASS [15]: Scenario 09: Request pipeline blocked when attendance.mark permission is absent
+✅ PASS [16]: Scenario 09: HTTP 403 returned when missing attendance.mark
+✅ PASS [17]: Scenario 10: Teacher ceiling strictly prohibits municipal administrative permission 'audit.view'
+✅ PASS [18]: Scenario 10: Teacher ceiling strictly prohibits municipal administrative permission 'users.assign_role'
+✅ PASS [19]: Scenario 10: Teacher ceiling strictly prohibits municipal administrative permission 'users.create'
+✅ PASS [20]: Scenario 10: Teacher ceiling strictly prohibits municipal administrative permission 'users.suspend'
+✅ PASS [21]: Scenario 10: Teacher ceiling strictly prohibits municipal administrative permission 'transfers.emergency_override'
+✅ PASS [22]: Scenario 10: Teacher ceiling strictly prohibits municipal administrative permission 'schools.create'
+✅ PASS [23]: Scenario 10: validatePermissionCeiling flags administrative permissions as invalid for TEACHER
+✅ PASS [24]: Scenario 10: Injected municipal audit.view permission stripped by ceiling enforcement
+✅ PASS [25]: Scenario 10: Injected municipal users.assign_role permission stripped by ceiling enforcement
+
+==============================================================================
+🎉 ALL 25/25 TEACHER ATTENDANCE NEGATIVE SECURITY TESTS PASSED!
+   Strict Multi-Tenant Isolation & Jurisdictional ABAC Boundary Verified
+==============================================================================
+
+
+==============================================================================
+🛡️  CONTROLLED SEED DATASET & PRODUCTION GUARD VERIFICATION SUITE
+==============================================================================
+
+✅ PASS [1]: Production guard: NODE_ENV=production is strictly blocked
+✅ PASS [2]: Production guard: NODE_ENV=development is permitted
+✅ PASS [3]: Production guard: NODE_ENV=test is permitted
+✅ PASS [4]: Volume Invariant: Exactly 2 schools configured
+✅ PASS [5]: Volume Invariant: Exactly 10 staff accounts configured
+✅ PASS [6]: Volume Invariant: Exactly 5 student accounts configured
+✅ PASS [7]: Volume Invariant: Exactly 3 parent accounts configured
+✅ PASS [8]: Authority Safety: ZERO staff accounts hold privileged authority (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM)
+✅ PASS [9]: Staff Distribution: Exactly 8 ordinary Teacher accounts
+✅ PASS [10]: Staff Distribution: Exactly 2 basic Support Staff accounts (PEON/Clerk)
+✅ PASS [11]: Parent Scope: Parent 1 linked to exactly 2 students (Multi-child testing)
+✅ PASS [12]: Parent Scope: Parent 2 linked to exactly 1 student (Single-child testing)
+✅ PASS [13]: Parent Scope: Parent 3 linked to exactly 2 students (Multi-child testing)
+✅ PASS [14]: Isolation: Parent 1 has no access to Parent 2/3 children
+✅ PASS [15]: Isolation: Parent 2 has no access to Parent 1/3 children
+✅ PASS [16]: PII Safety: All test emails use safe non-routable @example.test domain
+✅ PASS [17]: Integrity: All test account emails are strictly unique
+
+==============================================================================
+🎉 ALL 17/17 SEED DATASET & PRODUCTION GUARD TESTS PASSED!
+==============================================================================
+
+
+============================================================
+🏛️  INSTITUTIONAL STAFF REGISTRATION & APPROVAL TEST SUITE
+============================================================
+
+--- 1. Registration Schema & Invariant Tests ---
+✅ PASS [1]: Valid comprehensive teacher registration payload parses cleanly
+✅ PASS [2]: Missing fatherName is rejected by schema
+✅ PASS [3]: Missing employeeId is rejected by schema
+✅ PASS [4]: CNIC without hyphens is strictly rejected by schema
+✅ PASS [5]: CNIC with incorrect middle digits is strictly rejected
+✅ PASS [6]: Valid Pakistani CNIC 42101-1234567-1 parses cleanly
+✅ PASS [7]: Missing bankName is rejected by schema
+✅ PASS [8]: Non-teaching staff submitting teaching assignments is rejected by schema refinement
+✅ PASS [9]: Non-teaching staff without teaching assignments passes validation
+✅ PASS [10]: Self-assignment of privileged authority ROOT_ADMIN is rejected
+✅ PASS [11]: Self-assignment of privileged authority SUPER_ADMIN is rejected
+✅ PASS [12]: Self-assignment of privileged authority ADMIN is rejected
+✅ PASS [13]: Self-assignment of privileged authority HM is rejected
+✅ PASS [14]: Registration payload without OTP code is rejected
+
+--- 2. Sensitive Data Protection & Masking Tests ---
+✅ PASS [15]: maskCnic produces compliant masked string (42101-*******-1)
+✅ PASS [16]: maskBankAccount produces compliant masked string (****5678)
+✅ PASS [17]: maskBankAccount handles short account numbers securely
+
+--- 3. Approvals Jurisdictional Scope Boundary Matrix Tests ---
+✅ PASS [18]: School A HM can approve applicant claiming School A
+✅ PASS [19]: School B HM is strictly blocked from approving applicant claiming School A (Cross-School Boundary)
+✅ PASS [20]: Supervisor assigned to School A can approve applicant claiming School A
+✅ PASS [21]: Supervisor NOT assigned to School A is blocked from approving School A applicant
+✅ PASS [22]: Town Admin can approve applicant within same municipal town
+✅ PASS [23]: Admin from another town is blocked from approving applicant
+✅ PASS [24]: Global Super Admin can approve applicant
+✅ PASS [25]: Root Admin can approve applicant
+✅ PASS [26]: Ordinary Teacher is strictly blocked from approving staff
+✅ PASS [27]: Student is strictly blocked from approving staff
+
+--- 4. Lifecycle State & Decision Invariants ---
+✅ PASS [28]: USER_STATUS.REJECTED exists with value REJECTED
+✅ PASS [29]: TEACHER_STATUS.REJECTED exists with value REJECTED
+✅ PASS [30]: USER_STATUS.REQUIRES_CORRECTION exists
+
+--- 5. Authoritative Teaching Assignment Model Invariants ---
+✅ PASS [31]: TeachingAssignment.isTeacherAssigned helper is defined
+✅ PASS [32]: TeachingAssignment.findActiveConflict helper is defined
+✅ PASS [33]: Partial unique index on ACTIVE assignments exists in TeachingAssignment schema
+
+============================================================
+🎉 ALL 33/33 STAFF PROFILE & APPROVAL TESTS PASSED!
+============================================================
+
+
+==============================================================================
+🏛️  REAL CONTROLLER INTEGRATION & DEEP SECURITY VERIFICATION SUITE
+==============================================================================
+
+--- PART 1: Authentication, Status Guards & Token Invalidation ---
+✅ PASS [1]: 1.1: User in PENDING_APPROVAL is blocked from logging in (HTTP 403)
+✅ PASS [2]: 1.1: Appropriate pending approval message returned
+✅ PASS [3]: 1.2: User in REQUIRES_CORRECTION is blocked from normal login (HTTP 403)
+✅ PASS [4]: 1.3: User in REJECTED status is blocked from logging in (HTTP 403)
+✅ PASS [5]: 1.4: User in ACTIVE status passes login status verification
+✅ PASS [6]: 1.5: Decoded JWT retains tokenVersion claim of 1
+✅ PASS [7]: 1.6: Old JWT tokenVersion (1) fails check against updated DB tokenVersion (2)
+✅ PASS [8]: 1.7: Newly signed JWT matches DB tokenVersion and is valid
+
+--- PART 2: Approvals Matrix & Cross-School Boundaries ---
+✅ PASS [9]: 2.1: School A HM is authorized to approve School A applicant
+✅ PASS [10]: 2.2: School B HM is strictly blocked from approving School A applicant (Cross-School Boundary)
+✅ PASS [11]: 2.3: Supervisor with School A in assignedSchools is authorized
+✅ PASS [12]: 2.4: Supervisor without School A in assignedSchools is blocked
+✅ PASS [13]: 2.5: Town Admin within same town is authorized
+✅ PASS [14]: 2.6: Admin from different town is blocked
+✅ PASS [15]: 2.7: Super Admin (GLOBAL) is authorized
+✅ PASS [16]: 2.8: Root Admin is authorized
+✅ PASS [17]: 2.9: Ordinary Teacher is blocked from approving staff
+✅ PASS [18]: 2.10: Peon is blocked from approving staff
+✅ PASS [19]: 2.11: Student is blocked from approving staff
+✅ PASS [20]: 2.12: Parent is blocked from approving staff
+
+--- PART 3: Decision Processing, Idempotency & Lifecycle Transitions ---
+✅ PASS [21]: 3.1: Approval of pending staff returns HTTP 200
+✅ PASS [22]: 3.1: Target status transitioned to ACTIVE
+✅ PASS [23]: 3.1: Claimed school verified into authoritative schoolId
+✅ PASS [24]: 3.1: Target tokenVersion incremented to 2
+✅ PASS [25]: 3.2: Re-approving already active user returns HTTP 409 Conflict (Idempotent guard)
+✅ PASS [26]: 3.3: REQUEST_CORRECTION with reason < 5 chars rejected (HTTP 400)
+✅ PASS [27]: 3.4: REQUEST_CORRECTION with valid remarks accepted
+✅ PASS [28]: 3.4: Target status set to REQUIRES_CORRECTION
+✅ PASS [29]: 3.4: Correction remarks recorded
+✅ PASS [30]: 3.5: Applicant resubmission returns status to PENDING_APPROVAL
+✅ PASS [31]: 3.6: Final approval after correction resubmission succeeds
+✅ PASS [32]: 3.6: Final status is ACTIVE
+✅ PASS [33]: 3.7: Rejection with valid justification succeeds
+✅ PASS [34]: 3.7: Target status is explicitly REJECTED
+✅ PASS [35]: 3.8: Attempt to re-approve a REJECTED account is blocked (HTTP 400)
+
+--- PART 4: TeachingAssignment Domain Model & Cross-School Integrity ---
+✅ PASS [36]: 4.1: Cross-school class injection is strictly blocked (HTTP 400)
+✅ PASS [37]: 4.1: Explains structural integrity violation
+✅ PASS [38]: 4.2: Cross-school subject injection is strictly blocked (HTTP 400)
+✅ PASS [39]: 4.3: Teacher attempting to self-create assignment is blocked (HTTP 403)
+✅ PASS [40]: 4.4: Non-teaching staff receiving teaching assignment is rejected (HTTP 400)
+✅ PASS [41]: 4.5: Teaching staff passes eligibility check
+✅ PASS [42]: 4.6: Teacher authorized for 9-A English via active TeachingAssignment
+✅ PASS [43]: 4.7: Teacher is NOT authorized for 9-B Math despite being designated classTeacherId
+✅ PASS [44]: 4.8: Assignment status transitioned to COMPLETED
+✅ PASS [45]: 4.8: effectiveTo timestamp is recorded
+✅ PASS [46]: 4.9: Completed assignment no longer conflicts with new active assignments
+
+--- PART 5: Sensitive Profile ABAC Matrix & Data Masking ---
+✅ PASS [47]: 5.1: Self can view profile and sensitive data
+✅ PASS [48]: 5.2: Same-school HM can view profile and sensitive data
+✅ PASS [49]: 5.3: Supervisor of assigned school can view profile
+✅ PASS [50]: 5.3: Supervisor sensitive data view is restricted (requires masking)
+✅ PASS [51]: 5.4: Teacher from another school is denied (HTTP 403)
+✅ PASS [52]: 5.5: Student is denied staff profile (HTTP 403)
+✅ PASS [53]: 5.6: Parent is denied staff profile (HTTP 403)
+✅ PASS [54]: 5.7: maskCnic masks middle 7 digits with asterisks
+✅ PASS [55]: 5.7: Plaintext middle digits absent from masked output
+✅ PASS [56]: 5.8: maskBankAccount preserves only last 4 digits
+✅ PASS [57]: 5.8: Plaintext prefix absent from masked output
+
+--- PART 6: Service Record PDF Generation & Audit Verification ---
+✅ PASS [58]: 6.1: Unauthorized actor requesting PDF receives HTTP 403
+✅ PASS [59]: 6.2: Authorized actor requesting PDF receives HTTP 200
+✅ PASS [60]: 6.2: Response Header Content-Type is application/pdf
+✅ PASS [61]: 6.3: Audit payload contains zero raw CNIC data
+✅ PASS [62]: 6.4: Audit payload contains zero raw bank account data
+✅ PASS [63]: 6.5: Audit event action correctly set
+
+==============================================================================
+🎉 ALL 63/63 CONTROLLER INTEGRATION & SECURITY TESTS PASSED!
+   Full Lifecycle, Boundary Isolations, and Domain Model Invariants Verified
+==============================================================================
+
+
+==============================================================================
+📊 ATTENDANCE ANALYTICS & DELTA ROLLUP VERIFICATION SUITE
+==============================================================================
+
+✅ PASS [1]: Test 01: July 2026 resolves to academic session 2026-2027
+✅ PASS [2]: Test 02: February 2026 resolves to academic session 2025-2026
+✅ PASS [3]: Test 03: Order-independent hash generates identical idempotency fingerprint
+✅ PASS [4]: Test 04: Modified status produces distinct hash triggering delta calculation
+✅ PASS [5]: Test 05: Status correction does not increment total working days
+✅ PASS [6]: Test 06: Present count increases by +1 on correction
+✅ PASS [7]: Test 07: Absent count decreases by -1 on correction (No double-count)
+✅ PASS [8]: Test 08: Leave count remains unchanged
+✅ PASS [9]: Test 09: Total working days preserved at 20
+✅ PASS [10]: Test 10: Present days updated to 19
+✅ PASS [11]: Test 11: Absent days updated to 1
+✅ PASS [12]: Test 12: New percentage correctly reflects 95.0% instead of corrupted numbers
+✅ PASS [13]: Test 13: Deletion decrements working days by -1
+✅ PASS [14]: Test 14: Deletion decrements present days by -1
+✅ PASS [15]: Test 15: Pre-admission months excluded from working days (40 instead of 123)
+✅ PASS [16]: Test 16: Pre-admission months excluded from present days (36 instead of 111)
+✅ PASS [17]: Test 17: Official academic year percentage reflects 90.0% from admission date
+✅ PASS [18]: Test 18: School A is cached
+✅ PASS [19]: Test 19: Town overview is cached
+✅ PASS [20]: Test 20: School A cache was evicted
+✅ PASS [21]: Test 21: Town overview was evicted on cascading invalidate
+✅ PASS [22]: Test 22: Unaffected School B remains cached
+✅ PASS [23]: Test 23: Unrelated key remains intact
+✅ PASS [24]: Test 24: Student role forces target to own userId regardless of param
+✅ PASS [25]: Test 25: Parent authorized for legitimately linked child
+✅ PASS [26]: Test 26: Parent strictly blocked from viewing unlinked child (HTTP 403)
+✅ PASS [27]: Test 27: HM cannot query foreign school analytics
+✅ PASS [28]: Test 28: Admin has town-wide access
+✅ PASS [29]: Test 29: Super Admin has town-wide access
+✅ PASS [30]: Test 30: HM is barred from town-wide overview (HTTP 403)
+✅ PASS [31]: Test 31: Teacher is barred from town-wide overview (HTTP 403)
+✅ PASS [32]: Test 32: Student is barred from town-wide overview (HTTP 403)
+
+🎉 ALL 32/32 ATTENDANCE ANALYTICS & DELTA TESTS PASSED!
+
+
+==============================================================================
+🏛️  TOWN-WIDE HOLIDAY GOVERNANCE & SCHOOL TIMING POLICY SUITE
+==============================================================================
+
+✅ PASS [1]: Test 01: UTC 02:30 converts precisely to Karachi 07:30 PKT (UTC+5)
+✅ PASS [2]: Test 02: Karachi date is correctly formatted as YYYY-MM-DD
+✅ PASS [3]: Test 03: YYYY-MM-DD string is safely normalized
+✅ PASS [4]: Test 04: September 11, 2026 is recognized as Friday (Day 5)
+✅ PASS [5]: Test 05: September 14, 2026 is recognized as Monday (Day 1)
+✅ PASS [6]: Test 06: Early submission at 05:00 AM PKT is strictly blocked
+✅ PASS [7]: Test 07: Returns WINDOW_NOT_OPENED error code
+✅ PASS [8]: Test 08: Teacher submitting after window closed (15:30 PKT) is blocked
+✅ PASS [9]: Test 09: Returns WINDOW_CLOSED error code
+✅ PASS [10]: Test 10: HM late override without justification is blocked
+✅ PASS [11]: Test 11: Reason length enforcement returns REASON_REQUIRED
+✅ PASS [12]: Test 12: HM attempting retrospective late override for past date is blocked
+✅ PASS [13]: Test 13: Returns BACKDATING_BLOCKED error code
+✅ PASS [14]: Test 14: HM same-day late clearance with valid justification is accepted
+✅ PASS [15]: Test 15: Override records audit-ready lateReason
+✅ PASS [16]: Test 16: School A in Town is covered by 1-click town holiday
+✅ PASS [17]: Test 17: School B in Town is covered by 1-click town holiday
+✅ PASS [18]: Test 18: School C in different town is unaffected
+✅ PASS [19]: Test 19: School A emergency closure is active
+✅ PASS [20]: Test 20: School B remains open (Isolation preserved)
+✅ PASS [21]: Test 21: Sunday (0) matches weekly off
+✅ PASS [22]: Test 22: Saturday (6) matches weekly off
+✅ PASS [23]: Test 23: Monday (1) is a regular operational working day
+✅ PASS [24]: Test 24: Friday (5) is an operational working day (Jummah timing)
+✅ PASS [25]: Test 25: Removing Saturday immediately re-enables Saturday attendance town-wide
+✅ PASS [26]: Test 26: HM scopeType is forcibly locked to SCHOOL (TOWN override defeated)
+✅ PASS [27]: Test 27: HM schoolId is forcibly locked to JWT schoolId
+✅ PASS [28]: Test 28: Short reason (<10 chars) identified for rejection
+✅ PASS [29]: Test 29: Detailed justification (>=10 chars) accepted for accountability
+✅ PASS [30]: Test 30: Root Admin authorized for school timings
+✅ PASS [31]: Test 31: Super Admin authorized for school timings
+✅ PASS [32]: Test 32: Town Admin authorized for school timings
+✅ PASS [33]: Test 33: HM strictly prohibited from modifying school timings
+✅ PASS [34]: Test 34: Teacher strictly prohibited from modifying school timings
+✅ PASS [35]: Test 35: Weekly-off retrieval constructs explicit $or boundary filter
+✅ PASS [36]: Test 36: Scoped to teacher town
+✅ PASS [37]: Test 37: Scoped to teacher school (zero cross-tenant leak)
+✅ PASS [38]: Test 38: Past date identified as historical
+✅ PASS [39]: Test 39: Retroactive holiday on date with submitted attendance is strictly rejected (HTTP 409)
+✅ PASS [40]: Test 40: Sub-15 char justification for backdating rejected
+✅ PASS [41]: Test 41: Malformed schoolId for weekly-off rejected
+✅ PASS [42]: Test 42: School-scoped deactivation targets specific school
+✅ PASS [43]: Test 43: No undefined schoolId spread bug in deactivation query
+✅ PASS [44]: Test 44: Supervisor filter constructs explicit $or branch
+✅ PASS [45]: Test 45: Supervisor restricted strictly to assignedSchools array
+✅ PASS [46]: Test 46: Supervisor denied access to foreign school patterns (isolation intact)
+✅ PASS [47]: Test 47: Town-wide conflict check queries all schools in the town
+✅ PASS [48]: Test 48: Every school in town is evaluated for conflict before holiday declaration
+
+🎉 ALL 48/48 TOWN HOLIDAY & TIMING POLICY TESTS PASSED!
+
+═══════════════════════════════════════════════════════════════════════
+  🏛️  EXECUTIVE ANNOUNCEMENT & PUBLIC TOWN-STATS TEST SUITE
+═══════════════════════════════════════════════════════════════════════
+
+--- TEST GROUP 1: RBAC Authority Enforcement ---
+✅ PASS [1]: HM attempting to post announcement is rejected with 403 Forbidden
+✅ PASS [2]: Teacher attempting to post announcement is rejected with 403 Forbidden
+✅ PASS [3]: Student attempting to post announcement is rejected with 403 Forbidden
+[10:52:23] info: [PublicStats] In-memory cache invalidated successfully.
+✅ PASS [4]: ROOT_ADMIN can post announcement (201 Created)
+✅ PASS [5]: Announcement status is ACTIVE
+✅ PASS [6]: Mock store contains 1 announcement
+[10:52:23] info: [PublicStats] In-memory cache invalidated successfully.
+✅ PASS [7]: ADMIN (DDO) can post announcement (201 Created)
+✅ PASS [8]: Second announcement is ACTIVE
+
+--- TEST GROUP 2: Single-Active Invariant & Zero Hard Deletion ---
+✅ PASS [9]: Exactly ONE announcement is ACTIVE at a time
+✅ PASS [10]: Active announcement is the newest one
+✅ PASS [11]: Total announcements count is 2 (Article IV: Zero Hard Deletion)
+✅ PASS [12]: Previous announcement status transitioned to ARCHIVED
+✅ PASS [13]: archivedAt timestamp was populated
+✅ PASS [14]: archivedBy points to the replacement author
+
+--- TEST GROUP 3: Input Validations ---
+✅ PASS [15]: Blank title is rejected with 400 Bad Request
+✅ PASS [16]: Message shorter than 10 characters is rejected with 400 Bad Request
+✅ PASS [17]: Invalid type is rejected with 400 Bad Request
+
+--- TEST GROUP 4: Public Endpoints & Archiving ---
+✅ PASS [18]: GET /announcements/active returns 200 OK without credentials
+✅ PASS [19]: Returns active announcement data
+[10:52:23] info: [PublicStats] In-memory cache invalidated successfully.
+✅ PASS [20]: Active announcement archived successfully
+✅ PASS [21]: No announcements currently active
+✅ PASS [22]: GET /announcements/active returns 200 OK
+✅ PASS [23]: Returns data: null when no announcement is active
+
+--- TEST GROUP 5: Public Town Stats & Cache Invalidation ---
+✅ PASS [24]: GET /api/v1/public/town-stats returns 200 OK
+✅ PASS [25]: Contains metrics object
+✅ PASS [26]: Metrics contains totalSchools
+✅ PASS [27]: Metrics contains overallAttendanceRate
+✅ PASS [28]: Maintains backwards-compatible keys
+[10:52:33] info: [PublicStats] In-memory cache invalidated successfully.
+✅ PASS [29]: invalidatePublicStatsCache() runs without error and purges cache
+✅ PASS [30]: AuditLog entries were recorded for announcement actions
+✅ PASS [31]: AuditLog recorded EXECUTIVE_ANNOUNCEMENT_POSTED
+✅ PASS [32]: AuditLog recorded EXECUTIVE_ANNOUNCEMENT_ARCHIVED
+
+═══════════════════════════════════════════════════════════════════════
+  🎉 ALL 32/32 TESTS PASSED PERFECTLY!
+═══════════════════════════════════════════════════════════════════════
+
+
+======================================================================
+🎓 EXECUTING STUDENT ONBOARDING FLOWS VERIFICATION (FLOW A & FLOW B)
+======================================================================
+
+--- 1. Date of Birth in Words Auto-Derivation Engine ---
+✅ PASS [1]: 2015-08-14 converted to 'Fourteenth of August Two Thousand Fifteen'
+✅ PASS [2]: 2020-01-01 converted to 'First of January Two Thousand Twenty'
+✅ PASS [3]: 2012-05-23 converted to 'Twenty-Third of May Two Thousand Twelve'
+✅ PASS [4]: 2010-12-31 converted to 'Thirty-First of December Two Thousand Ten'
+✅ PASS [5]: Empty date input safely returns empty string
+
+--- 2. Flow A: Comprehensive Admission Schema Validation ---
+✅ PASS [6]: Comprehensive 20+ fields admission payload passes validation with B-Form and medium
+✅ PASS [7]: Privilege escalation rejected: self-assigning ROOT_ADMIN fails schema check
+✅ PASS [8]: Password confirmation mismatch is strictly rejected
+
+--- 3. Flow B: Portal Account Activation Schema (Anti-Enumeration) ---
+✅ PASS [9]: Valid activation payload with School + GR + DOB + OTP passes
+✅ PASS [10]: Valid activation payload with Global Student ID passes
+✅ PASS [11]: Activation without mandatory 2nd factor (Date of Birth) is rejected
+✅ PASS [12]: Activation without primary identifier (GR or Global ID) is rejected
+
+--- 4. Anti-Enumeration Rate Limiter Verification ---
+✅ PASS [13]: studentActivationLimiter middleware is defined and callable
+
+--- 5. PII Masking Invariant Verification ---
+✅ PASS [14]: CNIC properly masked for audit log: *****67-1
+✅ PASS [15]: Full CNIC prefix is never exposed in masked representation
+✅ PASS [16]: B-Form properly masked for audit log: *****43-1
+✅ PASS [17]: Full B-Form prefix is never exposed in masked representation
+
+--- 6. Institutional Categories & Instruction Mediums Verification ---
+✅ PASS [18]: ECE school creation passes validation with Nursery to KG2 scope
+✅ PASS [19]: Elementary school creation passes validation with Urdu/English/Sindhi mediums
+✅ PASS [20]: MIDDLE school type is strictly rejected as per DMC policy
+✅ PASS [21]: HIGHER_SECONDARY school type is strictly rejected as per DMC policy
+
+======================================================================
+🎉 ALL 21/21 STUDENT ONBOARDING TESTS PASSED PERFECTLY!
+======================================================================
+
+======================================================================
+🛡️ EXECUTING ENTERPRISE PRIVACY & NOTIFICATION ENGINE VERIFICATIONS
+======================================================================
+
+--- 1. Notification Metadata Allowlist & PII Leak Guard ---
+✅ PASS [1]: Metadata allowlist strictly strips CNIC, bank accounts, passwords, and tokens.
+✅ PASS [2]: Homework notification metadata stripped of all unapproved fields.
+
+--- 2. Security Ceilings Enforcement (Policy > User Choice) ---
+✅ PASS [3]: Security Ceiling blocks setting CNIC to PUBLIC.
+✅ PASS [4]: Security Ceiling blocks setting Bank Details to PUBLIC.
+✅ PASS [5]: Security Ceiling blocks setting Bank Details to SCHOOL-wide.
+✅ PASS [6]: Valid institutional privacy configuration is accepted.
+
+--- 3. Privacy is NOT Authorization Boundary Checks ---
+✅ PASS [7]: Self can view full profile including sensitive fields.
+✅ PASS [8]: Same-school HM is authorized to view staff record.
+✅ PASS [9]: Cross-school HM is strictly blocked from viewing staff record.
+✅ PASS [10]: Unauthorized roles (Parent/Student) strictly blocked from staff profile.
+
+--- 4. PDF Consent Lifecycle & Access Evaluation ---
+✅ PASS [11]: PDF download blocked when consent unchecked and no approval exists.
+✅ PASS [12]: PDF download permitted when staff has pre-allowed authorized downloads.
+✅ PASS [13]: PDF download permitted when active, unexpired approval exists.
+✅ PASS [14]: Expired approval strictly blocks PDF download.
+✅ PASS [15]: Denied approval strictly blocks PDF download.
+✅ PASS [16]: Self can always download their own official profile PDF.
+
+======================================================================
+🎉 ALL 16 ENTERPRISE PRIVACY & NOTIFICATION TESTS PASSED PERFECTLY!
+======================================================================
+
+======================================================================
+🛡️ RUNNING COMPREHENSIVE SECURITY & REGRESSION VERIFICATION SUITE
+======================================================================
+
+--- 1. Homework Authorization & Permission Invariants ---
+✅ PASS [1]: TEACHER has HOMEWORK_CREATE and HOMEWORK_VIEW in default permissions
+✅ PASS [2]: HM has HOMEWORK_CREATE and HOMEWORK_VIEW in default permissions
+✅ PASS [3]: STUDENT is strictly blocked from HOMEWORK_CREATE (Missing in default permissions)
+✅ PASS [4]: PARENT is strictly blocked from HOMEWORK_CREATE (Missing in default permissions)
+✅ PASS [5]: STUDENT cannot be granted HOMEWORK_CREATE via customPermissions (Ceiling Filter)
+✅ PASS [6]: PARENT cannot be granted HOMEWORK_CREATE via customPermissions (Ceiling Filter)
+
+--- 2. TeachingAssignment Authorization Boundary Invariants ---
+✅ PASS [7]: TeachingAssignment gate requires exact 4-tuple match: school + class + section + subject
+✅ PASS [8]: classTeacherId cannot substitute for a TeachingAssignment in subject homework creation
+
+--- 3. PDF Security Adversarial Test Matrix ---
+✅ PASS [9]: Cross-School HM attempting to access staff PDF is blocked (IDOR Protection)
+✅ PASS [10]: Unauthorized role (STUDENT) attempting to access staff PDF is blocked
+✅ PASS [11]: Inactive/Suspended account cannot download official PDF
+✅ PASS [12]: Expired approval cannot be reused to download PDF
+✅ PASS [13]: Denied approval cannot be reused to download PDF
+✅ PASS [14]: Approval replay attempt by different requester is blocked
+
+--- 4. Atomic Consent Transitions & Self-Approval Guards ---
+✅ PASS [15]: Self-approval attempt is strictly rejected
+✅ PASS [16]: Wrong staff member attempting to respond is rejected
+✅ PASS [17]: Double-approval / Replay transition is strictly rejected (Atomic concurrency check)
+
+--- 5. Notification Metadata Allowlist & Audience Isolation ---
+✅ PASS [18]: Strict allowlist strips sensitive PII across all notification types
+✅ PASS [19]: TRANSFER_STATUS allowlist preserves only order metadata and excludes PII
+
+--- 6. Notification Reliability & Outbox Architecture ---
+✅ PASS [20]: NotificationOutbox schema enforces valid state and retry boundaries
+
+======================================================================
+🎉 ALL 20/20 SECURITY, REGRESSION & ADVERSARIAL TESTS PASSED!
+======================================================================
+
+======================================================================
+🏛️ EXECUTING ROOT ADMIN PRIVACY & DASHBOARD HIERARCHY VERIFICATIONS
+======================================================================
+
+--- 1. Root Admin Invisibility & Identity Protection Guards ---
+✅ PASS [1]: Identity protection invariants strictly enforced across all role boundaries.
+
+--- 2. Absolute User Privacy Boundaries (Even Against Root Admin) ---
+✅ PASS [2]: Absolute privacy boundary verified: Explicit PRIVATE settings are never bypassed even by Root Admin.
+
+--- 3. Zero Credential Visibility Policy ---
+✅ PASS [3]: Credentials (passwords, hashes, OTPs, auth tokens) are zero-exposed to all roles.
+
+--- 4. Non-Collapsing Role Model Invariants ---
+✅ PASS [4]: Non-collapsing role model: designation and baseRole strictly preserved during authority change.
+
+--- 5. Authority Transition Matrix & Boundary Guards ---
+✅ PASS [5]: Authority transition matrix correctly enforces permissions and boundaries.
+
+--- 6. Governance Safety Recovery Path Guards ---
+✅ PASS [6]: Platform recovery path protection: Self-suspension/demotion blocked if last active administrator.
+
+--- 7. Consequential Audit Log Retention & Visibility ---
+✅ PASS [7]: Consequential Root Admin actions are transparently auditable without leaking secrets.
+
+--- 8. Centralized Target Protection Across Profile/PDF/History/Bulk ---
+✅ PASS [8]: Centralized target protection and bulk hierarchy guards verified.
+
+--- 9. Consequential-Only Auditing Guarantee (No Presence Logging) ---
+✅ PASS [9]: Consequential-only audit guarantee: Routine presence activity is strictly excluded from audit generation.
+
+======================================================================
+🏆 ALL ROOT ADMIN PRIVACY & DASHBOARD HIERARCHY TESTS PASSED (18/18)
+======================================================================
+
+======================================================================
+🏛️ EXECUTING HEAD MASTER (HM) PRODUCTION CONTROLLER SECURITY SUITE
+======================================================================
+
+--- 1. HM Approval Hierarchy & Jurisdiction Boundaries (isAuthorizedApprover) ---
+  ✅ PASS [1]: HM -> TEACHER (same school) is ALLOWED
+  ✅ PASS [2]: HM -> PEON (same school) is ALLOWED
+  ✅ PASS [3]: HM -> STUDENT (same school) is ALLOWED
+  ✅ PASS [4]: HM -> peer HM is REJECTED (Level 50 is not subordinate to Level 50)
+  ✅ PASS [5]: HM -> SUPERVISOR is REJECTED (Level 60 is higher authority)
+  ✅ PASS [6]: HM -> ADMIN is REJECTED (Level 80 is higher authority)
+  ✅ PASS [7]: HM -> SUPER_ADMIN is REJECTED (Level 90 is higher authority)
+  ✅ PASS [8]: HM -> ROOT_ADMIN is REJECTED (Level 100 is higher authority)
+  ✅ PASS [9]: HM -> TEACHER from different school is REJECTED (Cross-School Boundary)
+
+--- 2. Attendance Verification Production Controller (handleVerifyAttendance) ---
+  ✅ PASS [10]: handleVerifyAttendance rejects invalid ObjectId with 400
+  ✅ PASS [11]: handleVerifyAttendance rejects cross-school attendance with 403
+  ✅ PASS [12]: handleVerifyAttendance rejects future date record with 400
+  ✅ PASS [13]: handleVerifyAttendance rejects already VERIFIED record with 409
+  ✅ PASS [14]: handleVerifyAttendance successfully verifies pending record with 200
+
+--- 3. Attendance Sheet Upload Production Controller (handleUploadAttendanceSheet) ---
+  ✅ PASS [15]: handleUploadAttendanceSheet rejects future date with 400
+  ✅ PASS [16]: handleUploadAttendanceSheet rejects cross-school section with 403
+
+--- 4. Transfer Joining Production Controller & Concurrency (handleApproveJoining) ---
+  ✅ PASS [17]: handleApproveJoining rejects non-awaiting status (e.g. INITIATED) with 400
+  ✅ PASS [18]: handleApproveJoining rejects non-destination HM with 403
+  ✅ PASS [19]: handleApproveJoining handles concurrency race condition cleanly with 409
+
+--- 5. Teaching Assignment Production Controller (handleAddTeachingAssignment) ---
+  ✅ PASS [20]: handleAddTeachingAssignment rejects cross-school teacher with 400
+  ✅ PASS [21]: handleAddTeachingAssignment rejects non-teaching staff with 400
+
+--- 6. HM School Summary Production Controller (handleGetHmSchoolSummary) ---
+  ✅ PASS [22]: handleGetHmSchoolSummary rejects unassigned HM with 403
+  ✅ PASS [23]: handleGetHmSchoolSummary returns clean metrics with zero sensitive fields
+
+--- 7. Document Publication Production Controller (handleCreateDocument) ---
+  ✅ PASS [24]: handleCreateDocument rejects HM publishing for another school with 403
+  ✅ PASS [25]: handleCreateDocument rejects HM broadcasting to GOVERNMENT_OFFICERS with 403
+  ✅ PASS [26]: handleCreateDocument publishes valid school circular with 201
+
+--- 8. Exam & Results Production Controller (handleCreateExam & handlePublishExamResults) ---
+  ✅ PASS [27]: handleCreateExam rejects HM creating exam for another school with 403
+  ✅ PASS [28]: handlePublishExamResults rejects publication when results remain unverified with 400
+
+--- 9. Role Model & Hierarchy Independence Invariants ---
+  ✅ PASS [29]: Non-collapsing role model: designation and baseRole remain intact when role is HM
+  ✅ PASS [30]: HM authority level is 50 and cannot manage Level 50 or above
+
+======================================================================
+🏆 ALL PRODUCTION HM CONTROLLER & SECURITY TESTS PASSED (30/30)
+======================================================================
+
+
+==============================================================================
+🛡️  SECURITY REMEDIATION PLAN: 5 MANDATORY INVARIANTS TEST SUITE
+   SEC-CRIT-01 | SEC-CRIT-02 | SEC-HIGH-01 | SEC-HIGH-02 | SEC-HIGH-03
+==============================================================================
+
+--- 1. SEC-CRIT-01: Root Admin Invariant Protection ---
+✅ PASS [1]: SEC-CRIT-01: Root Admin self-demotion via web API is strictly rejected with 403
+✅ PASS [2]: SEC-CRIT-01: Modifying another Root Admin account via web API is strictly rejected with 403
+✅ PASS [3]: SEC-CRIT-01: Root Admin self-suspension is strictly rejected with 403
+✅ PASS [4]: SEC-CRIT-01: Suspending any Root Admin account is strictly rejected with 403
+
+--- 2. SEC-CRIT-02: Municipal School Scoping (BOLA/IDOR) ---
+✅ PASS [5]: SEC-CRIT-02: Town Admin mutating own-town school succeeds (200)
+✅ PASS [6]: SEC-CRIT-02: Town Admin mutating cross-town school is blocked with 403 (BOLA Protection)
+
+--- 3. SEC-HIGH-01: Mandatory CAPTCHA Enforcement ---
+✅ PASS [7]: SEC-HIGH-01: Missing CAPTCHA in production login is strictly rejected with 400
+✅ PASS [8]: SEC-HIGH-01: Invalid CAPTCHA answer in production is strictly rejected with 400
+✅ PASS [9]: SEC-HIGH-01: Correct CAPTCHA payload in production login succeeds with 200
+
+--- 4. SEC-HIGH-02: Scoped User Query Boundaries for Town Admins ---
+✅ PASS [10]: SEC-HIGH-02: Town Admin missing townId fails closed with 403 Forbidden
+✅ PASS [11]: SEC-HIGH-02: Town Admin query is strictly scoped to actor townId
+
+--- 5. SEC-HIGH-03: Persistent Distributed CAPTCHA Nonce Tracking ---
+✅ PASS [12]: SEC-HIGH-03: Initial CAPTCHA verification succeeds
+✅ PASS [13]: SEC-HIGH-03: In-memory replay is strictly rejected (single-use consumed)
+   [DB Connected] Testing MongoDB CaptchaNonce model & distributed replay...
+✅ PASS [14]: SEC-HIGH-03: verifyMathCaptchaAsync first verification succeeds with DB storage
+✅ PASS [15]: SEC-HIGH-03: Nonce was written to MongoDB CaptchaNonce collection
+✅ PASS [16]: SEC-HIGH-03: Distributed replay is strictly rejected by MongoDB unique constraint
+✅ PASS [17]: SEC-HIGH-03: In production, verifyMathCaptchaAsync strictly fails closed (in-memory fallback is refused if DB is disconnected)
+
+--- 6. SEC-MED-01: Restrict POST /flush-lockouts to ROOT_ADMIN Only ---
+✅ PASS [18]: SEC-MED-01: /flush-lockouts route exists on superAdminRouter
+✅ PASS [19]: SEC-MED-01: SUPER_ADMIN calling POST /flush-lockouts is strictly rejected with 403 Forbidden
+✅ PASS [20]: SEC-MED-01: ROOT_ADMIN calling POST /flush-lockouts passes authorization middleware
+✅ PASS [21]: SEC-MED-01: Controller-level guard in handleFlushSecurityLockouts strictly rejects non-ROOT_ADMIN with 403
+
+--- 7. SEC-MED-02: ReDoS Regex Sanitization on Audit Search ---
+✅ PASS [22]: SEC-MED-02: Action query regex special characters are fully escaped against ReDoS injection
+✅ PASS [23]: SEC-MED-02: Catastrophic ReDoS payload evaluation completed safely in 0ms (< 5ms) without hanging
+✅ PASS [24]: SEC-MED-02: Unclosed regex syntax tokens are escaped and compile safely without throwing SyntaxError
+
+--- 8. SEC-LOW-01: Throttling for Public Schools List ---
+✅ PASS [25]: SEC-LOW-01: /schools route exists on publicRouter
+✅ PASS [26]: SEC-LOW-01: GET /schools has rate limiting middleware attached ahead of controller
+✅ PASS [27]: SEC-LOW-01: /schools/:schoolId/structure route exists on publicRouter
+✅ PASS [28]: SEC-LOW-01: GET /schools/:schoolId/structure has rate limiting middleware attached
+
+==============================================================================
+🎉 ALL 28/28 SECURITY REMEDIATION TESTS PASSED PERFECTLY!
+   ✅ SEC-CRIT-01: Root Admin Invariant Protection
+   ✅ SEC-CRIT-02: Municipal School Scoping (BOLA/IDOR)
+   ✅ SEC-HIGH-01: Mandatory CAPTCHA on Authentication
+   ✅ SEC-HIGH-02: Scoped User Query Boundaries for Town Admins
+   ✅ SEC-HIGH-03: Persistent Distributed CAPTCHA Nonce Tracking
+   ✅ SEC-MED-01: Restrict Lockout Flush to ROOT_ADMIN Only
+   ✅ SEC-MED-02: ReDoS Regex Sanitization on Audit Search
+   ✅ SEC-LOW-01: Throttling for Public Schools List
+==============================================================================
+

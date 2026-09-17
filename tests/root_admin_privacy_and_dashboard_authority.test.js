@@ -3,6 +3,15 @@ import { ROLES, SCOPES, USER_STATUS } from '../config/constants.js';
 import { isTargetProtectedFromActor } from '../src/middlewares/authorizeHierarchy.js';
 import { maskCnic, maskBankAccount } from '../src/controllers/approvalController.js';
 
+let passedTests = 0;
+let totalTests = 0;
+
+function logPass(message) {
+  passedTests++;
+  totalTests++;
+  console.log(`✅ PASS [${passedTests}]: ${message}`);
+}
+
 console.log('======================================================================');
 console.log('🏛️ EXECUTING ROOT ADMIN PRIVACY & DASHBOARD HIERARCHY VERIFICATIONS');
 console.log('======================================================================\n');
@@ -37,7 +46,7 @@ assert.equal(isTargetProtectedFromActor(rootAdminUser, superAdminUser), false, '
 assert.equal(isTargetProtectedFromActor(superAdminUser, adminUser), false, 'Admin is visible to Super Admin');
 assert.equal(isTargetProtectedFromActor(rootAdminUser, adminUser), false, 'Admin is visible to Root Admin');
 
-console.log('✅ PASS [1]: Identity protection invariants strictly enforced across all role boundaries.');
+logPass('Identity protection invariants strictly enforced across all role boundaries.');
 
 // ─── 2. ABSOLUTE PRIVACY BOUNDARIES (USER EXPLICIT PRIVATE SETTINGS) ──────────
 console.log('\n--- 2. Absolute User Privacy Boundaries (Even Against Root Admin) ---');
@@ -112,7 +121,7 @@ assert.equal(
   'SUPER_ADMIN MUST receive masked bank details when user marked it PRIVATE'
 );
 
-console.log('✅ PASS [2]: Absolute privacy boundary verified: Explicit PRIVATE settings are never bypassed even by Root Admin.');
+logPass('Absolute privacy boundary verified: Explicit PRIVATE settings are never bypassed even by Root Admin.');
 
 // ─── 3. ZERO CREDENTIAL LEAKAGE POLICY ────────────────────────────────────────
 console.log('\n--- 3. Zero Credential Visibility Policy ---');
@@ -139,7 +148,7 @@ assert.equal(sanitized.refreshTokenHash, undefined, 'refreshTokenHash must never
 assert.equal(sanitized.otp, undefined, 'OTP must never be exposed');
 assert.equal(sanitized.fullName, 'Muhammad Ali');
 
-console.log('✅ PASS [3]: Credentials (passwords, hashes, OTPs, auth tokens) are zero-exposed to all roles.');
+logPass('Credentials (passwords, hashes, OTPs, auth tokens) are zero-exposed to all roles.');
 
 // ─── 4. NON-COLLAPSING ROLE MODEL INVARIANTS ─────────────────────────────────
 console.log('\n--- 4. Non-Collapsing Role Model Invariants ---');
@@ -176,7 +185,7 @@ assert.equal(elevatedState.role, ROLES.ADMIN, 'Role is updated to ADMIN');
 assert.equal(elevatedState.scope, SCOPES.TOWN, 'Scope is updated to TOWN');
 assert.equal(elevatedState.tokenVersion, 2, 'tokenVersion incremented to revoke active sessions');
 
-console.log('✅ PASS [4]: Non-collapsing role model: designation and baseRole strictly preserved during authority change.');
+logPass('Non-collapsing role model: designation and baseRole strictly preserved during authority change.');
 
 // ─── 5. SUPER_ADMIN & ADMIN AUTHORITY TRANSITION MATRIX ──────────────────────
 console.log('\n--- 5. Authority Transition Matrix & Boundary Guards ---');
@@ -226,7 +235,7 @@ assert.equal(isAuthorityGrantPermitted(ROLES.ROOT_ADMIN, ROLES.TEACHER, ROLES.SU
 assert.equal(isAuthorityGrantPermitted(ROLES.ROOT_ADMIN, ROLES.TEACHER, ROLES.ADMIN, false), false, 'Root Admin cannot directly grant ADMIN (delegated to Super Admin)');
 assert.equal(isAuthorityGrantPermitted(ROLES.ROOT_ADMIN, ROLES.ROOT_ADMIN, ROLES.ROOT_ADMIN, true), false, 'Root Admin cannot self-modify');
 
-console.log('✅ PASS [5]: Authority transition matrix correctly enforces permissions and boundaries.');
+logPass('Authority transition matrix correctly enforces permissions and boundaries.');
 
 // ─── 6. GOVERNANCE SAFETY RECOVERY PATH GUARD ────────────────────────────────
 console.log('\n--- 6. Governance Safety Recovery Path Guards ---');
@@ -239,7 +248,7 @@ assert.equal(canSelfSuspendOrDemote(2), true, 'Self-action allowed when 2 other 
 assert.equal(canSelfSuspendOrDemote(1), true, 'Self-action allowed when 1 other active platform admin remains');
 assert.equal(canSelfSuspendOrDemote(0), false, 'Self-action BLOCKED when 0 other active platform admins remain');
 
-console.log('✅ PASS [6]: Platform recovery path protection: Self-suspension/demotion blocked if last active administrator.');
+logPass('Platform recovery path protection: Self-suspension/demotion blocked if last active administrator.');
 
 // ─── 7. CONSEQUENTIAL AUDIT LOG RETENTION & QUERY VISIBILITY ──────────────────
 console.log('\n--- 7. Consequential Audit Log Retention & Visibility ---');
@@ -262,7 +271,7 @@ assert.equal(visibleLogs.length, 4, 'All consequential audit logs including Root
 const rootAdminActions = visibleLogs.filter((log) => log.actorRole === ROLES.ROOT_ADMIN);
 assert.equal(rootAdminActions.length, 2, 'Consequential Root Admin actions are retained and accessible in audit trail');
 
-console.log('✅ PASS [7]: Consequential Root Admin actions are transparently auditable without leaking secrets.');
+logPass('Consequential Root Admin actions are transparently auditable without leaking secrets.');
 
 // ─── 8. ENDPOINT CENTRALIZED TARGET PROTECTION & BULK GUARDS ──────────────────
 console.log('\n--- 8. Centralized Target Protection Across Profile/PDF/History/Bulk ---');
@@ -310,7 +319,7 @@ assert.equal(evaluateBulkHierarchyGuard(ROLES.ADMIN, ROLES.SUPER_ADMIN), false, 
 assert.equal(evaluateBulkHierarchyGuard(ROLES.ADMIN, ROLES.ROOT_ADMIN), false, 'Admin CANNOT bulk modify Root Admin');
 assert.equal(evaluateBulkHierarchyGuard(ROLES.SUPER_ADMIN, ROLES.ADMIN), true, 'Super Admin can bulk modify Admins');
 
-console.log('✅ PASS [8]: Centralized target protection and bulk hierarchy guards verified.');
+logPass('Centralized target protection and bulk hierarchy guards verified.');
 
 // ─── 9. CONSEQUENTIAL-ONLY AUDITING GUARANTEE (NO PRESENCE LOGGING) ───────────
 console.log('\n--- 9. Consequential-Only Auditing Guarantee (No Presence Logging) ---');
@@ -335,8 +344,8 @@ assert.equal(isOperationConsequentialAuditable('USER_LOGOUT'), false, 'Routine l
 assert.equal(isOperationConsequentialAuditable('DASHBOARD_VIEW'), false, 'Dashboard view must NOT generate presence audit record');
 assert.equal(isOperationConsequentialAuditable('SESSION_REFRESH'), false, 'Session refresh must NOT generate presence audit record');
 
-console.log('✅ PASS [9]: Consequential-only audit guarantee: Routine presence activity is strictly excluded from audit generation.');
+logPass('Consequential-only audit guarantee: Routine presence activity is strictly excluded from audit generation.');
 
 console.log('\n======================================================================');
-console.log('🏆 ALL ROOT ADMIN PRIVACY & DASHBOARD HIERARCHY TESTS PASSED (18/18)');
+console.log(`🏆 ALL ROOT ADMIN PRIVACY & DASHBOARD HIERARCHY TESTS PASSED (${passedTests}/${totalTests})`);
 console.log('======================================================================\n');

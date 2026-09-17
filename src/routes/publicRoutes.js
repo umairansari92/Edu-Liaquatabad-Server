@@ -25,7 +25,7 @@ router.get('/stats', publicStatsLimiter, getPublicTownStats);
 router.get('/town-stats', publicStatsLimiter, getPublicTownStats);
 
 // GET /api/v1/public/schools — Public active schools list for onboarding forms
-router.get('/schools', async (incomingRequest, outgoingResponse) => {
+router.get('/schools', publicStatsLimiter, async (incomingRequest, outgoingResponse) => {
   try {
     const schoolsList = await School.find({ status: 'ACTIVE' })
       .select('_id name schoolCode schoolType genderType address supportedMediums gradeRange')
@@ -47,7 +47,7 @@ router.get('/schools', async (incomingRequest, outgoingResponse) => {
 });
 
 // GET /api/v1/public/schools/:schoolId/structure — Public classes, sections & subjects for registration forms
-router.get('/schools/:schoolId/structure', async (incomingRequest, outgoingResponse) => {
+router.get('/schools/:schoolId/structure', publicStatsLimiter, async (incomingRequest, outgoingResponse) => {
   try {
     const { schoolId } = incomingRequest.params;
     const [classes, sections, subjects] = await Promise.all([

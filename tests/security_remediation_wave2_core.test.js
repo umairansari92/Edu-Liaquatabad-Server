@@ -1,6 +1,6 @@
 
 /**
- * Automated Test Suite: Security Remediation 5 Mandated Invariants
+ * Automated Test Suite: Security Remediation Invariants
  * Education Department Liaquatabad Town Centre (DMC)
  *
  * SEC-CRIT-01: Root Admin Invariant Protection (Self-demotion, self-suspension/deactivation, bulk mutation)
@@ -8,6 +8,9 @@
  * SEC-HIGH-01: Mandatory CAPTCHA Enforcement on Authentication
  * SEC-HIGH-02: Scoped User Query Boundaries for Town Admins (handleGetUsers)
  * SEC-HIGH-03: Persistent Distributed CAPTCHA Nonce Tracking (MongoDB TTL + atomic unique index)
+ * SEC-MED-01: Restrict POST /flush-lockouts to ROOT_ADMIN Only
+ * SEC-MED-02: ReDoS Regex Sanitization on Audit Search (action query escaping)
+ * SEC-LOW-01: Throttling for Public Schools List (publicStatsLimiter on /schools)
  */
 
 import assert from 'assert';
@@ -276,6 +279,107 @@ async function runSecurityRemediationSuite() {
     process.env.NODE_ENV = prevEnv;
   }
 
+  // ─── 6. SEC-MED-01: Restrict POST /flush-lockouts to ROOT_ADMIN Only ─────────
+  console.log('\n--- 6. SEC-MED-01: Restrict POST /flush-lockouts to ROOT_ADMIN Only ---');
+
+  const { default: superAdminRouter } = await import('../src/routes/superAdminRoutes.js');
+  const flushRoute = superAdminRouter.stack.find(s => s.route && s.route.path === '/flush-lockouts');
+  testAssert(flushRoute !== undefined, 'SEC-MED-01: /flush-lockouts route exists on superAdminRouter');
+
+  const authMiddleware = flushRoute.route.stack[0].handle;
+
+  // Negative test: SUPER_ADMIN calling /flush-lockouts is rejected with 403 Forbidden
+  let superAdminStatus = null;
+  const mockResSuperAdmin = {
+    status: (s) => { superAdminStatus = s; return mockResSuperAdmin; },
+    json: () => mockResSuperAdmin,
+  };
+  let superAdminNextCalled = false;
+  authMiddleware({ user: { role: ROLES.SUPER_ADMIN } }, mockResSuperAdmin, () => { superAdminNextCalled = true; });
+
+  testAssert(
+    superAdminStatus === 403 && superAdminNextCalled === false,
+    'SEC-MED-01: SUPER_ADMIN calling POST /flush-lockouts is strictly rejected with 403 Forbidden'
+  );
+
+  // Positive test: ROOT_ADMIN calling /flush-lockouts is allowed to proceed to validator/handler
+  let rootAdminNextCalled = false;
+  authMiddleware({ user: { role: ROLES.ROOT_ADMIN } }, {}, () => { rootAdminNextCalled = true; });
+  testAssert(
+    rootAdminNextCalled === true,
+    'SEC-MED-01: ROOT_ADMIN calling POST /flush-lockouts passes authorization middleware'
+  );
+
+  // Controller guard test: handleFlushSecurityLockouts rejects non-ROOT_ADMIN directly
+  const { handleFlushSecurityLockouts } = await import('../src/controllers/superAdminManagementController.js');
+  let controllerStatus = null;
+  const mockResController = {
+    status: (s) => { controllerStatus = s; return mockResController; },
+    json: () => mockResController,
+  };
+  await handleFlushSecurityLockouts({ user: { role: ROLES.SUPER_ADMIN }, body: {} }, mockResController);
+  testAssert(
+    controllerStatus === 403,
+    'SEC-MED-01: Controller-level guard in handleFlushSecurityLockouts strictly rejects non-ROOT_ADMIN with 403'
+  );
+
+  // ─── 7. SEC-MED-02: ReDoS Regex Sanitization on Audit Search ────────────────
+  console.log('\n--- 7. SEC-MED-02: ReDoS Regex Sanitization on Audit Search ---');
+
+  const maliciousActionPayload = '((((a+)+)+)+)';
+  const escapedAction = String(maliciousActionPayload).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  testAssert(
+    escapedAction === '\\(\\(\\(\\(a\\+\\)\\+\\)\\+\\)\\+\\)',
+    'SEC-MED-02: Action query regex special characters are fully escaped against ReDoS injection'
+  );
+
+  // Assert regex evaluation does not cause catastrophic backtracking or crash
+  const startTime = Date.now();
+  const compiledRegex = new RegExp(escapedAction, 'i');
+  const matchResult = compiledRegex.test('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  const executionDurationMs = Date.now() - startTime;
+
+  testAssert(
+    matchResult === false && executionDurationMs < 5,
+    `SEC-MED-02: Catastrophic ReDoS payload evaluation completed safely in ${executionDurationMs}ms (< 5ms) without hanging`
+  );
+
+  // Assert malformed regex tokens (unclosed brackets/parens) do not throw
+  const malformedPayload = '[a-z(';
+  const escapedMalformed = String(malformedPayload).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let malformedCompiledSafe = false;
+  try {
+    new RegExp(escapedMalformed, 'i');
+    malformedCompiledSafe = true;
+  } catch (err) {
+    malformedCompiledSafe = false;
+  }
+  testAssert(
+    malformedCompiledSafe === true,
+    'SEC-MED-02: Unclosed regex syntax tokens are escaped and compile safely without throwing SyntaxError'
+  );
+
+  // ─── 8. SEC-LOW-01: Throttling for Public Schools List ───────────────────────
+  console.log('\n--- 8. SEC-LOW-01: Throttling for Public Schools List ---');
+
+  const { default: publicRouter } = await import('../src/routes/publicRoutes.js');
+  const schoolsRoute = publicRouter.stack.find(s => s.route && s.route.path === '/schools');
+  testAssert(schoolsRoute !== undefined, 'SEC-LOW-01: /schools route exists on publicRouter');
+
+  // Verify rate limiter middleware is mounted on /schools route stack
+  testAssert(
+    schoolsRoute.route.stack.length >= 2,
+    'SEC-LOW-01: GET /schools has rate limiting middleware attached ahead of controller'
+  );
+
+  const structureRoute = publicRouter.stack.find(s => s.route && s.route.path === '/schools/:schoolId/structure');
+  testAssert(structureRoute !== undefined, 'SEC-LOW-01: /schools/:schoolId/structure route exists on publicRouter');
+  testAssert(
+    structureRoute.route.stack.length >= 2,
+    'SEC-LOW-01: GET /schools/:schoolId/structure has rate limiting middleware attached'
+  );
+
   console.log('\n==============================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} SECURITY REMEDIATION TESTS PASSED PERFECTLY!`);
   console.log('   ✅ SEC-CRIT-01: Root Admin Invariant Protection');
@@ -283,6 +387,9 @@ async function runSecurityRemediationSuite() {
   console.log('   ✅ SEC-HIGH-01: Mandatory CAPTCHA on Authentication');
   console.log('   ✅ SEC-HIGH-02: Scoped User Query Boundaries for Town Admins');
   console.log('   ✅ SEC-HIGH-03: Persistent Distributed CAPTCHA Nonce Tracking');
+  console.log('   ✅ SEC-MED-01: Restrict Lockout Flush to ROOT_ADMIN Only');
+  console.log('   ✅ SEC-MED-02: ReDoS Regex Sanitization on Audit Search');
+  console.log('   ✅ SEC-LOW-01: Throttling for Public Schools List');
   console.log('==============================================================================\n');
 }
 
