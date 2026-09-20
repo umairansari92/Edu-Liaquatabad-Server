@@ -80,6 +80,12 @@ export const enrollStudentSchema = z
     // Admission date (defaults to today if not provided)
     admissionDate: z.string().trim().optional(),
 
+    // Optional student institutional or personal email
+    email: z.string().trim().email('Invalid email address format').optional().or(z.literal('')),
+
+    // Optional schoolId passed by admin or supervisory roles
+    schoolId: mongoId.optional(),
+
     // Manual GR — only required when admissionType === 'EXISTING_ENTRY'
     manualGrNumber: z.number().int().positive().optional(),
   })
@@ -105,4 +111,18 @@ export const previewGrSchema = z.object({
 export const checkGrSchema = z.object({
   schoolId: mongoId,
   grNumber: z.coerce.number().int().positive('GR number must be a positive integer'),
+});
+
+// ─── Get School Students Directory Query Schema ──────────────────────────────
+export const getSchoolStudentsQuerySchema = z.object({
+  schoolId: mongoId.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(100).optional(),
+  classId: mongoId.optional(),
+  sectionId: mongoId.optional(),
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
+  lifecycleStatus: z.enum(['PENDING_APPROVAL', 'ACTIVE', 'INACTIVE', 'SUSPENDED', 'TRANSFERRED', 'GRADUATED', 'WITHDRAWN']).optional(),
+  sortBy: z.enum(['grNumber', 'createdAt', 'fullName']).default('grNumber'),
+  sortOrder: z.enum(['asc', 'desc']).default('asc'),
 });

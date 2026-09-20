@@ -134,7 +134,7 @@ async function runRootAdminMfaSuite() {
   let tamperDetected = false;
   try {
     const tamperedPayload = {
-      ciphertext: encryptedPayload.ciphertext.slice(0, -2) + 'ff',
+      ciphertext: encryptedPayload.ciphertext.slice(0, -2) + (encryptedPayload.ciphertext.endsWith('ff') ? '00' : 'ff'),
       iv: encryptedPayload.iv,
       tag: encryptedPayload.tag,
     };

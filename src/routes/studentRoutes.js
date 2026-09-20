@@ -7,6 +7,7 @@ import {
   enrollStudentSchema,
   checkGrSchema,
   setSchoolCodeSchema,
+  getSchoolStudentsQuerySchema,
 } from '../validations/studentSchemas.js';
 import {
   handleEnrollStudent,
@@ -14,6 +15,7 @@ import {
   handleCheckGrAvailability,
   handleSetSchoolCode,
   handleGetSectionStudents,
+  handleGetSchoolStudents,
 } from '../controllers/studentController.js';
 
 const router = express.Router();
@@ -43,5 +45,8 @@ router.patch('/schools/:schoolId/code', authLimiter, validate(setSchoolCodeSchem
 
 // Authoritative Student Roster for an assigned section
 router.get('/section/:sectionId', handleGetSectionStudents);
+
+// Authoritative School Student Directory (HM / School Staff)
+router.get('/school', validateQuery(getSchoolStudentsQuerySchema), handleGetSchoolStudents);
 
 export default router;

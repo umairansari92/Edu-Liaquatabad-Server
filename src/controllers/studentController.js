@@ -12,6 +12,7 @@ import {
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import School from '../models/School.js';
+import Class from '../models/Class.js';
 import Section from '../models/Section.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS } from '../../config/constants.js';
@@ -28,6 +29,15 @@ const ENROLLMENT_ALLOWED_ROLES = new Set([
 
 // Roles authorized to set school code
 const SCHOOL_CODE_ALLOWED_ROLES = new Set([
+  ROLES.ROOT_ADMIN,
+  ROLES.SUPER_ADMIN,
+  ROLES.ADMIN,
+  ROLES.SUPERVISOR,
+  ROLES.HM,
+]);
+
+// Roles authorized to inspect school student directory
+const DIRECTORY_ALLOWED_ROLES = new Set([
   ROLES.ROOT_ADMIN,
   ROLES.SUPER_ADMIN,
   ROLES.ADMIN,
@@ -107,7 +117,28 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     sectionId,
     admissionDate,
     manualGrNumber,
+    email,
   } = request.body;
+
+  // ── Step 0: Academic Cross-Validation Guard (Critical Security Boundary) ───
+  const targetClass = await Class.findById(classId).lean();
+  if (!targetClass) {
+    return sendError(response, 400, 'Invalid class selected. The specified class does not exist.');
+  }
+  if (String(targetClass.schoolId) !== String(effectiveSchoolId)) {
+    return sendError(response, 400, 'Invalid class selected. The specified class does not belong to the target school.');
+  }
+
+  const targetSection = await Section.findById(sectionId).lean();
+  if (!targetSection) {
+    return sendError(response, 400, 'Invalid section selected. The specified section does not exist.');
+  }
+  if (String(targetSection.classId) !== String(classId)) {
+    return sendError(response, 400, 'Invalid section selected. The section does not belong to the specified class.');
+  }
+  if (targetSection.schoolId && String(targetSection.schoolId) !== String(effectiveSchoolId)) {
+    return sendError(response, 400, 'Invalid section selected. The section does not belong to the target school.');
+  }
 
   // ── Step 1: Determine GR No ────────────────────────────────────────────────
   let assignedGrNumber;
@@ -117,7 +148,15 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     assignedGrNumber = await generateNextGrNumber(effectiveSchoolId);
   } else {
     // EXISTING_ENTRY: validate the manually provided GR is not already taken
-    await validateManualGrNumber(effectiveSchoolId, manualGrNumber);
+    try {
+      await validateManualGrNumber(effectiveSchoolId, manualGrNumber);
+    } catch (manualGrValidationError) {
+      return sendError(
+        response,
+        manualGrValidationError.statusCode || 400,
+        manualGrValidationError.message || 'Invalid GR number provided.'
+      );
+    }
     assignedGrNumber = manualGrNumber;
     // Sync counter so future auto-GRs don't collide
     await syncGrCounterIfNeeded(effectiveSchoolId, manualGrNumber);
@@ -127,15 +166,28 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
   // Returns null if schoolCode not yet assigned to this school (deferred)
   const globalStudentId = await generateGlobalStudentId(effectiveSchoolId);
 
-  // ── Step 3: Create a system-managed User account for the student ───────────
-  // A minimal account — no password needed yet (HM enrolls, student logs in later)
+  // ── Step 3: Determine Student Email & Create User Account ──────────────────
+  const targetSchool = await School.findById(effectiveSchoolId).select('code schoolCode').lean();
+  const rawSchoolCode = targetSchool?.schoolCode || targetSchool?.code || 'dmc';
+  const schoolCodeClean = rawSchoolCode.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  let studentEmail = (email || '').trim().toLowerCase();
+  if (!studentEmail) {
+    studentEmail = `gr-${assignedGrNumber}.${schoolCodeClean}@student.liaquatabad-schools.gov.pk`;
+  }
+
+  const existingUser = await User.findOne({ email: studentEmail });
+  if (existingUser) {
+    return sendError(response, 400, 'An account with this student email or GR identity already exists.');
+  }
+
   const temporaryPasswordHash = await hashPassword(`Student@${assignedGrNumber}`);
   const enrolledUser = await User.create({
     organizationId: request.user?.organizationId,
     townId: request.user?.townId,
     schoolId: effectiveSchoolId,
     fullName: fullName.trim(),
-    email: null, // Email optional at enrollment — can be added later
+    email: studentEmail,
     passwordHash: temporaryPasswordHash,
     phoneNumber: guardianContact,
     designation: 'Enrolled Student',
@@ -153,6 +205,7 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     sectionId,
     grNumber: assignedGrNumber,
     globalStudentId: globalStudentId || undefined,
+    studentFullName: fullName.trim(),
     admissionType,
     dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
     gender,
@@ -175,7 +228,7 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     targetModel: 'StudentProfile',
     targetId: studentProfile._id,
     townId: request.user?.townId,
-    schoolId: actorSchoolId,
+    schoolId: effectiveSchoolId,
     newState: {
       grNumber: assignedGrNumber,
       globalStudentId,
@@ -336,3 +389,155 @@ export const handleGetSectionStudents = asyncHandler(async (request, response) =
     totalCount: sanitizedStudents.length,
   });
 });
+
+/**
+ * GET /api/v1/students/school
+ * Authoritative School Student Directory
+ * Strict server-side verification:
+ * - Active session required
+ * - Role must be authorized (HM, SUPERVISOR, ADMIN, SUPER_ADMIN, ROOT_ADMIN)
+ * - If HM: strictly scoped to request.user.schoolId. Explicitly rejects manipulated schoolId with 403.
+ * - Server-side search (numeric GR fast-path, globalStudentId, name search)
+ * - Pagination with safe bounded limit (max 100)
+ * - Filtering by classId, sectionId, gender, lifecycleStatus
+ * - Minimal response projection (Zero credentials/passwords exposed)
+ */
+export const handleGetSchoolStudents = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const actorRole = requestingActor?.role;
+
+  if (!DIRECTORY_ALLOWED_ROLES.has(actorRole)) {
+    return sendError(response, 403, 'Access denied. You do not have permission to view the student directory.');
+  }
+
+  // ── Strict School Scope Enforcement (Anti-BOLA/IDOR Shield) ───────────────
+  let effectiveSchoolId;
+
+  if (actorRole === ROLES.HM) {
+    if (!requestingActor.schoolId) {
+      return sendError(response, 400, 'Your Head Master account is not linked to an authorized school.');
+    }
+    // Explicit test requirement: HM School A requesting School B must be rejected with 403
+    if (request.query.schoolId && String(request.query.schoolId) !== String(requestingActor.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only access students belonging to your assigned school.');
+    }
+    effectiveSchoolId = requestingActor.schoolId;
+  } else {
+    // For Supervisor / Admin / Root Admin:
+    effectiveSchoolId = request.query.schoolId || requestingActor.schoolId;
+    if (!effectiveSchoolId) {
+      return sendError(response, 400, 'School identifier is required to view the student directory.');
+    }
+  }
+
+  const {
+    page = 1,
+    limit = 20,
+    search,
+    classId,
+    sectionId,
+    gender,
+    lifecycleStatus,
+    sortBy = 'grNumber',
+    sortOrder = 'asc',
+  } = request.query;
+
+  const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+  const skipCount = (pageNumber - 1) * pageSize;
+
+  // ── Construct Scoped Query Filter ──────────────────────────────────────────
+  const queryFilter = { schoolId: effectiveSchoolId };
+
+  if (classId) queryFilter.classId = classId;
+  if (sectionId) queryFilter.sectionId = sectionId;
+  if (gender) queryFilter.gender = gender;
+  if (lifecycleStatus) {
+    queryFilter.lifecycleStatus = lifecycleStatus;
+  }
+
+  // ── Server-Side Search Engine (Optimized Index Strategy) ───────────────────
+  if (search && search.trim()) {
+    const rawSearch = search.trim();
+    const numericSearch = Number(rawSearch);
+    const isPureInteger = !Number.isNaN(numericSearch) && Number.isInteger(numericSearch);
+
+    if (isPureInteger) {
+      // 100% Index lookup on { schoolId: 1, grNumber: 1 }
+      queryFilter.grNumber = numericSearch;
+    } else {
+      // Safe escaped regex against ReDoS injection
+      const sanitizedSearch = rawSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(sanitizedSearch, 'i');
+
+      // Find any user accounts belonging to this school matching the name
+      const matchingUserIds = await User.find({
+        schoolId: effectiveSchoolId,
+        fullName: searchRegex,
+      }).distinct('_id');
+
+      queryFilter.$or = [
+        { globalStudentId: searchRegex },
+        { studentFullName: searchRegex },
+        { userId: { $in: matchingUserIds } },
+      ];
+    }
+  }
+
+  // ── Determine Sort Direction ───────────────────────────────────────────────
+  const sortDirection = sortOrder === 'desc' ? -1 : 1;
+  const sortCriteria = {};
+  if (sortBy === 'createdAt') {
+    sortCriteria.createdAt = sortDirection;
+  } else if (sortBy === 'fullName') {
+    sortCriteria.studentFullName = sortDirection;
+  } else {
+    sortCriteria.grNumber = sortDirection;
+  }
+
+  // ── Execute Concurrent Query & Count with Minimum Projection ───────────────
+  const [studentProfiles, totalRecords] = await Promise.all([
+    StudentProfile.find(queryFilter)
+      .populate('userId', 'fullName email phoneNumber status')
+      .populate('classId', 'name numericGrade')
+      .populate('sectionId', 'name')
+      .sort(sortCriteria)
+      .skip(skipCount)
+      .limit(pageSize)
+      .lean(),
+    StudentProfile.countDocuments(queryFilter),
+  ]);
+
+  // ── Minimal Data Sanitization (Zero credentials/passwords exposed) ──────────
+  const sanitizedStudents = studentProfiles.map((studentProfile) => ({
+    _id: studentProfile._id,
+    grNumber: studentProfile.grNumber,
+    globalStudentId: studentProfile.globalStudentId || `GR-${studentProfile.grNumber}`,
+    studentName: studentProfile.userId?.fullName || studentProfile.studentFullName || 'Student',
+    gender: studentProfile.gender || 'UNSPECIFIED',
+    className: studentProfile.classId?.name || '—',
+    classId: studentProfile.classId?._id || studentProfile.classId,
+    sectionName: studentProfile.sectionId?.name || '—',
+    sectionId: studentProfile.sectionId?._id || studentProfile.sectionId,
+    guardianName: studentProfile.fatherOrGuardianName || '—',
+    guardianContact: studentProfile.guardianContactNumber || '—',
+    lifecycleStatus: studentProfile.lifecycleStatus,
+    admissionDate: studentProfile.admissionDate,
+    admissionType: studentProfile.admissionType,
+  }));
+
+  const totalPages = Math.ceil(totalRecords / pageSize);
+
+  return sendSuccess(response, 200, 'School student directory retrieved successfully.', {
+    students: sanitizedStudents,
+    pagination: {
+      currentPage: pageNumber,
+      pageSize,
+      totalRecords,
+      totalPages,
+      hasNextPage: pageNumber < totalPages,
+      hasPreviousPage: pageNumber > 1,
+    },
+  });
+});
+

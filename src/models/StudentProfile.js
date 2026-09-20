@@ -138,4 +138,10 @@ StudentProfileSchema.index({ schoolId: 1, admissionRegisterNumber: 1 }, { unique
 // Class roster index
 StudentProfileSchema.index({ schoolId: 1, classId: 1, sectionId: 1 });
 
+// Directory listing and pagination index
+StudentProfileSchema.index({ schoolId: 1, lifecycleStatus: 1, grNumber: 1 });
+
+// Fast student name search index within school
+StudentProfileSchema.index({ schoolId: 1, studentFullName: 1, grNumber: 1 });
+
 export default mongoose.models.StudentProfile || mongoose.model('StudentProfile', StudentProfileSchema);
