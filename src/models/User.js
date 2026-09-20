@@ -120,6 +120,9 @@ const UserSchema = new mongoose.Schema({
   mfa: { type: MfaSchema, default: () => ({}) },
 }, { timestamps: true });
 
+UserSchema.index({ schoolId: 1, role: 1, status: 1 });
+
+
 // Virtual to easily read numerical hierarchy level
 UserSchema.virtual('roleLevel').get(function () {
   return ROLE_HIERARCHY[this.role] || 0;

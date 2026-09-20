@@ -8,6 +8,8 @@ import {
   handleGetAttendanceWindowStatus,
   handleVerifyAttendance,
   handleUploadAttendanceSheet,
+  handleGetTeacherDailyAttendance,
+  handleSaveTeacherDailyAttendance,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -23,6 +25,19 @@ const router = express.Router();
 
 // All attendance routes require authentication
 router.use(authenticate);
+
+// ─── GET / POST Daily Teacher Attendance (Head Master / Supervisor / Admin) ─────
+router.get(
+  "/teachers/daily",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetTeacherDailyAttendance
+);
+
+router.post(
+  "/teachers/daily",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
+  handleSaveTeacherDailyAttendance
+);
 
 // ─── GET Real-Time Attendance Window & Closure Status ──────────────────────────
 router.get(

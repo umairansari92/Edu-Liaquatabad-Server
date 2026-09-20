@@ -6,6 +6,8 @@ import Section from "../models/Section.js";
 import TeachingAssignment from "../models/TeachingAssignment.js";
 import AuditLog from "../models/AuditLog.js";
 import School from "../models/School.js";
+import User from "../models/User.js";
+import TeacherProfile from "../models/TeacherProfile.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
@@ -914,4 +916,305 @@ export const handleUploadAttendanceSheet = asyncHandler(async (request, response
   });
 
   return sendSuccess(response, 200, 'Attendance sheet uploaded and recorded successfully.', { attendance: record });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /attendance/teachers/daily — Head Master authoritative daily teacher roster
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleGetTeacherDailyAttendance = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  let effectiveSchoolId = null;
+
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId) {
+      return sendError(response, 403, 'Your Head Master account is not assigned to any municipal school.');
+    }
+    if (request.query.schoolId && String(request.query.schoolId) !== actorSchoolId) {
+      return sendError(response, 403, 'Access denied. You cannot view teacher attendance outside your authorized school.');
+    }
+    effectiveSchoolId = actorSchoolId;
+  } else if (requestingActor.role === ROLES.SUPERVISOR) {
+    const targetSchoolId = request.query.schoolId;
+    if (!targetSchoolId) {
+      return sendError(response, 400, 'schoolId query parameter is required for Supervisor oversight.');
+    }
+    const assignedSchoolIds = (requestingActor.assignedSchools || []).map((assignedSchool) =>
+      String(assignedSchool?._id || assignedSchool)
+    );
+    if (!assignedSchoolIds.includes(String(targetSchoolId))) {
+      return sendError(response, 403, 'Access denied. This school is not within your assigned supervisor jurisdiction.');
+    }
+    effectiveSchoolId = String(targetSchoolId);
+  } else if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(requestingActor.role)) {
+    effectiveSchoolId = request.query.schoolId || String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!effectiveSchoolId) {
+      return sendError(response, 400, 'schoolId query parameter is required for administrative query.');
+    }
+  } else {
+    return sendError(response, 403, 'Access denied. You lack authority to view teacher daily attendance.');
+  }
+
+  const queryDate = request.query.date ? new Date(request.query.date) : new Date();
+  if (isNaN(queryDate.getTime())) {
+    return sendError(response, 400, 'Invalid date format.');
+  }
+
+  const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
+  const dayEnd = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
+
+  // Authoritative teaching faculty for the school
+  const teachers = await User.find({
+    schoolId: effectiveSchoolId,
+    role: ROLES.TEACHER,
+    status: USER_STATUS.ACTIVE,
+  })
+    .select('fullName email phoneNumber designation createdAt')
+    .sort({ fullName: 1 })
+    .lean();
+
+  const teacherIds = teachers.map((teacherItem) => teacherItem._id);
+
+  const [teacherProfiles, existingAttendance] = await Promise.all([
+    TeacherProfile.find({ userId: { $in: teacherIds } }).lean(),
+    Attendance.findOne({
+      schoolId: effectiveSchoolId,
+      attendanceType: 'TEACHER',
+      date: { $gte: dayStart, $lte: dayEnd },
+      sectionId: null,
+    }).lean(),
+  ]);
+
+  const profileMap = new Map(
+    teacherProfiles.map((teacherProfile) => [String(teacherProfile.userId), teacherProfile])
+  );
+
+  const recordsMap = new Map();
+  if (existingAttendance && Array.isArray(existingAttendance.records)) {
+    for (const recordItem of existingAttendance.records) {
+      recordsMap.set(String(recordItem.userId), recordItem);
+    }
+  }
+
+  // TBD [Article I Compliance]: Formal departmental threshold/grace-period for automatic
+  // LATE classification is pending government notification. Currently designated manually
+  // by the Head Master based on the physical morning attendance register.
+  const roster = teachers.map((teacherItem) => {
+    const teacherIdString = String(teacherItem._id);
+    const profile = profileMap.get(teacherIdString) || {};
+    const existing = recordsMap.get(teacherIdString);
+
+    return {
+      userId: teacherItem._id,
+      fullName: teacherItem.fullName,
+      email: teacherItem.email,
+      phoneNumber: teacherItem.phoneNumber || '',
+      designation: teacherItem.designation || profile.designation || 'Teacher',
+      employeeId: profile.employeeId || 'ID-PENDING',
+      bpsScale: profile.bpsScale || profile.bps || 'BPS-14',
+      qualification: profile.qualification || '',
+      status: existing ? existing.status : ATTENDANCE_STATUS.PRESENT,
+      remarks: existing ? existing.remarks || '' : '',
+    };
+  });
+
+  const presentCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.PRESENT).length;
+  const absentCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.ABSENT).length;
+  const leaveCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.LEAVE).length;
+  const lateCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.LATE).length;
+
+  return sendSuccess(response, 200, 'Teacher daily attendance roster retrieved successfully.', {
+    schoolId: effectiveSchoolId,
+    date: queryDate.toISOString().split('T')[0],
+    alreadySubmitted: Boolean(existingAttendance),
+    verificationStatus: existingAttendance?.verificationStatus || null,
+    verifiedAt: existingAttendance?.updatedAt || null,
+    summary: {
+      totalFaculty: roster.length,
+      presentCount,
+      absentCount,
+      leaveCount,
+      lateCount,
+    },
+    roster,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /attendance/teachers/daily — Head Master saves & verifies daily teacher register
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleSaveTeacherDailyAttendance = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  let effectiveSchoolId = null;
+
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId) {
+      return sendError(response, 403, 'Your Head Master account is not assigned to any municipal school.');
+    }
+    if (request.body.schoolId && String(request.body.schoolId) !== actorSchoolId) {
+      return sendError(response, 403, 'Access denied. You cannot record teacher attendance outside your authorized school.');
+    }
+    effectiveSchoolId = actorSchoolId;
+  } else if (requestingActor.role === ROLES.SUPERVISOR) {
+    const targetSchoolId = request.body.schoolId;
+    if (!targetSchoolId) {
+      return sendError(response, 400, 'schoolId is required in request body for Supervisor recording.');
+    }
+    const assignedSchoolIds = (requestingActor.assignedSchools || []).map((assignedSchool) =>
+      String(assignedSchool?._id || assignedSchool)
+    );
+    if (!assignedSchoolIds.includes(String(targetSchoolId))) {
+      return sendError(response, 403, 'Access denied. This school is not within your assigned supervisor jurisdiction.');
+    }
+    effectiveSchoolId = String(targetSchoolId);
+  } else if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(requestingActor.role)) {
+    effectiveSchoolId = request.body.schoolId || String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!effectiveSchoolId) {
+      return sendError(response, 400, 'schoolId is required for administrative recording.');
+    }
+  } else {
+    return sendError(response, 403, 'Access denied. You lack authority to record teacher daily attendance.');
+  }
+
+  const { date, records } = request.body;
+
+  if (!Array.isArray(records) || records.length === 0) {
+    return sendError(response, 400, 'A non-empty records array is required.');
+  }
+
+  const queryDate = date ? new Date(date) : new Date();
+  if (isNaN(queryDate.getTime())) {
+    return sendError(response, 400, 'Invalid date format.');
+  }
+
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+  if (queryDate > todayEnd) {
+    return sendError(response, 400, 'Teacher attendance cannot be recorded for a future date.');
+  }
+
+  const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
+  const dayEnd = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
+
+  // Validate format and ensure no duplicate teacher IDs in submission
+  const validStatuses = Object.values(ATTENDANCE_STATUS);
+  const seenUserIds = new Set();
+  const submittedTeacherIds = [];
+
+  for (const recordItem of records) {
+    const rawUserId = String(recordItem.userId || '');
+    if (!/^[0-9a-fA-F]{24}$/.test(rawUserId)) {
+      return sendError(response, 400, `Invalid teacher userId format: ${rawUserId}`);
+    }
+    if (seenUserIds.has(rawUserId)) {
+      return sendError(response, 400, `Duplicate teacher entry detected in records payload: ${rawUserId}`);
+    }
+    if (!validStatuses.includes(recordItem.status)) {
+      return sendError(response, 400, `Invalid attendance status "${recordItem.status}" for teacher ${rawUserId}.`);
+    }
+    seenUserIds.add(rawUserId);
+    submittedTeacherIds.push(rawUserId);
+  }
+
+  // BOLA / Cross-School Verification Guard:
+  // Every single submitted teacher MUST belong to effectiveSchoolId and hold TEACHER role
+  const authorizedTeachers = await User.find({
+    _id: { $in: submittedTeacherIds },
+    schoolId: effectiveSchoolId,
+    role: ROLES.TEACHER,
+  })
+    .select('_id fullName')
+    .lean();
+
+  const authorizedTeacherIdSet = new Set(authorizedTeachers.map((teacherItem) => String(teacherItem._id)));
+
+  for (const submittedId of submittedTeacherIds) {
+    if (!authorizedTeacherIdSet.has(submittedId)) {
+      return sendError(
+        response,
+        403,
+        `Integrity violation: Faculty member ${submittedId} does not belong to this school or is not an authorized teacher.`
+      );
+    }
+  }
+
+  // Sanitize records
+  const sanitizedRecords = records.map((recordItem) => ({
+    userId: recordItem.userId,
+    status: recordItem.status,
+    remarks: typeof recordItem.remarks === 'string' ? recordItem.remarks.trim() : '',
+  }));
+
+  const newHash = computeRecordsHash(sanitizedRecords);
+
+  // Atomic upsert of the school's single daily teacher attendance document
+  const attendanceRecord = await Attendance.findOneAndUpdate(
+    {
+      schoolId: effectiveSchoolId,
+      attendanceType: 'TEACHER',
+      date: { $gte: dayStart, $lte: dayEnd },
+      sectionId: null,
+    },
+    {
+      $set: {
+        schoolId: effectiveSchoolId,
+        attendanceType: 'TEACHER',
+        date: dayStart,
+        classId: null,
+        sectionId: null,
+        records: sanitizedRecords,
+        entryMode: 'MANUAL_PORTAL',
+        recordedBy: requestingActor._id,
+        verifiedBy: requestingActor._id,
+        verificationStatus: 'VERIFIED',
+        contentHash: newHash,
+        lastRollupAt: new Date(),
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  const presentCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.PRESENT).length;
+  const absentCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.ABSENT).length;
+  const leaveCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.LEAVE).length;
+  const lateCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.LATE).length;
+
+  // Immutable Audit Log
+  await AuditLog.create({
+    actorId: requestingActor._id,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName,
+    action: 'TEACHER_ATTENDANCE_RECORDED',
+    targetModel: 'Attendance',
+    targetId: attendanceRecord._id,
+    schoolId: effectiveSchoolId,
+    newState: {
+      date: dayStart,
+      totalFaculty: sanitizedRecords.length,
+      presentCount,
+      absentCount,
+      leaveCount,
+      lateCount,
+      contentHash: newHash,
+      verificationStatus: 'VERIFIED',
+    },
+    result: 'SUCCESS',
+    ipAddress: request.ip || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
+  });
+
+
+  return sendSuccess(response, 200, 'Teacher daily attendance successfully recorded and verified.', {
+    attendance: attendanceRecord,
+    summary: {
+      totalFaculty: sanitizedRecords.length,
+      presentCount,
+      absentCount,
+      leaveCount,
+      lateCount,
+    },
+  });
 });

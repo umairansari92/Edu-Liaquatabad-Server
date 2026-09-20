@@ -227,8 +227,8 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     },
     result: 'SUCCESS',
     ipAddress: request.ip || '',
-    userAgent: request.headers['user-agent'] || '',
-    requestId: request.headers['x-request-id'] || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
   });
 
   return sendSuccess(response, 201, 'Teaching assignment created successfully.', newAssignment);
@@ -281,8 +281,8 @@ export const handleEndTeachingAssignment = asyncHandler(async (request, response
     },
     result: 'SUCCESS',
     ipAddress: request.ip || '',
-    userAgent: request.headers['user-agent'] || '',
-    requestId: request.headers['x-request-id'] || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
   });
 
   return sendSuccess(response, 200, 'Teaching assignment ended and archived into history successfully.', assignment);

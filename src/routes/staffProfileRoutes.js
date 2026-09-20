@@ -6,14 +6,19 @@ import {
   handleRequestPdfAccess,
   handleGetStaffAccessHistory,
   handleGenerateStaffProfilePdf,
+  handleGetSchoolFaculty,
 } from '../controllers/staffProfileController.js';
 
 const router = express.Router();
 
 router.use(authenticate);
 
+// Scoped school faculty directory (HM, Supervisor, Admin+)
+router.get('/school', handleGetSchoolFaculty);
+
 // View staff profile (Self, HM of same school, Supervisor, Admin+)
 router.get('/:id/profile', handleGetStaffProfile);
+
 
 // Update staff field-level privacy settings & PDF consent
 router.patch('/:id/privacy', handleUpdatePrivacySettings);

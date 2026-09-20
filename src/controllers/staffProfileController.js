@@ -698,3 +698,159 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
     requestId: request.headers['x-request-id'] || '',
   });
 });
+
+/**
+ * GET /api/v1/staff/school
+ * Retrieves scoped teaching faculty directory for an authorized school.
+ * For HM: strictly bounded to request.user.schoolId.
+ * Reuses authoritative maskCnic helper.
+ */
+export const handleGetSchoolFaculty = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  let effectiveSchoolId = null;
+
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId) {
+      return sendError(response, 403, 'Your Head Master account is not assigned to any municipal school.');
+    }
+    if (request.query.schoolId && String(request.query.schoolId) !== actorSchoolId) {
+      return sendError(response, 403, 'Access denied. You cannot view faculty outside your authorized school.');
+    }
+    effectiveSchoolId = actorSchoolId;
+  } else if (requestingActor.role === ROLES.SUPERVISOR) {
+    const targetSchoolId = request.query.schoolId;
+    if (!targetSchoolId) {
+      return sendError(response, 400, 'schoolId query parameter is required for Supervisor oversight.');
+    }
+    const assignedSchoolIds = (requestingActor.assignedSchools || []).map((assignedSchool) =>
+      String(assignedSchool?._id || assignedSchool)
+    );
+    if (!assignedSchoolIds.includes(String(targetSchoolId))) {
+      return sendError(response, 403, 'Access denied. This school is not within your assigned supervisor jurisdiction.');
+    }
+    effectiveSchoolId = String(targetSchoolId);
+  } else if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(requestingActor.role)) {
+    effectiveSchoolId = request.query.schoolId || String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!effectiveSchoolId) {
+      return sendError(response, 400, 'schoolId query parameter is required for administrative query.');
+    }
+  } else {
+    return sendError(response, 403, 'Access denied. You lack authority to view the school faculty roster.');
+  }
+
+  const { search, status, page = 1, limit = 50 } = request.query;
+  const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+  const limitNumber = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+  const skipRecords = (pageNumber - 1) * limitNumber;
+
+  const userFilter = {
+    schoolId: effectiveSchoolId,
+    role: ROLES.TEACHER,
+  };
+
+  if (status) {
+    userFilter.status = status;
+  } else {
+    userFilter.status = { $ne: USER_STATUS.REJECTED };
+  }
+
+  if (search && search.trim()) {
+    const trimmedSearch = search.trim();
+    // Also look up matching profiles by employeeId or cnic
+    const matchingProfiles = await TeacherProfile.find({
+      currentSchoolId: effectiveSchoolId,
+      $or: [
+        { employeeId: { $regex: trimmedSearch, $options: 'i' } },
+        { cnic: { $regex: trimmedSearch, $options: 'i' } },
+      ],
+    }).select('userId').lean();
+
+    const matchingUserIds = matchingProfiles.map((matchingProfile) => matchingProfile.userId);
+
+    userFilter.$or = [
+      { fullName: { $regex: trimmedSearch, $options: 'i' } },
+      { email: { $regex: trimmedSearch, $options: 'i' } },
+      ...(matchingUserIds.length > 0 ? [{ _id: { $in: matchingUserIds } }] : []),
+    ];
+  }
+
+  const [totalRecords, facultyUsers] = await Promise.all([
+    User.countDocuments(userFilter),
+    User.find(userFilter)
+      .select('fullName email phoneNumber designation status createdAt')
+      .sort({ fullName: 1 })
+      .skip(skipRecords)
+      .limit(limitNumber)
+      .lean(),
+  ]);
+
+  const facultyUserIds = facultyUsers.map((facultyMember) => facultyMember._id);
+
+  const [teacherProfiles, activeAssignments] = await Promise.all([
+    TeacherProfile.find({ userId: { $in: facultyUserIds } }).lean(),
+    TeachingAssignment.find({
+      schoolId: effectiveSchoolId,
+      teacherId: { $in: facultyUserIds },
+      status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+    })
+      .populate('classId', 'name numericGrade code')
+      .populate('sectionId', 'name')
+      .populate('subjectId', 'name code')
+      .lean(),
+  ]);
+
+  const profileMap = new Map(
+    teacherProfiles.map((teacherProfile) => [String(teacherProfile.userId), teacherProfile])
+  );
+
+  const assignmentMap = new Map();
+  for (const assignment of activeAssignments) {
+    const teacherIdString = String(assignment.teacherId);
+    if (!assignmentMap.has(teacherIdString)) {
+      assignmentMap.set(teacherIdString, []);
+    }
+    assignmentMap.get(teacherIdString).push(assignment);
+  }
+
+  const formattedFaculty = facultyUsers.map((facultyMember) => {
+    const memberIdString = String(facultyMember._id);
+    const profile = profileMap.get(memberIdString) || {};
+    const memberAssignments = assignmentMap.get(memberIdString) || [];
+
+    return {
+      userId: facultyMember._id,
+      fullName: facultyMember.fullName,
+      email: facultyMember.email,
+      phoneNumber: facultyMember.phoneNumber || '',
+      designation: facultyMember.designation || profile.designation || 'Teacher',
+      employeeId: profile.employeeId || 'ID-PENDING',
+      bpsScale: profile.bpsScale || profile.bps || 'BPS-14',
+      qualification: profile.qualification || 'Not Specified',
+      joiningDate: profile.joiningDate || facultyMember.createdAt,
+      appointmentDate: profile.appointmentDate || null,
+      isTeachingStaff: profile.isTeachingStaff !== false,
+      specializationSubjects: profile.specializationSubjects || [],
+      cnicMasked: maskCnic(profile.cnic),
+      status: facultyMember.status,
+      activeDutyCount: memberAssignments.length,
+      activeAssignments: memberAssignments.map((assignmentItem) => ({
+        assignmentId: assignmentItem._id,
+        className: assignmentItem.classId?.name,
+        sectionName: assignmentItem.sectionId?.name,
+        subjectName: assignmentItem.subjectId?.name,
+        academicSession: assignmentItem.academicSession,
+      })),
+    };
+  });
+
+  return sendSuccess(response, 200, 'School faculty roster retrieved successfully.', {
+    schoolId: effectiveSchoolId,
+    totalRecords,
+    totalPages: Math.ceil(totalRecords / limitNumber) || 1,
+    currentPage: pageNumber,
+    pageSize: limitNumber,
+    faculty: formattedFaculty,
+  });
+});
+

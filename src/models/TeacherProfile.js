@@ -80,4 +80,7 @@ const TeacherProfileSchema = new mongoose.Schema({
   }],
 }, { timestamps: true });
 
+TeacherProfileSchema.index({ currentSchoolId: 1, isTeachingStaff: 1, lifecycleStatus: 1 });
+
+
 export default mongoose.models.TeacherProfile || mongoose.model('TeacherProfile', TeacherProfileSchema);

@@ -24,10 +24,12 @@ const testFiles = [
   'tests/security_and_regression_verification.test.js',
   'tests/root_admin_privacy_and_dashboard_authority.test.js',
   'tests/hm_operational_authority_and_security.test.js',
-  'tests/security_remediation_wave2_core.test.js'
+  'tests/security_remediation_wave2_core.test.js',
+  'tests/hm_student_directory_and_enrollment.test.js',
+  'tests/hm_faculty_and_teacher_attendance.test.js'
 ];
 
-console.log('Running test integrity verification across all 24 test suites...\n');
+console.log('Running test integrity verification across all 26 test suites...\n');
 
 let totalBannerPassed = 0;
 let totalBannerTotal = 0;
