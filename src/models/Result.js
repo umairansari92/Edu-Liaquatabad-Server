@@ -33,4 +33,10 @@ const ResultSchema = new mongoose.Schema({
 
 ResultSchema.index({ examId: 1, studentId: 1 }, { unique: true });
 
+// Compound index for gazette filtering and in-index percentage sorting
+ResultSchema.index({ examId: 1, classId: 1, sectionId: 1, percentage: -1 });
+
+// Compound index for lifecycle status counting (unverified drafts check)
+ResultSchema.index({ examId: 1, status: 1 });
+
 export default mongoose.models.Result || mongoose.model('Result', ResultSchema);

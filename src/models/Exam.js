@@ -16,6 +16,14 @@ const ExamSchema = new mongoose.Schema({
     enum: ['UPCOMING', 'ONGOING', 'COMPLETED', 'PUBLISHED', 'CANCELLED'],
     default: 'UPCOMING',
   },
+  resultsLastModifiedAt: {
+    type: Date,
+    default: null,
+  },
 }, { timestamps: true });
+
+// Compound indexes for scoped chronological retrieval and academic session filtering
+ExamSchema.index({ schoolId: 1, startDate: -1 });
+ExamSchema.index({ schoolId: 1, academicYear: 1, status: 1 });
 
 export default mongoose.models.Exam || mongoose.model('Exam', ExamSchema);
