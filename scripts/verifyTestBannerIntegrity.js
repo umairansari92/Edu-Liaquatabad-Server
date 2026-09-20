@@ -1,35 +1,19 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 
-const testFiles = [
-  'tests/auth_suite.test.js',
-  'tests/argon2_migration_suite.test.js',
-  'tests/refresh_token_rotation_suite.test.js',
-  'tests/root_admin_mfa_suite.test.js',
-  'tests/authority_model_suite.test.js',
-  'tests/auth_hierarchy_suite.test.js',
-  'tests/security_suite.test.js',
-  'tests/security_remediation_wave1.test.js',
-  'tests/root_admin_module_suite.test.js',
-  'tests/authority_negative_security_suite.test.js',
-  'tests/authority_transition_matrix.test.js',
-  'tests/teacher_attendance_security.test.js',
-  'tests/seed_data_validation.test.js',
-  'tests/staff_profile_and_approval_workflow.test.js',
-  'tests/staff_profile_controller_integration.test.js',
-  'tests/attendance_analytics_suite.test.js',
-  'tests/town_holiday_and_timing_policy.test.js',
-  'tests/announcement_and_public_stats.test.js',
-  'tests/student_onboarding_flows.test.js',
-  'tests/privacy_and_notifications.test.js',
-  'tests/security_and_regression_verification.test.js',
-  'tests/root_admin_privacy_and_dashboard_authority.test.js',
-  'tests/hm_operational_authority_and_security.test.js',
-  'tests/security_remediation_wave2_core.test.js',
-  'tests/hm_student_directory_and_enrollment.test.js',
-  'tests/hm_faculty_and_teacher_attendance.test.js'
-];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const testsDir = path.resolve(__dirname, '../tests');
 
-console.log('Running test integrity verification across all 26 test suites...\n');
+// Dynamically discover all test files directly from the directory (zero hardcoded file lists)
+const testFiles = fs.readdirSync(testsDir)
+  .filter(file => file.endsWith('.test.js'))
+  .sort()
+  .map(file => path.join('tests', file).replace(/\\/g, '/'));
+
+console.log(`Running dynamic test integrity verification across all ${testFiles.length} test suites discovered in tests/...\n`);
 
 let totalBannerPassed = 0;
 let totalBannerTotal = 0;
@@ -40,19 +24,21 @@ for (const file of testFiles) {
   try {
     const output = execSync(`node ${file}`, {
       encoding: 'utf8',
+      cwd: path.resolve(__dirname, '..'),
       env: { ...process.env, NODE_ENV: 'test' },
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    // Count individual PASS lines
+    // Count individual PASS lines from actual stdout
     const passLines = (output.match(/✅\s*PASS/gi) || []).length;
     totalPassLines += passLines;
 
-    // Search for closing banner patterns like "ALL X/Y ... PASSED" or "[X/Y] ... PASSED"
-    let bannerMatch = output.match(/ALL\s+(\d+)\/(\d+)/i) ||
-                      output.match(/PASSED:\s*(\d+)\/(\d+)/i) ||
-                      output.match(/(\d+)\/(\d+)\s+TESTS?\s+PASSED/i) ||
-                      output.match(/\[(\d+)\/(\d+)\]/i);
+    // Search for closing banner patterns
+    let bannerMatch = output.match(/ALL\s+(\d+)\s*(?:\/|OF)\s*(\d+)/i) ||
+                      output.match(/PASSED:\s*(\d+)\s*(?:\/|OF)\s*(\d+)/i) ||
+                      output.match(/(\d+)\s*\/\s*(\d+)\s+TESTS?\s+PASSED/i) ||
+                      output.match(/\[(\d+)\s*\/\s*(\d+)\]/i) ||
+                      output.match(/COMPLETED:\s*(\d+)\s*\/\s*(\d+)/i);
 
     let passed = 0;
     let total = 0;
@@ -69,7 +55,7 @@ for (const file of testFiles) {
     totalBannerTotal += total;
 
     fileResults.push({ file, passed, total, passLines });
-    console.log(`✓ ${file.padEnd(55)} Banner: ${passed}/${total} (Pass lines: ${passLines})`);
+    console.log(`✓ ${file.padEnd(60)} Banner: ${String(passed).padStart(2)}/${String(total).padEnd(2)} (Pass lines: ${passLines})`);
   } catch (err) {
     console.error(`✗ FAILED: ${file}`);
     console.error(err.stderr || err.stdout || err.message);
@@ -77,7 +63,8 @@ for (const file of testFiles) {
   }
 }
 
-console.log('\n' + '='.repeat(70));
+console.log('\n' + '='.repeat(75));
+console.log(`DYNAMIC AUDIT SUMMARY (${testFiles.length} SUITES DISCOVERED ON DISK):`);
 console.log(`TOTAL BANNER SUM: ${totalBannerPassed} / ${totalBannerTotal}`);
 console.log(`TOTAL PASS LINES: ${totalPassLines}`);
-console.log('='.repeat(70));
+console.log('='.repeat(75));
