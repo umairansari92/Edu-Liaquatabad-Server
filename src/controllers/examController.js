@@ -6,9 +6,15 @@ import School from '../models/School.js';
 import User from '../models/User.js';
 import Class from '../models/Class.js';
 import Section from '../models/Section.js';
+import StudentProfile from '../models/StudentProfile.js';
 import AuditLog from '../models/AuditLog.js';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import { ROLES } from '../../config/constants.js';
+import {
+  generateStudentMarksheetPdf,
+  generateTabulationSheetPdf,
+} from '../utils/marksheetPdfGenerator.js';
+import { computeClassTabulation, computeStudentResultMetrics } from '../utils/examCalculations.js';
 
 /**
  * Resolves the authorized school context for an exam operation.
@@ -315,41 +321,69 @@ export const handleSubmitStudentMarks = asyncHandler(async (request, response) =
     return sendError(response, 409, 'Duplicate result: Student already has a recorded result for this exam.');
   }
 
-  // Calculate totals, percentage, grade, and passing status
-  let totalMaxMarks = 0;
-  let totalObtainedMarks = 0;
+  // Calculate totals, percentage, grade, and passing status using centralized engine
   const sanitizedSubjectMarks = [];
 
   for (const markItem of subjectMarks) {
     if (!markItem.subjectId || !/^[0-9a-fA-F]{24}$/.test(String(markItem.subjectId))) {
       return sendError(response, 400, 'Invalid subject ID format in marks submission.');
     }
-    const subjectMax = Number(markItem.maxMarks || markItem.totalMarks) || 100;
-    const subjectObtained = Number(markItem.obtainedMarks) || 0;
-    if (subjectObtained < 0 || subjectMax <= 0 || subjectObtained > subjectMax) {
-      return sendError(response, 400, 'Obtained marks must be non-negative and cannot exceed maximum marks.');
+
+    const isGraded = Boolean(markItem.isGradedOnly);
+    if (isGraded) {
+      const letterGrade = (markItem.letterGrade || 'A').toUpperCase();
+      sanitizedSubjectMarks.push({
+        subjectId: markItem.subjectId,
+        subjectName: markItem.subjectName || 'DRAWING',
+        isGradedOnly: true,
+        letterGrade,
+        obtainedMarks: 0,
+        maxMarks: 0,
+        isPassed: !['FAIL', 'F'].includes(letterGrade),
+      });
+      continue;
     }
+
+    let subjectMax = Number(markItem.maxMarks || markItem.totalMarks) || 100;
+    let subjectObtained = 0;
+    let subComponents;
+
+    if (markItem.subComponents && (markItem.subComponents.nazra !== undefined || markItem.subComponents.written !== undefined)) {
+      const nazra = Number(markItem.subComponents.nazra) || 0;
+      const written = Number(markItem.subComponents.written) || 0;
+      if (nazra < 0 || nazra > 20 || written < 0 || written > 80) {
+        return sendError(response, 400, 'Islamiat sub-components must be within range: Nazra (0-20), Written (0-80).');
+      }
+      subjectObtained = nazra + written;
+      subjectMax = 100;
+      subComponents = { nazra, written };
+    } else {
+      subjectObtained = Number(markItem.obtainedMarks) || 0;
+      if (subjectObtained < 0 || subjectMax <= 0 || subjectObtained > subjectMax) {
+        return sendError(response, 400, 'Obtained marks must be non-negative and cannot exceed maximum marks.');
+      }
+    }
+
     const subjectPassing = Number(markItem.passingMarks) || (subjectMax * 0.33);
     const isPassing = subjectObtained >= subjectPassing;
 
-    totalMaxMarks += subjectMax;
-    totalObtainedMarks += subjectObtained;
     sanitizedSubjectMarks.push({
       subjectId: markItem.subjectId,
+      subjectName: markItem.subjectName || '',
       obtainedMarks: subjectObtained,
       maxMarks: subjectMax,
+      subComponents,
+      isGradedOnly: false,
       isPassed: isPassing,
     });
   }
 
-  const percentage = totalMaxMarks > 0 ? Number(((totalObtainedMarks / totalMaxMarks) * 100).toFixed(2)) : 0;
-  let grade = 'F';
-  if (percentage >= 80) grade = 'A+';
-  else if (percentage >= 70) grade = 'A';
-  else if (percentage >= 60) grade = 'B';
-  else if (percentage >= 50) grade = 'C';
-  else if (percentage >= 40) grade = 'D';
-  else if (percentage >= 33) grade = 'E';
+  const calculatedMetrics = computeStudentResultMetrics(sanitizedSubjectMarks);
+  const totalMaxMarks = calculatedMetrics.totalMaxMarks;
+  const totalObtainedMarks = calculatedMetrics.totalObtainedMarks;
+  const percentage = calculatedMetrics.percentage;
+  const grade = calculatedMetrics.grade;
+  const resultStatus = calculatedMetrics.resultStatus;
 
   // Execute atomic write within transaction session
   const session = await mongoose.startSession();
@@ -378,6 +412,7 @@ export const handleSubmitStudentMarks = asyncHandler(async (request, response) =
       totalMaxMarks,
       percentage,
       grade,
+      resultStatus,
       status: 'SUBMITTED',
       evaluatedBy: requestingActor._id || requestingActor.userId,
       remarks: remarks ? String(remarks).trim() : '',
@@ -712,3 +747,232 @@ export const handlePublishExamResults = asyncHandler(async (request, response) =
     throw transactionError;
   }
 });
+
+/**
+ * GET /api/v1/exams/:id/results/:studentId/marksheet
+ * Streams official Government DMC Marksheet PDF (A4 Portrait, Image 1 Replica).
+ * Requires result to be in VERIFIED_BY_HM or PUBLISHED state.
+ */
+export const handleDownloadStudentMarksheet = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: examId, studentId } = request.params;
+
+  if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
+    return sendError(response, 400, 'Invalid exam ID format.');
+  }
+  if (!studentId || !/^[0-9a-fA-F]{24}$/.test(studentId)) {
+    return sendError(response, 400, 'Invalid student ID format.');
+  }
+
+  const exam = await Exam.findById(examId).lean();
+  if (!exam) {
+    return sendError(response, 404, 'Exam record not found.');
+  }
+
+  // Anti-BOLA guard
+  try {
+    await resolveAuthorizedSchoolScope(requestingActor, exam.schoolId);
+  } catch (scopeError) {
+    return sendError(response, scopeError.statusCode || 403, scopeError.message);
+  }
+
+  const result = await Result.findOne({ examId, studentId })
+    .populate('subjectMarks.subjectId', 'name code')
+    .lean();
+
+  if (!result) {
+    return sendError(response, 404, 'Exam result not found for this student.');
+  }
+
+  // State Machine Verification Gate: Only VERIFIED_BY_HM or PUBLISHED results can be issued as official marksheets
+  if (!['VERIFIED_BY_HM', 'PUBLISHED'].includes(result.status)) {
+    return sendError(
+      response,
+      400,
+      `Official Marksheet can only be issued for verified or published examination results. Current status is "${result.status}".`
+    );
+  }
+
+  // Populate student particulars
+  const [student, studentProfile, school, classDoc, sectionDoc] = await Promise.all([
+    User.findById(studentId).lean(),
+    StudentProfile.findOne({ userId: studentId }).lean(),
+    School.findById(exam.schoolId).lean(),
+    Class.findById(result.classId).lean(),
+    Section.findById(result.sectionId).lean(),
+  ]);
+
+  // If rank is not yet stored on single result, compute rank dynamically within cohort
+  if (!result.rankFormatted) {
+    const cohortFilter = { examId };
+    if (result.sectionId) {
+      cohortFilter.sectionId = result.sectionId;
+    } else if (result.classId) {
+      cohortFilter.classId = result.classId;
+    }
+    const allCohortResults = await Result.find(cohortFilter).lean();
+    const { rankedResults } = computeClassTabulation(allCohortResults);
+    const matched = rankedResults.find((r) => String(r.studentId?._id || r.studentId) === String(studentId));
+    if (matched) {
+      result.rank = matched.rank;
+      result.rankFormatted = matched.rankFormatted;
+    }
+  }
+
+  const cleanGr = studentProfile?.grNumber || studentProfile?.rollNumber || 'GR';
+  const cleanName = (studentProfile?.studentFullName || student?.fullName || 'STUDENT').replace(/[^a-zA-Z0-9]/g, '_');
+
+  response.setHeader('Content-Type', 'application/pdf');
+  response.setHeader('Content-Disposition', `inline; filename=Marksheet_${cleanGr}_${cleanName}.pdf`);
+
+  const pdfDoc = generateStudentMarksheetPdf({
+    exam,
+    result,
+    student,
+    studentProfile,
+    school,
+    classDoc,
+    sectionDoc,
+    issuanceDate: new Date(),
+  });
+
+  pdfDoc.pipe(response);
+  pdfDoc.end();
+});
+
+/**
+ * GET /api/v1/exams/:id/tabulation-sheet
+ * Streams official Government DMC Tabulation Sheet PDF (LEGAL LANDSCAPE, Image 2 Replica).
+ * Query parameters: classId (required), sectionId (optional).
+ */
+export const handleDownloadClassTabulationPdf = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: examId } = request.params;
+  const { classId, sectionId } = request.query;
+
+  if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
+    return sendError(response, 400, 'Invalid exam ID format.');
+  }
+  if (!classId || !/^[0-9a-fA-F]{24}$/.test(classId)) {
+    return sendError(response, 400, 'A valid classId is required to generate the Tabulation Sheet.');
+  }
+
+  const exam = await Exam.findById(examId).lean();
+  if (!exam) {
+    return sendError(response, 404, 'Exam record not found.');
+  }
+
+  // Anti-BOLA guard
+  try {
+    await resolveAuthorizedSchoolScope(requestingActor, exam.schoolId);
+  } catch (scopeError) {
+    return sendError(response, scopeError.statusCode || 403, scopeError.message);
+  }
+
+  const queryFilter = { examId, classId };
+  if (sectionId && /^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    queryFilter.sectionId = sectionId;
+  }
+
+  const rawResults = await Result.find(queryFilter)
+    .populate('studentId', 'fullName email')
+    .populate('subjectMarks.subjectId', 'name code')
+    .lean();
+
+  if (rawResults.length === 0) {
+    return sendError(response, 404, 'No student results found for this class in this examination.');
+  }
+
+  // Fetch StudentProfiles for dual numbering (GR, Roll No, Father Name)
+  const studentUserIds = rawResults.map((r) => r.studentId?._id || r.studentId);
+  const profiles = await StudentProfile.find({ userId: { $in: studentUserIds } }).lean();
+  const profileMap = new Map();
+  profiles.forEach((p) => profileMap.set(String(p.userId), p));
+
+  const enrichedResults = rawResults.map((r) => ({
+    ...r,
+    studentProfile: profileMap.get(String(r.studentId?._id || r.studentId)) || {},
+  }));
+
+  const { rankedResults, classStatistics } = computeClassTabulation(enrichedResults);
+
+  const [school, classDoc, sectionDoc] = await Promise.all([
+    School.findById(exam.schoolId).lean(),
+    Class.findById(classId).lean(),
+    sectionId ? Section.findById(sectionId).lean() : null,
+  ]);
+
+  const cleanClass = (classDoc?.name || 'Class').replace(/[^a-zA-Z0-9]/g, '_');
+  const cleanExam = (exam.title || 'Exam').replace(/[^a-zA-Z0-9]/g, '_');
+
+  response.setHeader('Content-Type', 'application/pdf');
+  response.setHeader('Content-Disposition', `attachment; filename=TabulationSheet_${cleanClass}_${cleanExam}.pdf`);
+
+  const pdfDoc = generateTabulationSheetPdf({
+    exam,
+    rankedResults,
+    classStatistics,
+    school,
+    classDoc,
+    sectionDoc,
+  });
+
+  pdfDoc.pipe(response);
+  pdfDoc.end();
+});
+
+/**
+ * GET /api/v1/exams/:id/tabulation-data
+ * JSON endpoint providing auto-computed spreadsheet data (ranks, percentages, stats).
+ * Used by HmDashboard Tab 5 interactive Tabulation Sheet grid.
+ */
+export const handleGetClassTabulationData = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: examId } = request.params;
+  const { classId, sectionId } = request.query;
+
+  if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
+    return sendError(response, 400, 'Invalid exam ID format.');
+  }
+
+  const exam = await Exam.findById(examId).lean();
+  if (!exam) {
+    return sendError(response, 404, 'Exam record not found.');
+  }
+
+  try {
+    await resolveAuthorizedSchoolScope(requestingActor, exam.schoolId);
+  } catch (scopeError) {
+    return sendError(response, scopeError.statusCode || 403, scopeError.message);
+  }
+
+  const queryFilter = { examId };
+  if (classId && /^[0-9a-fA-F]{24}$/.test(classId)) queryFilter.classId = classId;
+  if (sectionId && /^[0-9a-fA-F]{24}$/.test(sectionId)) queryFilter.sectionId = sectionId;
+
+  const rawResults = await Result.find(queryFilter)
+    .populate('studentId', 'fullName email')
+    .populate('classId', 'name numericGrade')
+    .populate('sectionId', 'name')
+    .populate('subjectMarks.subjectId', 'name code')
+    .lean();
+
+  const studentUserIds = rawResults.map((r) => r.studentId?._id || r.studentId);
+  const profiles = await StudentProfile.find({ userId: { $in: studentUserIds } }).lean();
+  const profileMap = new Map();
+  profiles.forEach((p) => profileMap.set(String(p.userId), p));
+
+  const enrichedResults = rawResults.map((r) => ({
+    ...r,
+    studentProfile: profileMap.get(String(r.studentId?._id || r.studentId)) || {},
+  }));
+
+  const { rankedResults, classStatistics } = computeClassTabulation(enrichedResults);
+
+  return sendSuccess(response, 200, 'Tabulation sheet data calculated successfully.', {
+    exam,
+    rankedResults,
+    classStatistics,
+  });
+});
+

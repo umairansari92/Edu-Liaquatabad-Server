@@ -7,6 +7,9 @@ import {
   handleVerifyExamResult,
   handleBatchVerifyExamResults,
   handlePublishExamResults,
+  handleDownloadStudentMarksheet,
+  handleDownloadClassTabulationPdf,
+  handleGetClassTabulationData,
 } from '../controllers/examController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
@@ -72,4 +75,26 @@ router.post(
   handlePublishExamResults
 );
 
+// Stream official individual student marksheet PDF (A4 Portrait, Image 1 Replica)
+router.get(
+  '/:id/results/:studentId/marksheet',
+  authorizePermissions(PERMISSIONS.EXAMS_VIEW),
+  handleDownloadStudentMarksheet
+);
+
+// Stream official class tabulation sheet PDF (Legal Landscape, Image 2 Replica)
+router.get(
+  '/:id/tabulation-sheet',
+  authorizePermissions(PERMISSIONS.EXAMS_VIEW),
+  handleDownloadClassTabulationPdf
+);
+
+// Get auto-calculated class tabulation spreadsheet data for web grid
+router.get(
+  '/:id/tabulation-data',
+  authorizePermissions(PERMISSIONS.EXAMS_VIEW),
+  handleGetClassTabulationData
+);
+
 export default router;
+

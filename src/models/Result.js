@@ -9,8 +9,15 @@ const ResultSchema = new mongoose.Schema({
 
   subjectMarks: [{
     subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
+    subjectName: { type: String, trim: true },
+    subComponents: {
+      nazra: { type: Number, min: 0, max: 20 },
+      written: { type: Number, min: 0, max: 80 },
+    },
     obtainedMarks: { type: Number, required: true, min: 0 },
-    maxMarks: { type: Number, required: true },
+    maxMarks: { type: Number, required: true, default: 100 },
+    isGradedOnly: { type: Boolean, default: false },
+    letterGrade: { type: String, trim: true, default: '' },
     isPassed: { type: Boolean, required: true },
   }],
 
@@ -19,6 +26,13 @@ const ResultSchema = new mongoose.Schema({
   percentage: { type: Number, required: true },
   grade: { type: String, required: true },
   position: { type: Number },
+  rank: { type: Number },
+  rankFormatted: { type: String, trim: true },
+  resultStatus: {
+    type: String,
+    enum: ['PASSED', 'FAILED', 'ABSENT'],
+    default: 'PASSED',
+  },
   remarks: { type: String, default: '' },
 
   evaluatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
