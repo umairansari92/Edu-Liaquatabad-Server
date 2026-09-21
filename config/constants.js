@@ -159,12 +159,23 @@ export const ATTENDANCE_STATUS = Object.freeze({
 });
 
 export const TRANSFER_STATUS = Object.freeze({
+  // Canonical Municipal Lifecycle
+  TRANSFER_REQUESTED:         'TRANSFER_REQUESTED',
+  APPROVED:                   'APPROVED',
+  RELIEVED:                   'RELIEVED',
+  JOINED:                     'JOINED',
+
+  // Exception / Governance Paths
+  REJECTED_BY_HM:             'REJECTED_BY_HM',
+  ADMIN_REVIEW_REQUIRED:      'ADMIN_REVIEW_REQUIRED',
+  CANCELLED:                  'CANCELLED',
+  OVERRIDDEN_AND_TRANSFERRED: 'OVERRIDDEN_AND_TRANSFERRED',
+
+  // Backward-Compatibility Aliases
   INITIATED:                  'INITIATED',
   AWAITING_DESTINATION_HM:    'AWAITING_DESTINATION_HM',
   JOINING_APPROVED:           'JOINING_APPROVED',
-  REJECTED_BY_HM:             'REJECTED_BY_HM',
-  OVERRIDDEN_AND_TRANSFERRED: 'OVERRIDDEN_AND_TRANSFERRED',
-  CANCELLED:                  'CANCELLED',
+  EN_ROUTE:                   'RELIEVED',
 });
 
 export const DOCUMENT_TYPES = Object.freeze({
