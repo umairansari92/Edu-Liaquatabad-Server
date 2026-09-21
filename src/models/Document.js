@@ -25,6 +25,30 @@ const DocumentSchema = new mongoose.Schema({
     enum: Object.values(AUDIENCE_TYPES),
   }],
 
+  scope: {
+    type: String,
+    enum: ['SCHOOL', 'TOWN', 'GLOBAL'],
+    required: true,
+    default: 'SCHOOL',
+    index: true,
+  },
+  referenceNumber: {
+    type: String,
+    trim: true,
+    default: null,
+  },
+  priority: {
+    type: String,
+    enum: ['NORMAL', 'URGENT'],
+    default: 'NORMAL',
+    index: true,
+  },
+  isPinned: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+
   publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   publisherRole: { type: String, required: true },
   status: {
@@ -34,5 +58,10 @@ const DocumentSchema = new mongoose.Schema({
     index: true,
   },
 }, { timestamps: true });
+
+// Compound indexes supporting scoped retrieval and pinned-priority sorting
+DocumentSchema.index({ schoolId: 1, status: 1, isPinned: -1, createdAt: -1 });
+DocumentSchema.index({ townId: 1, scope: 1, status: 1, isPinned: -1, createdAt: -1 });
+DocumentSchema.index({ documentType: 1, status: 1 });
 
 export default mongoose.models.Document || mongoose.model('Document', DocumentSchema);

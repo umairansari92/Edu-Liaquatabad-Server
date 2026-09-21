@@ -657,11 +657,24 @@ await runAsyncTest('handleCreateDocument rejects HM broadcasting to GOVERNMENT_O
 await runAsyncTest('handleCreateDocument publishes valid school circular with 201', async () => {
   const origDocCreate = Document.create;
   const origAudit = AuditLog.create;
+  const origStartSession = mongoose.startSession;
 
-  Document.create = async (doc) => ({
-    _id: '507f1f77bcf86cd799439120',
-    ...doc,
-  });
+  const mockSession = {
+    startTransaction() {},
+    commitTransaction: () => Promise.resolve(),
+    abortTransaction: () => Promise.resolve(),
+    endSession() {},
+  };
+  mongoose.startSession = () => Promise.resolve(mockSession);
+
+  Document.create = async (docs) => {
+    const doc = Array.isArray(docs) ? docs[0] : docs;
+    const created = {
+      _id: '507f1f77bcf86cd799439120',
+      ...doc,
+    };
+    return Array.isArray(docs) ? [created] : created;
+  };
   AuditLog.create = async () => ({});
 
   const req = {
@@ -683,6 +696,7 @@ await runAsyncTest('handleCreateDocument publishes valid school circular with 20
   } finally {
     Document.create = origDocCreate;
     AuditLog.create = origAudit;
+    mongoose.startSession = origStartSession;
   }
 });
 
