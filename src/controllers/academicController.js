@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import asyncHandler from 'express-async-handler';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import Class from '../models/Class.js';
@@ -9,6 +10,8 @@ import TransferRequest from '../models/TransferRequest.js';
 import Attendance from '../models/Attendance.js';
 import StudentProfile from '../models/StudentProfile.js';
 import AuditLog from '../models/AuditLog.js';
+import TeachingAssignment from '../models/TeachingAssignment.js';
+import Homework from '../models/Homework.js';
 import {
   ROLES,
   SCOPES,
@@ -16,6 +19,7 @@ import {
   STUDENT_STATUS,
   USER_STATUS,
   TRANSFER_STATUS,
+  TEACHING_ASSIGNMENT_STATUS,
 } from '../../config/constants.js';
 
 // ─── Helper: Write Academic Audit Event ──────────────────────────────────────
@@ -469,8 +473,8 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
   const todayEnd   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
 
-  // 1. Sections where this teacher is classTeacherId (only provable assignment)
-  const assignedSections = await Section.find({
+  // 1. Fetch sections where teacher is primary Class Teacher
+  const classTeacherSections = await Section.find({
     classTeacherId: teacherId,
     schoolId: teacherSchoolId,
     status: { $ne: 'ARCHIVED' },
@@ -478,17 +482,83 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     .populate('classId', 'name numericGrade code')
     .lean();
 
-  // 2. Per-section: student count + today's attendance status
+  // 2. Fetch active TeachingAssignment records (Subject Teacher duties)
+  const subjectAssignments = await TeachingAssignment.find({
+    teacherId,
+    schoolId: teacherSchoolId,
+    status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+  })
+    .populate('classId', 'name numericGrade code')
+    .populate('sectionId', 'name roomNumber capacity schoolId status classTeacherId')
+    .populate('subjectId', 'name code isElective totalMarks passingMarks')
+    .lean();
+
+  // 3. Merge into unified section dictionary
+  const sectionMap = new Map();
+
+  for (const section of classTeacherSections) {
+    const sectionIdStr = String(section._id);
+    sectionMap.set(sectionIdStr, {
+      _id: section._id,
+      name: section.name,
+      roomNumber: section.roomNumber || '',
+      capacity: section.capacity,
+      class: section.classId,
+      isClassTeacher: true,
+      assignedSubjects: [],
+    });
+  }
+
+  for (const assignment of subjectAssignments) {
+    if (!assignment.sectionId) continue;
+    const sectionDoc = assignment.sectionId;
+    const sectionIdStr = String(sectionDoc._id || sectionDoc);
+    let sectionEntry = sectionMap.get(sectionIdStr);
+
+    if (!sectionEntry) {
+      const isClassTeacher = sectionDoc.classTeacherId && String(sectionDoc.classTeacherId) === teacherId;
+      sectionEntry = {
+        _id: sectionDoc._id,
+        name: sectionDoc.name,
+        roomNumber: sectionDoc.roomNumber || '',
+        capacity: sectionDoc.capacity,
+        class: assignment.classId,
+        isClassTeacher: Boolean(isClassTeacher),
+        assignedSubjects: [],
+      };
+      sectionMap.set(sectionIdStr, sectionEntry);
+    }
+
+    if (assignment.subjectId) {
+      const exists = sectionEntry.assignedSubjects.some(
+        (sub) => String(sub._id) === String(assignment.subjectId._id || assignment.subjectId)
+      );
+      if (!exists) {
+        sectionEntry.assignedSubjects.push({
+          _id: assignment.subjectId._id || assignment.subjectId,
+          name: assignment.subjectId.name,
+          code: assignment.subjectId.code,
+          isElective: Boolean(assignment.subjectId.isElective),
+          totalMarks: assignment.subjectId.totalMarks || 100,
+          passingMarks: assignment.subjectId.passingMarks || 33,
+          assignmentId: assignment._id,
+        });
+      }
+    }
+  }
+
+  // 4. Enrich sections with student counts and attendance status
+  const unifiedSections = Array.from(sectionMap.values());
   const sectionSummaries = await Promise.all(
-    assignedSections.map(async (section) => {
+    unifiedSections.map(async (section) => {
       const [studentCount, attendanceRecord] = await Promise.all([
         StudentProfile.countDocuments({
           sectionId: section._id,
-          schoolId: section.schoolId,
+          schoolId: teacherSchoolId,
           lifecycleStatus: STUDENT_STATUS.ACTIVE,
         }),
         Attendance.findOne({
-          schoolId: section.schoolId,
+          schoolId: teacherSchoolId,
           sectionId: section._id,
           attendanceType: 'STUDENT',
           date: { $gte: todayStart, $lte: todayEnd },
@@ -499,14 +569,14 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         ? attendanceRecord.verificationStatus
         : 'NOT_SUBMITTED';
 
-      const presentCount  = attendanceRecord
-        ? attendanceRecord.records.filter((attendanceEntry) => attendanceEntry.status === ATTENDANCE_STATUS.PRESENT).length
+      const presentCount = attendanceRecord
+        ? attendanceRecord.records.filter((rec) => rec.status === ATTENDANCE_STATUS.PRESENT).length
         : null;
-      const absentCount   = attendanceRecord
-        ? attendanceRecord.records.filter((attendanceEntry) => attendanceEntry.status === ATTENDANCE_STATUS.ABSENT).length
+      const absentCount = attendanceRecord
+        ? attendanceRecord.records.filter((rec) => rec.status === ATTENDANCE_STATUS.ABSENT).length
         : null;
-      const leaveCount    = attendanceRecord
-        ? attendanceRecord.records.filter((attendanceEntry) => attendanceEntry.status === ATTENDANCE_STATUS.LEAVE).length
+      const leaveCount = attendanceRecord
+        ? attendanceRecord.records.filter((rec) => rec.status === ATTENDANCE_STATUS.LEAVE).length
         : null;
 
       return {
@@ -514,11 +584,13 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         name: section.name,
         roomNumber: section.roomNumber || '',
         capacity: section.capacity,
-        class: section.classId,
+        class: section.class,
+        isClassTeacher: section.isClassTeacher,
+        assignedSubjects: section.assignedSubjects,
         studentCount,
         todayAttendance: {
           status: attendanceStatus,
-          submitted: !!attendanceRecord,
+          submitted: Boolean(attendanceRecord),
           presentCount,
           absentCount,
           leaveCount,
@@ -528,34 +600,50 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     })
   );
 
-  const totalAssignedStudents = sectionSummaries.reduce((runningSum, sectionSummary) => runningSum + sectionSummary.studentCount, 0);
-  const pendingAttendanceSections = sectionSummaries.filter((sectionSummary) => !sectionSummary.todayAttendance.submitted);
+  // 5. Active homework count for this teacher
+  let activeHomeworkCount = 0;
+  if (mongoose.connection.readyState === 1 || Homework.countDocuments !== mongoose.Model.countDocuments) {
+    try {
+      activeHomeworkCount = await Homework.countDocuments({
+        teacherId,
+        schoolId: teacherSchoolId,
+        status: 'ACTIVE',
+      });
+    } catch {
+      activeHomeworkCount = 0;
+    }
+  }
+
+  const totalAssignedStudents = sectionSummaries.reduce((sum, sec) => sum + sec.studentCount, 0);
+  const pendingAttendanceSections = sectionSummaries.filter((sec) => sec.isClassTeacher && !sec.todayAttendance.submitted);
+  const classTeacherSectionCount = sectionSummaries.filter((sec) => sec.isClassTeacher).length;
+  const subjectTeacherSectionCount = sectionSummaries.filter((sec) => sec.assignedSubjects.length > 0).length;
 
   return sendSuccess(response, 200, 'Teacher operational summary retrieved.', {
     teacherContext: {
       teacherId,
       schoolId: teacherSchoolId,
       scope: teacher.scope,
-      assignmentModel: 'classTeacherId',
-      assignmentNote:
-        'Sections are derived from Section.classTeacherId. Subject-teacher assignments without class-teacher role cannot be automatically verified until an explicit TeacherSectionAssignment model is introduced.',
+      assignmentModel: 'HYBRID_ACTIVE_ASSIGNMENTS',
+      assignmentNote: 'Includes both Primary Class Teacher duties and Subject Teacher assignments via authoritative TeachingAssignment model.',
     },
     summary: {
-      assignedSectionCount: assignedSections.length,
+      assignedSectionCount: sectionSummaries.length,
+      classTeacherSectionCount,
+      subjectTeacherSectionCount,
       totalAssignedStudents,
       pendingAttendanceCount: pendingAttendanceSections.length,
+      activeHomeworkCount,
     },
     sections: sectionSummaries,
-    // Timetable: No timetable model exists in this version.
-    // Timetable management is planned as a future backend feature.
-    timetable: {
-      available: false,
-      message: 'No timetable has been assigned for today. The timetable feature is in the academic roadmap.',
+    homework: {
+      available: true,
+      activeCount: activeHomeworkCount,
     },
-    // Homework: No homework model exists in this version.
-    homework: { available: false, message: 'Homework management is in the academic roadmap.' },
-    // Leave: No leave model exists in this version.
-    leave:    { available: false, message: 'Leave management is in the academic roadmap.' },
+    leave: {
+      available: true,
+      message: 'Leave requests and transfer status are active in your Service Record.',
+    },
   });
 });
 

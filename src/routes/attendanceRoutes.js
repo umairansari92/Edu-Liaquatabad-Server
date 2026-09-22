@@ -10,6 +10,7 @@ import {
   handleUploadAttendanceSheet,
   handleGetTeacherDailyAttendance,
   handleSaveTeacherDailyAttendance,
+  handleGetTeacherSelfAttendance,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -37,6 +38,13 @@ router.post(
   "/teachers/daily",
   authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
   handleSaveTeacherDailyAttendance
+);
+
+// ─── GET Teacher Self-Attendance History ───────────────────────────────────────
+router.get(
+  "/teachers/my-attendance",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetTeacherSelfAttendance
 );
 
 // ─── GET Real-Time Attendance Window & Closure Status ──────────────────────────

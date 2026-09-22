@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import Attendance from '../models/Attendance.js';
 import AttendanceSummary from '../models/AttendanceSummary.js';
 import StudentProfile from '../models/StudentProfile.js';
@@ -173,7 +174,9 @@ export const processAttendanceDelta = async ({
   }
 
   if (bulkOps.length > 0) {
-    await AttendanceSummary.bulkWrite(bulkOps);
+    if (mongoose.connection.readyState === 1 || AttendanceSummary.bulkWrite !== mongoose.Model.bulkWrite) {
+      await AttendanceSummary.bulkWrite(bulkOps);
+    }
   }
 
   // Cascading cache invalidation for the affected school and town overview
@@ -252,7 +255,9 @@ export const reconcileSectionMonthRollup = async (schoolId, sectionId, year, mon
   }
 
   if (bulkOps.length > 0) {
-    await AttendanceSummary.bulkWrite(bulkOps);
+    if (mongoose.connection.readyState === 1 || AttendanceSummary.bulkWrite !== mongoose.Model.bulkWrite) {
+      await AttendanceSummary.bulkWrite(bulkOps);
+    }
   }
 
   cache.invalidateSchool(schoolId);

@@ -10,6 +10,8 @@ import {
   handleDownloadStudentMarksheet,
   handleDownloadClassTabulationPdf,
   handleGetClassTabulationData,
+  handleGetExamMarksEntryRoster,
+  handleBulkSubmitStudentMarks,
 } from '../controllers/examController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
@@ -36,6 +38,13 @@ router.post(
   handleCreateExam
 );
 
+// Get marks entry roster for teacher (exam + class + section + optional subject)
+router.get(
+  '/:id/entry-roster',
+  authorizePermissions(PERMISSIONS.EXAMS_ENTER_MARKS),
+  handleGetExamMarksEntryRoster
+);
+
 // List results for exam (data minimized)
 router.get(
   '/:id/results',
@@ -43,12 +52,20 @@ router.get(
   handleGetExamResults
 );
 
-// Submit student marks for exam
+// Submit student marks for exam (single student)
 router.post(
   '/:id/results',
   authorizeRoles(ROLES.TEACHER, ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
   authorizePermissions(PERMISSIONS.EXAMS_ENTER_MARKS),
   handleSubmitStudentMarks
+);
+
+// Bulk submit student marks for section/subject (entire class/section)
+router.post(
+  '/:id/results/bulk',
+  authorizeRoles(ROLES.TEACHER, ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
+  authorizePermissions(PERMISSIONS.EXAMS_ENTER_MARKS),
+  handleBulkSubmitStudentMarks
 );
 
 // HM batch verifies submitted results

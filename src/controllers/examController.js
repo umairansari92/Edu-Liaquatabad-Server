@@ -7,9 +7,11 @@ import User from '../models/User.js';
 import Class from '../models/Class.js';
 import Section from '../models/Section.js';
 import StudentProfile from '../models/StudentProfile.js';
+import Subject from '../models/Subject.js';
+import TeachingAssignment from '../models/TeachingAssignment.js';
 import AuditLog from '../models/AuditLog.js';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
-import { ROLES } from '../../config/constants.js';
+import { ROLES, TEACHING_ASSIGNMENT_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 import {
   generateStudentMarksheetPdf,
   generateTabulationSheetPdf,
@@ -313,6 +315,20 @@ export const handleSubmitStudentMarks = asyncHandler(async (request, response) =
 
   if (String(sectionRecord.classId) !== String(classRecord._id)) {
     return sendError(response, 400, 'Relational error: Selected section does not belong to the selected class.');
+  }
+
+  // Teacher authorization check:
+  if (requestingActor.role === ROLES.TEACHER) {
+    const actorId = String(requestingActor._id || requestingActor.userId);
+    const isClassTeacher = sectionRecord.classTeacherId && String(sectionRecord.classTeacherId) === actorId;
+    const isAssigned = await TeachingAssignment.isTeacherAssigned({
+      teacherId: actorId,
+      schoolId: effectiveSchoolId,
+      sectionId: sectionRecord._id,
+    });
+    if (!isClassTeacher && !isAssigned) {
+      return sendError(response, 403, 'Access denied. You have no teaching assignment for this class section.');
+    }
   }
 
   // Fast duplicate pre-check
@@ -974,5 +990,443 @@ export const handleGetClassTabulationData = asyncHandler(async (request, respons
     rankedResults,
     classStatistics,
   });
+});
+
+/**
+ * GET /api/v1/exams/:id/entry-roster
+ * Retrieves the marks entry roster for an exam + class + section + subject.
+ * Returns enrolled students with their existing marks (if any) and subject configs.
+ */
+export const handleGetExamMarksEntryRoster = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: examId } = request.params;
+  const { classId, sectionId, subjectId } = request.query;
+
+  if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
+    return sendError(response, 400, 'Invalid exam ID format.');
+  }
+  if (!classId || !/^[0-9a-fA-F]{24}$/.test(classId) || !sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, 'Valid classId and sectionId query parameters are required.');
+  }
+
+  const exam = await Exam.findById(examId).lean();
+  if (!exam) {
+    return sendError(response, 404, 'Exam not found.');
+  }
+
+  let effectiveSchoolId;
+  try {
+    effectiveSchoolId = await resolveAuthorizedSchoolScope(requestingActor, exam.schoolId);
+  } catch (scopeError) {
+    return sendError(response, scopeError.statusCode || 403, scopeError.message);
+  }
+
+  if (String(exam.schoolId) !== String(effectiveSchoolId)) {
+    return sendError(response, 403, 'Access denied. Exam belongs to another school.');
+  }
+
+  if (exam.status === 'PUBLISHED') {
+    return sendError(response, 400, 'Examination gazette is officially published and permanently locked.');
+  }
+  if (exam.status === 'CANCELLED') {
+    return sendError(response, 400, 'Cannot enter marks for a cancelled examination.');
+  }
+
+  const [classRecord, sectionRecord] = await Promise.all([
+    Class.findById(classId).lean(),
+    Section.findById(sectionId).lean(),
+  ]);
+
+  if (!classRecord || String(classRecord.schoolId) !== String(effectiveSchoolId)) {
+    return sendError(response, 404, 'Class not found in this school.');
+  }
+  if (!sectionRecord || String(sectionRecord.schoolId) !== String(effectiveSchoolId) || String(sectionRecord.classId) !== String(classId)) {
+    return sendError(response, 404, 'Section does not match the selected class or school.');
+  }
+
+  // Teacher capability check:
+  if (requestingActor.role === ROLES.TEACHER) {
+    const actorId = String(requestingActor._id || requestingActor.userId);
+    if (subjectId) {
+      const hasSubjectAssignment = await TeachingAssignment.findOne({
+        teacherId: actorId,
+        schoolId: effectiveSchoolId,
+        classId,
+        sectionId,
+        subjectId,
+        status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+      }).lean();
+      if (!hasSubjectAssignment) {
+        return sendError(response, 403, 'Access denied. You do not have an active teaching assignment for this subject in this section.');
+      }
+    } else {
+      const isClassTeacher = sectionRecord.classTeacherId && String(sectionRecord.classTeacherId) === actorId;
+      const hasAnyAssignment = await TeachingAssignment.findOne({
+        teacherId: actorId,
+        schoolId: effectiveSchoolId,
+        classId,
+        sectionId,
+        status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+      }).lean();
+      if (!isClassTeacher && !hasAnyAssignment) {
+        return sendError(response, 403, 'Access denied. You are not assigned to this class section.');
+      }
+    }
+  }
+
+  // Fetch all active subjects for this class
+  const classSubjects = await Subject.find({
+    classId,
+    schoolId: effectiveSchoolId,
+    status: 'ACTIVE',
+  }).lean();
+
+  let targetSubject = null;
+  if (subjectId) {
+    targetSubject = classSubjects.find((s) => String(s._id) === String(subjectId));
+    if (!targetSubject) {
+      targetSubject = await Subject.findById(subjectId).lean();
+    }
+  }
+
+  // Fetch enrolled active students in this section
+  const studentProfiles = await StudentProfile.find({
+    sectionId,
+    schoolId: effectiveSchoolId,
+    lifecycleStatus: STUDENT_STATUS.ACTIVE,
+  })
+    .populate('userId', 'fullName rollNumber email')
+    .sort({ grNumber: 1 })
+    .lean();
+
+  // Fetch existing results for this exam + section
+  const existingResults = await Result.find({
+    examId,
+    classId,
+    sectionId,
+  }).lean();
+
+  const resultsMap = new Map();
+  for (const res of existingResults) {
+    resultsMap.set(String(res.studentId), res);
+  }
+
+  const roster = studentProfiles.map((profile) => {
+    const studentUser = profile.userId || {};
+    const studentUserId = String(studentUser._id || profile._id);
+    const existingResult = resultsMap.get(studentUserId) || null;
+
+    let targetSubjectMarks = null;
+    if (existingResult && subjectId) {
+      targetSubjectMarks = existingResult.subjectMarks.find(
+        (sm) => String(sm.subjectId) === String(subjectId)
+      ) || null;
+    }
+
+    return {
+      studentId: studentUserId,
+      studentProfileId: profile._id,
+      fullName: studentUser.fullName || 'Student',
+      rollNumber: studentUser.rollNumber || '',
+      grNumber: profile.grNumber,
+      globalStudentId: profile.globalStudentId || `GR-${profile.grNumber}`,
+      gender: profile.gender || 'UNSPECIFIED',
+      hasExistingResult: Boolean(existingResult),
+      resultStatus: existingResult?.status || 'NOT_ENTERED',
+      existingSubjectMarks: targetSubjectMarks,
+      existingAllSubjectMarks: existingResult?.subjectMarks || [],
+      existingRemarks: existingResult?.remarks || '',
+      totalObtainedMarks: existingResult?.totalObtainedMarks ?? null,
+      percentage: existingResult?.percentage ?? null,
+      grade: existingResult?.grade || null,
+    };
+  });
+
+  return sendSuccess(response, 200, 'Exam marks entry roster retrieved.', {
+    exam: {
+      _id: exam._id,
+      title: exam.title,
+      examType: exam.examType,
+      academicYear: exam.academicYear,
+      status: exam.status,
+    },
+    class: { _id: classRecord._id, name: classRecord.name, numericGrade: classRecord.numericGrade },
+    section: { _id: sectionRecord._id, name: sectionRecord.name },
+    targetSubject: targetSubject || null,
+    classSubjects,
+    totalStudents: roster.length,
+    roster,
+  });
+});
+
+/**
+ * POST /api/v1/exams/:id/results/bulk
+ * Bulk marks submission for an entire section/subject with atomic concurrency lock.
+ */
+export const handleBulkSubmitStudentMarks = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: examId } = request.params;
+  const { classId, sectionId, subjectId } = request.body;
+  const entries = Array.isArray(request.body.entries) ? request.body.entries : request.body.results;
+
+  if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
+    return sendError(response, 400, 'Invalid exam ID format.');
+  }
+  if (!classId || !/^[0-9a-fA-F]{24}$/.test(classId) || !sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, 'Valid classId and sectionId are required.');
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return sendError(response, 400, 'Entries array cannot be empty.');
+  }
+
+  const exam = await Exam.findById(examId);
+  if (!exam) {
+    return sendError(response, 404, 'Exam not found.');
+  }
+
+  let effectiveSchoolId;
+  try {
+    effectiveSchoolId = await resolveAuthorizedSchoolScope(requestingActor, exam.schoolId);
+  } catch (scopeError) {
+    return sendError(response, scopeError.statusCode || 403, scopeError.message);
+  }
+
+  if (String(exam.schoolId) !== String(effectiveSchoolId)) {
+    return sendError(response, 403, 'Access denied. Exam belongs to another school.');
+  }
+
+  if (exam.status === 'PUBLISHED') {
+    return sendError(response, 400, 'Examination gazette is officially published and permanently locked.');
+  }
+  if (exam.status === 'UPCOMING') {
+    return sendError(response, 400, 'Exam has not commenced yet.');
+  }
+  if (exam.status === 'CANCELLED') {
+    return sendError(response, 400, 'Cannot submit marks for a cancelled examination.');
+  }
+
+  const [classRecord, sectionRecord] = await Promise.all([
+    Class.findById(classId).lean(),
+    Section.findById(sectionId).lean(),
+  ]);
+
+  if (!classRecord || String(classRecord.schoolId) !== String(effectiveSchoolId)) {
+    return sendError(response, 404, 'Class not found in this school.');
+  }
+  if (!sectionRecord || String(sectionRecord.schoolId) !== String(effectiveSchoolId) || String(sectionRecord.classId) !== String(classId)) {
+    return sendError(response, 400, 'Relational error: Selected section does not belong to the selected class.');
+  }
+
+  // Teacher capability check:
+  if (requestingActor.role === ROLES.TEACHER) {
+    const actorId = String(requestingActor._id || requestingActor.userId);
+    if (subjectId) {
+      const hasSubjectAssignment = await TeachingAssignment.findOne({
+        teacherId: actorId,
+        schoolId: effectiveSchoolId,
+        classId,
+        sectionId,
+        subjectId,
+        status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+      }).lean();
+      if (!hasSubjectAssignment) {
+        return sendError(response, 403, 'Access denied. You do not have an active teaching assignment for this subject in this section.');
+      }
+    } else {
+      const isClassTeacher = sectionRecord.classTeacherId && String(sectionRecord.classTeacherId) === actorId;
+      if (!isClassTeacher) {
+        return sendError(response, 403, 'Access denied. Only the assigned Class Teacher can submit multi-subject results for this section.');
+      }
+    }
+  }
+
+  // Authoritative student roster check — every student must belong to this section!
+  const authorizedStudents = await StudentProfile.find({
+    sectionId,
+    schoolId: effectiveSchoolId,
+    lifecycleStatus: STUDENT_STATUS.ACTIVE,
+  }).lean();
+
+  const authorizedStudentUserIds = new Set(authorizedStudents.map((p) => String(p.userId)));
+
+  for (const entry of entries) {
+    if (!entry.studentId || !/^[0-9a-fA-F]{24}$/.test(String(entry.studentId))) {
+      return sendError(response, 400, `Invalid studentId in entry: ${entry.studentId}`);
+    }
+    if (!authorizedStudentUserIds.has(String(entry.studentId))) {
+      return sendError(response, 403, `Access denied. Student ${entry.studentId} does not belong to this section.`);
+    }
+  }
+
+  let targetSubjectDoc = null;
+  if (subjectId) {
+    targetSubjectDoc = await Subject.findById(subjectId).lean();
+    if (!targetSubjectDoc || String(targetSubjectDoc.schoolId) !== String(effectiveSchoolId)) {
+      return sendError(response, 404, 'Subject not found in this school.');
+    }
+  }
+
+  // Execute in MongoDB transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    // Assert exam remains unpublished
+    const lockedExam = await Exam.findOne({ _id: examId, status: { $ne: 'PUBLISHED' } }).session(session);
+    if (!lockedExam) {
+      await session.abortTransaction();
+      session.endSession();
+      return sendError(response, 400, 'Examination gazette was concurrently published.');
+    }
+
+    lockedExam.resultsLastModifiedAt = new Date();
+    await lockedExam.save({ session });
+
+    const processedResults = [];
+
+    for (const entry of entries) {
+      const studentId = String(entry.studentId);
+      let result = await Result.findOne({ examId, studentId }).session(session);
+
+      if (!result) {
+        result = new Result({
+          schoolId: effectiveSchoolId,
+          examId,
+          studentId,
+          classId,
+          sectionId,
+          subjectMarks: [],
+          status: 'SUBMITTED',
+          evaluatedBy: requestingActor._id || requestingActor.userId,
+        });
+      } else {
+        if (result.status === 'PUBLISHED') {
+          await session.abortTransaction();
+          session.endSession();
+          return sendError(response, 400, `Result for student ${studentId} is officially published and cannot be modified.`);
+        }
+      }
+
+      // If updating a specific subject:
+      if (subjectId && targetSubjectDoc) {
+        const isDrawing = Boolean(targetSubjectDoc.name && targetSubjectDoc.name.toUpperCase().includes('DRAWING'));
+        const isGradedOnly = Boolean(entry.isGradedOnly || targetSubjectDoc.isGradedOnly || isDrawing);
+        let markItemIndex = result.subjectMarks.findIndex((sm) => String(sm.subjectId) === String(subjectId));
+        const markItemData = {
+          subjectId: targetSubjectDoc._id,
+          subjectName: targetSubjectDoc.name,
+          isGradedOnly,
+          obtainedMarks: 0,
+          maxMarks: targetSubjectDoc.totalMarks || 100,
+          isPassed: true,
+        };
+
+        if (isGradedOnly) {
+          const letterGrade = (entry.letterGrade || 'A').toUpperCase();
+          markItemData.isGradedOnly = true;
+          markItemData.letterGrade = letterGrade;
+          markItemData.obtainedMarks = 0;
+          markItemData.maxMarks = 0;
+          markItemData.isPassed = !['FAIL', 'F'].includes(letterGrade);
+        } else if (entry.subComponents && (entry.subComponents.nazra !== undefined || entry.subComponents.written !== undefined)) {
+          const nazra = Number(entry.subComponents.nazra) || 0;
+          const written = Number(entry.subComponents.written) || 0;
+          if (nazra < 0 || nazra > 20 || written < 0 || written > 80) {
+            await session.abortTransaction();
+            session.endSession();
+            return sendError(response, 400, 'Islamiat sub-components must be: Nazra (0-20), Written (0-80).');
+          }
+          markItemData.isGradedOnly = false;
+          markItemData.subComponents = { nazra, written };
+          markItemData.obtainedMarks = nazra + written;
+          markItemData.maxMarks = 100;
+          markItemData.isPassed = (nazra + written) >= (targetSubjectDoc.passingMarks || 33);
+        } else {
+          const maxMarks = Number(entry.maxMarks || targetSubjectDoc.totalMarks) || 100;
+          const obtainedMarks = Number(entry.obtainedMarks) || 0;
+          if (obtainedMarks < 0 || obtainedMarks > maxMarks) {
+            await session.abortTransaction();
+            session.endSession();
+            return sendError(response, 400, `Obtained marks (${obtainedMarks}) cannot exceed max marks (${maxMarks}).`);
+          }
+          markItemData.isGradedOnly = false;
+          markItemData.obtainedMarks = obtainedMarks;
+          markItemData.maxMarks = maxMarks;
+          markItemData.isPassed = obtainedMarks >= (targetSubjectDoc.passingMarks || (maxMarks * 0.33));
+        }
+
+        if (markItemIndex >= 0) {
+          result.subjectMarks[markItemIndex] = markItemData;
+        } else {
+          result.subjectMarks.push(markItemData);
+        }
+      } else if (Array.isArray(entry.subjectMarks)) {
+        result.subjectMarks = entry.subjectMarks.map((sm) => ({
+          subjectId: sm.subjectId,
+          subjectName: sm.subjectName || '',
+          obtainedMarks: Number(sm.obtainedMarks) || 0,
+          maxMarks: Number(sm.maxMarks) || 100,
+          subComponents: sm.subComponents,
+          isGradedOnly: Boolean(sm.isGradedOnly),
+          letterGrade: sm.letterGrade,
+          isPassed: Boolean(sm.isPassed),
+        }));
+      }
+
+      // Recalculate metrics
+      const metrics = computeStudentResultMetrics(result.subjectMarks);
+      result.totalMaxMarks = metrics.totalMaxMarks;
+      result.totalObtainedMarks = metrics.totalObtainedMarks;
+      result.percentage = metrics.percentage;
+      result.grade = metrics.grade;
+      result.resultStatus = metrics.resultStatus;
+
+      // Update conduct / behavioral remarks if provided
+      if (entry.remarks !== undefined) {
+        result.remarks = String(entry.remarks).trim();
+      }
+
+      result.evaluatedBy = requestingActor._id || requestingActor.userId;
+      result.status = 'SUBMITTED';
+
+      await result.save({ session });
+      processedResults.push(result);
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    await AuditLog.create({
+      actorId: requestingActor._id || requestingActor.userId,
+      actorRole: requestingActor.role,
+      actorDesignation: requestingActor.designation || '',
+      actorName: requestingActor.fullName,
+      action: 'EXAM_MARKS_BULK_SUBMITTED',
+      targetModel: 'Exam',
+      targetId: exam._id,
+      schoolId: effectiveSchoolId,
+      newState: {
+        examId: exam._id,
+        classId,
+        sectionId,
+        subjectId: subjectId || null,
+        processedCount: processedResults.length,
+      },
+      result: 'SUCCESS',
+      ipAddress: request.ip || '',
+      userAgent: request.headers?.['user-agent'] || '',
+    });
+
+    return sendSuccess(response, 200, `Successfully submitted marks for ${processedResults.length} students.`, {
+      examId,
+      classId,
+      sectionId,
+      subjectId: subjectId || null,
+      processedCount: processedResults.length,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    throw error;
+  }
 });
 

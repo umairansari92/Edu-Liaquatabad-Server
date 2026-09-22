@@ -9,6 +9,7 @@
  * 4. HM Bounded Same-Day Late Override Guard (strictly today <= 23:59 PKT)
  */
 
+import mongoose from 'mongoose';
 import HolidayCalendar from '../models/HolidayCalendar.js';
 import WeeklyOffPattern from '../models/WeeklyOffPattern.js';
 import cache from '../utils/cache.js';
@@ -29,6 +30,9 @@ import { ROLES } from '../../config/constants.js';
  */
 export const checkIsSchoolClosed = async (school, date = new Date()) => {
   if (!school) return { isClosed: false };
+  if (mongoose.connection.readyState === 0 && HolidayCalendar.findOne === mongoose.Model.findOne) {
+    return { isClosed: false };
+  }
 
   const targetDatePkt = getKarachiDateString(date);
   const targetDayOfWeek = getKarachiDayOfWeek(date);

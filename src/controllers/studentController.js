@@ -15,6 +15,7 @@ import School from '../models/School.js';
 import Class from '../models/Class.js';
 import Section from '../models/Section.js';
 import AuditLog from '../models/AuditLog.js';
+import TeachingAssignment from '../models/TeachingAssignment.js';
 import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 import { hashPassword } from '../utils/passwordUtils.js';
 
@@ -334,14 +335,16 @@ export const handleGetSectionStudents = asyncHandler(async (request, response) =
       return sendError(response, 403, 'Access denied. You cannot view student rosters for a school other than your verified posting.');
     }
 
-    if (!section.classTeacherId) {
-      return sendError(response, 403, 'Access denied. You are not assigned to this section. Subject-teacher section access requires a TeacherSectionAssignment domain model which is not yet implemented.');
-    }
-
-    const assignedTeacherId = String(section.classTeacherId._id || section.classTeacherId);
     const actorId = String(requestingActor._id || requestingActor.userId);
-    if (assignedTeacherId !== actorId) {
-      return sendError(response, 403, 'Access denied. You are not the assigned class teacher for this section.');
+    const isClassTeacher = section.classTeacherId && String(section.classTeacherId._id || section.classTeacherId) === actorId;
+    const isSubjectTeacher = await TeachingAssignment.isTeacherAssigned({
+      teacherId: actorId,
+      schoolId: teacherSchoolId,
+      sectionId: section._id,
+    });
+
+    if (!isClassTeacher && !isSubjectTeacher) {
+      return sendError(response, 403, 'Access denied. You are not assigned to this section as Class Teacher or Subject Teacher.');
     }
   } else if (requestingActor.role === ROLES.HM) {
     const hmSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');

@@ -62,18 +62,19 @@ const resolveTeacherSection = async (requestingActor, sectionId, response) => {
     return null;
   }
 
-  // TEACHER gate: verify via TeachingAssignment (authoritative source)
+  // TEACHER gate: verify via TeachingAssignment or classTeacherId
   if (requestingActor.role === ROLES.TEACHER) {
     const actorId = String(requestingActor._id || requestingActor.userId);
-    const isAssigned = await TeachingAssignment.isTeacherAssigned({
+    const isAssigned = (await TeachingAssignment.isTeacherAssigned({
       teacherId: actorId,
       schoolId:  actorSchoolId,
       sectionId: section._id,
       // subjectId omitted — attendance is section-level, not subject-level
-    });
+    })) || (section.classTeacherId && String(section.classTeacherId._id || section.classTeacherId) === actorId);
+
     if (!isAssigned) {
       sendError(response, 403,
-        "Access denied. You have no active teaching assignment in this section. " +
+        "Access denied. You have no active teaching assignment or class teacher role in this section. " +
         "Contact your Head Master to assign you to this class."
       );
       return null;
@@ -405,15 +406,40 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     .lean();
 
   const authorizedProfileIds = new Set(authorizedStudents.map((studentProfile) => String(studentProfile._id)));
-  const profileToUserId      = Object.fromEntries(authorizedStudents.map((studentProfile) => [String(studentProfile._id), studentProfile.userId?._id]));
+  const profileToUserId      = Object.fromEntries(authorizedStudents.map((studentProfile) => [
+    String(studentProfile._id),
+    studentProfile.userId?._id || studentProfile.userId || studentProfile._id,
+  ]));
 
   // Verify submitted IDs are in the authoritative roster — reject injected IDs
   for (const id of [...absentSet, ...leaveSet]) {
     if (!authorizedProfileIds.has(id)) {
-      return sendError(response, 403,
+      return sendError(response, 400,
         `Student profile ${id} does not belong to the authorized roster for this section. ` +
         "Cross-section or external student IDs are rejected."
       );
+    }
+  }
+
+  if (Array.isArray(records) && records.length > 0) {
+    for (const rec of records) {
+      const pid = String(rec.studentProfileId || rec.userId || '');
+      if (pid && !authorizedProfileIds.has(pid)) {
+        return sendError(response, 400,
+          `Student profile ${pid} does not belong to the authorized roster for this section. ` +
+          "Cross-section or external student IDs are rejected."
+        );
+      }
+    }
+  }
+
+  const remarksMap = new Map();
+  if (Array.isArray(records)) {
+    for (const rec of records) {
+      const key = String(rec.studentProfileId || rec.userId || '');
+      if (key && rec.remarks) {
+        remarksMap.set(key, String(rec.remarks).trim());
+      }
     }
   }
 
@@ -421,13 +447,15 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   // Teacher sends only exceptions; this guarantees complete, correct records
   const sanitizedRecords = authorizedStudents.map((profile) => {
     const pid = String(profile._id);
+    const uid = String(profile.userId?._id || profileToUserId[pid]);
     let status = ATTENDANCE_STATUS.PRESENT; // default
     if (absentSet.has(pid))      status = ATTENDANCE_STATUS.ABSENT;
     else if (leaveSet.has(pid))  status = ATTENDANCE_STATUS.LEAVE;
+    const studentRemark = remarksMap.get(pid) || remarksMap.get(uid) || "";
     return {
       userId:  profileToUserId[pid],
       status,
-      remarks: "",
+      remarks: studentRemark,
     };
   });
 
@@ -514,8 +542,8 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     result:    "SUCCESS",
     reason:    auditReason,
     ipAddress: request.ip || "",
-    userAgent: request.headers["user-agent"] || "",
-    requestId: request.headers["x-request-id"] || "",
+    userAgent: request.headers?.["user-agent"] || "",
+    requestId: request.headers?.["x-request-id"] || "",
   });
 
   return sendSuccess(response, 200, "Attendance submitted successfully.", {
@@ -1216,5 +1244,85 @@ export const handleSaveTeacherDailyAttendance = asyncHandler(async (request, res
       leaveCount,
       lateCount,
     },
+  });
+});
+
+/**
+ * GET /api/v1/attendance/teachers/my-attendance
+ * Authenticated teacher views their own attendance history as marked by HM.
+ * Supports query params: month (1-12), year (e.g. 2026).
+ */
+export const handleGetTeacherSelfAttendance = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const teacherId = String(requestingActor._id || requestingActor.userId);
+  const teacherSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+
+  if (!teacherSchoolId) {
+    return sendError(response, 403, 'Your account is not assigned to a school. Contact your Head Master.');
+  }
+
+  const { month, year } = request.query;
+  const currentNow = new Date();
+  const queryYear = year ? parseInt(year, 10) : currentNow.getFullYear();
+  const queryMonth = month ? parseInt(month, 10) - 1 : currentNow.getMonth();
+
+  if (isNaN(queryYear) || isNaN(queryMonth) || queryMonth < 0 || queryMonth > 11) {
+    return sendError(response, 400, 'Invalid month (1-12) or year parameter.');
+  }
+
+  const startDate = new Date(queryYear, queryMonth, 1, 0, 0, 0, 0);
+  const endDate = new Date(queryYear, queryMonth + 1, 0, 23, 59, 59, 999);
+
+  // Query teacher daily attendance documents for this school and date range
+  const attendanceDocs = await Attendance.find({
+    schoolId: teacherSchoolId,
+    attendanceType: 'TEACHER',
+    date: { $gte: startDate, $lte: endDate },
+    'records.userId': teacherId,
+  })
+    .sort({ date: 1 })
+    .lean();
+
+  const history = [];
+  let presentCount = 0;
+  let absentCount = 0;
+  let leaveCount = 0;
+  let lateCount = 0;
+
+  for (const doc of attendanceDocs) {
+    const record = doc.records.find((rec) => String(rec.userId) === teacherId);
+    if (!record) continue;
+
+    const status = record.status;
+    if (status === ATTENDANCE_STATUS.PRESENT) presentCount++;
+    else if (status === ATTENDANCE_STATUS.ABSENT) absentCount++;
+    else if (status === ATTENDANCE_STATUS.LEAVE) leaveCount++;
+    else if (status === ATTENDANCE_STATUS.LATE) lateCount++;
+
+    history.push({
+      date: doc.date.toISOString().split('T')[0],
+      status,
+      remarks: record.remarks || '',
+      verificationStatus: doc.verificationStatus,
+    });
+  }
+
+  const totalMarkedDays = history.length;
+  const effectivePresent = presentCount + lateCount;
+  const attendancePercentage = totalMarkedDays > 0
+    ? Number(((effectivePresent / totalMarkedDays) * 100).toFixed(1))
+    : 0;
+
+  return sendSuccess(response, 200, 'Teacher self-attendance history retrieved.', {
+    period: { month: queryMonth + 1, year: queryYear },
+    summary: {
+      totalMarkedDays,
+      presentCount,
+      absentCount,
+      leaveCount,
+      lateCount,
+      attendancePercentage,
+    },
+    history,
   });
 });
