@@ -28,6 +28,10 @@
  * 23. Teacher service record & scope isolation (No administrative leakage)
  * 24. Anti-BOLA / IDOR: Client-manipulated teacherId & schoolId are ignored
  * 25. Regression verification: Teacher marks integrate with HM verification gate
+ * 26. Mixed batch payload rejection: 10 authorized + 1 foreign student rejects entire batch with zero partial writes
+ * 27. Duplicate studentId rejection: Repeated student IDs in batch payload rejected with 400 Bad Request
+ * 28. Malformed / non-finite marks rejection: NaN, Infinity, null, and non-numeric values rejected with 400 Bad Request
+ * 29. Drawing grade enum validation: Non-standard letter grades rejected with 400 Bad Request
  */
 
 import assert from 'node:assert/strict';
@@ -1414,6 +1418,201 @@ await runAsyncTest('Scenario 25: Regression verification: Teacher marks integrat
   Result.findById = origResultFindById;
   Exam.findById = origExamFindById;
   AuditLog.create = origAuditCreate;
+});
+
+await runAsyncTest('Scenario 26: Mixed batch payload (10 authorized students + 1 foreign student) atomically rejects entire submission with 403 and zero partial writes', async () => {
+  const origExamFindById = Exam.findById;
+  const origClassFindById = Class.findById;
+  const origSectionFindById = Section.findById;
+  const origTeachingAssignmentFindOne = TeachingAssignment.findOne;
+  const origStudentFind = StudentProfile.find;
+  const origSubjectFindById = Subject.findById;
+
+  Exam.findById = () => Promise.resolve({ _id: examA_Id, schoolId: schoolA_Id, status: 'ONGOING' });
+  Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, classId: classA_Id, schoolId: schoolA_Id });
+  TeachingAssignment.findOne = () => makeChainable({ _id: 'ta_1', status: 'ACTIVE' });
+
+  // 10 authorized students in section A
+  const authorizedProfiles = [];
+  const entries = [];
+  for (let i = 1; i <= 10; i++) {
+    const sId = `507f1f77bcf86cd7994390${i < 10 ? '0' + i : i}`;
+    authorizedProfiles.push({
+      _id: `sp_${i}`,
+      userId: sId,
+      sectionId: sectionA_Id,
+      schoolId: schoolA_Id,
+      lifecycleStatus: STUDENT_STATUS.ACTIVE,
+    });
+    entries.push({ studentId: sId, obtainedMarks: 75, maxMarks: 100 });
+  }
+
+  // Inject 1 foreign student (studentForeign_Id) from Section B
+  entries.push({ studentId: studentForeign_Id, obtainedMarks: 80, maxMarks: 100 });
+
+  StudentProfile.find = () => makeChainable(authorizedProfiles);
+  Subject.findById = () => makeChainable({ _id: subjectEnglish_Id, schoolId: schoolA_Id, name: 'ENGLISH', totalMarks: 100 });
+
+  let saveCalled = false;
+  const origResultSave = Result.prototype.save;
+  Result.prototype.save = function () {
+    saveCalled = true;
+    return Promise.resolve(this);
+  };
+
+  const req = {
+    user: teacherA_User,
+    params: { id: examA_Id },
+    body: {
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      subjectId: subjectEnglish_Id,
+      results: entries,
+    },
+  };
+  const res = createMockRes();
+
+  await handleBulkSubmitStudentMarks(req, res);
+
+  assert.strictEqual(res.statusCode, 403);
+  assert.match(res.body.message, /does not belong to this section/i);
+  // Zero partial write guarantee: Not a single result was saved!
+  assert.strictEqual(saveCalled, false);
+
+  Exam.findById = origExamFindById;
+  Class.findById = origClassFindById;
+  Section.findById = origSectionFindById;
+  TeachingAssignment.findOne = origTeachingAssignmentFindOne;
+  StudentProfile.find = origStudentFind;
+  Subject.findById = origSubjectFindById;
+  Result.prototype.save = origResultSave;
+});
+
+await runAsyncTest('Scenario 27: Duplicate studentId entries in bulk marks payload are rejected with 400 Bad Request', async () => {
+  const origExamFindById = Exam.findById;
+  const origClassFindById = Class.findById;
+  const origSectionFindById = Section.findById;
+  const origTeachingAssignmentFindOne = TeachingAssignment.findOne;
+  const origStudentFind = StudentProfile.find;
+
+  Exam.findById = () => Promise.resolve({ _id: examA_Id, schoolId: schoolA_Id, status: 'ONGOING' });
+  Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, classId: classA_Id, schoolId: schoolA_Id });
+  TeachingAssignment.findOne = () => makeChainable({ _id: 'ta_1', status: 'ACTIVE' });
+  StudentProfile.find = () => makeChainable([
+    { _id: 'sp_1', userId: student1_Id, sectionId: sectionA_Id, schoolId: schoolA_Id, lifecycleStatus: STUDENT_STATUS.ACTIVE },
+  ]);
+
+  const req = {
+    user: teacherA_User,
+    params: { id: examA_Id },
+    body: {
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      subjectId: subjectEnglish_Id,
+      results: [
+        { studentId: student1_Id, obtainedMarks: 70 },
+        { studentId: student1_Id, obtainedMarks: 95 }, // duplicate student1_Id
+      ],
+    },
+  };
+  const res = createMockRes();
+
+  await handleBulkSubmitStudentMarks(req, res);
+
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.message, /duplicate studentId detected/i);
+
+  Exam.findById = origExamFindById;
+  Class.findById = origClassFindById;
+  Section.findById = origSectionFindById;
+  TeachingAssignment.findOne = origTeachingAssignmentFindOne;
+  StudentProfile.find = origStudentFind;
+});
+
+await runAsyncTest('Scenario 28: Malformed / non-finite marks (NaN, Infinity, null) in bulk marks payload are rejected with 400 Bad Request', async () => {
+  const origExamFindById = Exam.findById;
+  const origClassFindById = Class.findById;
+  const origSectionFindById = Section.findById;
+  const origTeachingAssignmentFindOne = TeachingAssignment.findOne;
+  const origStudentFind = StudentProfile.find;
+  const origSubjectFindById = Subject.findById;
+
+  Exam.findById = () => Promise.resolve({ _id: examA_Id, schoolId: schoolA_Id, status: 'ONGOING' });
+  Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, classId: classA_Id, schoolId: schoolA_Id });
+  TeachingAssignment.findOne = () => makeChainable({ _id: 'ta_1', status: 'ACTIVE' });
+  StudentProfile.find = () => makeChainable([
+    { _id: 'sp_1', userId: student1_Id, sectionId: sectionA_Id, schoolId: schoolA_Id, lifecycleStatus: STUDENT_STATUS.ACTIVE },
+  ]);
+  Subject.findById = () => makeChainable({ _id: subjectEnglish_Id, schoolId: schoolA_Id, name: 'ENGLISH', totalMarks: 100 });
+
+  const req = {
+    user: teacherA_User,
+    params: { id: examA_Id },
+    body: {
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      subjectId: subjectEnglish_Id,
+      results: [{ studentId: student1_Id, obtainedMarks: 'NOT_A_NUMBER' }],
+    },
+  };
+  const res = createMockRes();
+
+  await handleBulkSubmitStudentMarks(req, res);
+
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.message, /valid finite number/i);
+
+  Exam.findById = origExamFindById;
+  Class.findById = origClassFindById;
+  Section.findById = origSectionFindById;
+  TeachingAssignment.findOne = origTeachingAssignmentFindOne;
+  StudentProfile.find = origStudentFind;
+  Subject.findById = origSubjectFindById;
+});
+
+await runAsyncTest('Scenario 29: Invalid Drawing letter grade is rejected with 400 Bad Request', async () => {
+  const origExamFindById = Exam.findById;
+  const origClassFindById = Class.findById;
+  const origSectionFindById = Section.findById;
+  const origTeachingAssignmentFindOne = TeachingAssignment.findOne;
+  const origStudentFind = StudentProfile.find;
+  const origSubjectFindById = Subject.findById;
+
+  Exam.findById = () => Promise.resolve({ _id: examA_Id, schoolId: schoolA_Id, status: 'ONGOING' });
+  Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, classId: classA_Id, schoolId: schoolA_Id });
+  TeachingAssignment.findOne = () => makeChainable({ _id: 'ta_dr', status: 'ACTIVE' });
+  StudentProfile.find = () => makeChainable([
+    { _id: 'sp_1', userId: student1_Id, sectionId: sectionA_Id, schoolId: schoolA_Id, lifecycleStatus: STUDENT_STATUS.ACTIVE },
+  ]);
+  Subject.findById = () => makeChainable({ _id: subjectDrawing_Id, schoolId: schoolA_Id, name: 'DRAWING', isGradedOnly: true, totalMarks: 100 });
+
+  const req = {
+    user: teacherA_User,
+    params: { id: examA_Id },
+    body: {
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      subjectId: subjectDrawing_Id,
+      results: [{ studentId: student1_Id, isGradedOnly: true, letterGrade: 'INVALID_GRADE_XYZ' }],
+    },
+  };
+  const res = createMockRes();
+
+  await handleBulkSubmitStudentMarks(req, res);
+
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.message, /invalid letter grade/i);
+
+  Exam.findById = origExamFindById;
+  Class.findById = origClassFindById;
+  Section.findById = origSectionFindById;
+  TeachingAssignment.findOne = origTeachingAssignmentFindOne;
+  StudentProfile.find = origStudentFind;
+  Subject.findById = origSubjectFindById;
 });
 
 console.log('\n======================================================================');

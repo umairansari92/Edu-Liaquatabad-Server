@@ -1248,12 +1248,19 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
   }).lean();
 
   const authorizedStudentUserIds = new Set(authorizedStudents.map((p) => String(p.userId)));
+  const seenStudentIds = new Set();
 
   for (const entry of entries) {
     if (!entry.studentId || !/^[0-9a-fA-F]{24}$/.test(String(entry.studentId))) {
       return sendError(response, 400, `Invalid studentId in entry: ${entry.studentId}`);
     }
-    if (!authorizedStudentUserIds.has(String(entry.studentId))) {
+    const sIdStr = String(entry.studentId);
+    if (seenStudentIds.has(sIdStr)) {
+      return sendError(response, 400, `Duplicate studentId detected in batch entries: ${sIdStr}`);
+    }
+    seenStudentIds.add(sIdStr);
+
+    if (!authorizedStudentUserIds.has(sIdStr)) {
       return sendError(response, 403, `Access denied. Student ${entry.studentId} does not belong to this section.`);
     }
   }
@@ -1321,19 +1328,27 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
         };
 
         if (isGradedOnly) {
-          const letterGrade = (entry.letterGrade || 'A').toUpperCase();
+          const VALID_GRADES = new Set(['A-1', 'A+', 'A', 'B', 'C', 'D', 'E', 'FAIL', 'F']);
+          const letterGrade = String(entry.letterGrade || 'A').toUpperCase().trim();
+          if (!VALID_GRADES.has(letterGrade)) {
+            await session.abortTransaction();
+            session.endSession();
+            return sendError(response, 400, `Invalid letter grade: "${entry.letterGrade}". Allowed: A+, A, B, C, D, FAIL.`);
+          }
           markItemData.isGradedOnly = true;
           markItemData.letterGrade = letterGrade;
           markItemData.obtainedMarks = 0;
           markItemData.maxMarks = 0;
           markItemData.isPassed = !['FAIL', 'F'].includes(letterGrade);
         } else if (entry.subComponents && (entry.subComponents.nazra !== undefined || entry.subComponents.written !== undefined)) {
-          const nazra = Number(entry.subComponents.nazra) || 0;
-          const written = Number(entry.subComponents.written) || 0;
-          if (nazra < 0 || nazra > 20 || written < 0 || written > 80) {
+          const rawNazra = entry.subComponents.nazra;
+          const rawWritten = entry.subComponents.written;
+          const nazra = Number(rawNazra);
+          const written = Number(rawWritten);
+          if (rawNazra === null || rawWritten === null || isNaN(nazra) || isNaN(written) || !Number.isFinite(nazra) || !Number.isFinite(written) || nazra < 0 || nazra > 20 || written < 0 || written > 80) {
             await session.abortTransaction();
             session.endSession();
-            return sendError(response, 400, 'Islamiat sub-components must be: Nazra (0-20), Written (0-80).');
+            return sendError(response, 400, 'Islamiat sub-components must be valid finite numbers: Nazra (0-20), Written (0-80).');
           }
           markItemData.isGradedOnly = false;
           markItemData.subComponents = { nazra, written };
@@ -1342,11 +1357,12 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
           markItemData.isPassed = (nazra + written) >= (targetSubjectDoc.passingMarks || 33);
         } else {
           const maxMarks = Number(entry.maxMarks || targetSubjectDoc.totalMarks) || 100;
-          const obtainedMarks = Number(entry.obtainedMarks) || 0;
-          if (obtainedMarks < 0 || obtainedMarks > maxMarks) {
+          const rawObtained = entry.obtainedMarks;
+          const obtainedMarks = Number(rawObtained);
+          if (rawObtained === null || rawObtained === undefined || isNaN(obtainedMarks) || !Number.isFinite(obtainedMarks) || obtainedMarks < 0 || obtainedMarks > maxMarks) {
             await session.abortTransaction();
             session.endSession();
-            return sendError(response, 400, `Obtained marks (${obtainedMarks}) cannot exceed max marks (${maxMarks}).`);
+            return sendError(response, 400, `Obtained marks (${rawObtained}) must be a valid finite number between 0 and cannot exceed max marks (${maxMarks}).`);
           }
           markItemData.isGradedOnly = false;
           markItemData.obtainedMarks = obtainedMarks;

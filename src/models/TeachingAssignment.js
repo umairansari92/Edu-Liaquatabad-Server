@@ -107,9 +107,9 @@ TeachingAssignmentSchema.statics.isTeacherAssigned = async function ({
   sectionId,
   subjectId,
 }) {
-  // Offline unit test guard: avoid Mongoose buffer timeout when disconnected and unmocked
+  // Offline unit test guard: fail closed (deny by default) to prevent Mongoose buffer timeout
   if (mongoose.connection.readyState === 0 && this.findOne === mongoose.Model.findOne) {
-    return true;
+    return false;
   }
 
   const query = {

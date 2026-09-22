@@ -344,7 +344,7 @@ await runAsyncTest('Scenario 09: Submitting student marks for ONGOING / COMPLETE
   Exam.findById = () => Promise.resolve(mockExamDoc);
   User.findById = () => makeChainable({ _id: studentA_Id, schoolId: schoolA_Id, fullName: 'Ahmed Khan' });
   Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id, name: 'Grade 5' });
-  Section.findById = () => makeChainable({ _id: sectionA_Id, schoolId: schoolA_Id, classId: classA_Id, name: 'A' });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, schoolId: schoolA_Id, classId: classA_Id, name: 'A', classTeacherId: teacherA_User._id });
   Result.findOne = () => makeChainable(null); // no duplicate
 
   const mockSession = {
@@ -413,7 +413,7 @@ await runAsyncTest('Scenario 10: Duplicate student result entry for same exam ->
   Exam.findById = () => Promise.resolve({ _id: examA_Id, schoolId: schoolA_Id, status: 'ONGOING' });
   User.findById = () => makeChainable({ _id: studentA_Id, schoolId: schoolA_Id });
   Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
-  Section.findById = () => makeChainable({ _id: sectionA_Id, schoolId: schoolA_Id, classId: classA_Id });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, schoolId: schoolA_Id, classId: classA_Id, classTeacherId: teacherA_User._id });
   Result.findOne = () => makeChainable({ _id: 'existing_result_id', examId: examA_Id, studentId: studentA_Id });
 
   const req = {
@@ -449,7 +449,7 @@ await runAsyncTest('Scenario 11: Cross-entity violation: Submitting student belo
   Exam.findById = () => Promise.resolve({ _id: examA_Id, schoolId: schoolA_Id, status: 'ONGOING' });
   User.findById = () => makeChainable({ _id: studentB_Id, schoolId: schoolB_Id }); // foreign student
   Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
-  Section.findById = () => makeChainable({ _id: sectionA_Id, schoolId: schoolA_Id, classId: classA_Id });
+  Section.findById = () => makeChainable({ _id: sectionA_Id, schoolId: schoolA_Id, classId: classA_Id, classTeacherId: teacherA_User._id });
 
   const req = {
     user: teacherA_User,
@@ -484,7 +484,7 @@ await runAsyncTest('Scenario 12: Cross-entity violation: Submitting section that
   User.findById = () => makeChainable({ _id: studentA_Id, schoolId: schoolA_Id });
   Class.findById = () => makeChainable({ _id: classA_Id, schoolId: schoolA_Id });
   // sectionB belongs to classB, not classA
-  Section.findById = () => makeChainable({ _id: sectionB_Id, schoolId: schoolA_Id, classId: classB_Id });
+  Section.findById = () => makeChainable({ _id: sectionB_Id, schoolId: schoolA_Id, classId: classB_Id, classTeacherId: teacherA_User._id });
 
   const req = {
     user: teacherA_User,
