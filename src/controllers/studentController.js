@@ -316,7 +316,7 @@ export const handleGetMyStudentProfile = asyncHandler(async (request, response) 
     userId: authenticatedStudentUserId,
   })
     .populate('userId', 'fullName email phoneNumber status')
-    .populate('schoolId', 'name code address townId')
+    .populate('schoolId', 'name schoolCode code emisCode address townId')
     .populate('classId', 'name numericGrade code')
     .populate('sectionId', 'name roomNumber capacity')
     .lean();
@@ -351,7 +351,9 @@ export const handleGetMyStudentProfile = asyncHandler(async (request, response) 
     school: studentProfile.schoolId ? {
       _id: studentProfile.schoolId._id,
       name: studentProfile.schoolId.name,
-      code: studentProfile.schoolId.code,
+      code: studentProfile.schoolId.code || studentProfile.schoolId.schoolCode || '',
+      schoolCode: studentProfile.schoolId.schoolCode || studentProfile.schoolId.code || '',
+      emisCode: studentProfile.schoolId.emisCode || '',
       address: studentProfile.schoolId.address || '',
     } : null,
     class: studentProfile.classId ? {
