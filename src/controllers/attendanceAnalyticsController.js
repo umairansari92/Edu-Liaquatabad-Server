@@ -5,6 +5,7 @@ import StudentProfile from '../models/StudentProfile.js';
 import Section from '../models/Section.js';
 import School from '../models/School.js';
 import TeachingAssignment from '../models/TeachingAssignment.js';
+import AuditLog from '../models/AuditLog.js';
 import cache from '../utils/cache.js';
 import {
   calculateStudentAttendanceStats,
@@ -21,17 +22,36 @@ export const handleGetStudentAttendanceAnalytics = asyncHandler(async (request, 
   const actorId = String(requestingActor._id || requestingActor.userId);
   const actorRole = requestingActor.role;
 
-  let targetUserId = request.params.userId || request.query.userId;
+  const suppliedUserId = request.params.userId || request.query.userId;
+  let targetUserId;
 
-  // Student can only see their own attendance
+  // Student can only see their own attendance — attempting to pass another user's ID is rejected with 403
   if (actorRole === ROLES.STUDENT) {
+    if (suppliedUserId && String(suppliedUserId) !== actorId) {
+      await AuditLog.create({
+        actorId: requestingActor._id || requestingActor.userId,
+        actorRole: requestingActor.role,
+        actorName: requestingActor.fullName || '',
+        action: 'STUDENT_ATTENDANCE_SPOOF_BLOCKED',
+        targetModel: 'Attendance',
+        targetId: suppliedUserId,
+        targetName: request.originalUrl,
+        schoolId: requestingActor.schoolId || null,
+        previousState: {
+          attemptedUserId: suppliedUserId,
+          authenticatedStudentId: actorId,
+        },
+        result: 'DENIED',
+        reason: 'BOLA/IDOR attempt intercepted: Student passed another user\'s ID to attendance analytics.',
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+      });
+      return sendError(response, 403, 'Access denied. You cannot inspect attendance analytics for another student.');
+    }
     targetUserId = actorId;
-  }
-
-  if (!targetUserId) {
-    if (actorRole === ROLES.STUDENT) {
-      targetUserId = actorId;
-    } else {
+  } else {
+    targetUserId = suppliedUserId;
+    if (!targetUserId) {
       return sendError(response, 400, 'A valid student userId is required.');
     }
   }

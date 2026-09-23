@@ -79,9 +79,15 @@ export const resolveAuthorizedSchoolScope = async (requestingActor, requestedSch
     return String(requestedSchoolId);
   }
 
-  // 4. HM & TEACHER (SCHOOL Scope)
-  if ([ROLES.HM, ROLES.TEACHER].includes(requestingActor.role)) {
-    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+  // 4. HM, TEACHER & STUDENT (SCHOOL Scope)
+  if ([ROLES.HM, ROLES.TEACHER, ROLES.STUDENT].includes(requestingActor.role)) {
+    let actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId && requestingActor.role === ROLES.STUDENT) {
+      const studentProfile = await StudentProfile.findOne({ userId: requestingActor._id }).select('schoolId').lean();
+      if (studentProfile?.schoolId) {
+        actorSchoolId = String(studentProfile.schoolId);
+      }
+    }
     if (!actorSchoolId) {
       const error = new Error('Access denied. Your account has no assigned school linkage.');
       error.statusCode = 403;
@@ -206,6 +212,29 @@ export const handleGetExamResults = asyncHandler(async (request, response) => {
   const exam = await Exam.findById(examId).lean();
   if (!exam) {
     return sendError(response, 404, 'Exam not found.');
+  }
+
+  // ── Privacy & Anti-Harassment Boundary: Students cannot view cohort results gazettes ─
+  if (requestingActor.role === ROLES.STUDENT) {
+    await AuditLog.create({
+      actorId: requestingActor._id || requestingActor.userId,
+      actorRole: requestingActor.role,
+      actorName: requestingActor.fullName || '',
+      action: 'COHORT_RESULTS_ACCESS_BLOCKED',
+      targetModel: 'Exam',
+      targetId: examId,
+      targetName: request.originalUrl,
+      schoolId: requestingActor.schoolId || null,
+      result: 'DENIED',
+      reason: 'Student attempted unauthorized access to cohort-level examination gazette.',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+    });
+    return sendError(
+      response,
+      403,
+      'Access denied. Students are not authorized to view cohort examination gazettes. Use /api/v1/exams/my-results.'
+    );
   }
 
   try {
@@ -780,6 +809,33 @@ export const handleDownloadStudentMarksheet = asyncHandler(async (request, respo
     return sendError(response, 400, 'Invalid student ID format.');
   }
 
+  // ── Student Ownership Check (Anti-BOLA/IDOR Shield) ───────────────────────
+  if (requestingActor.role === ROLES.STUDENT) {
+    const authenticatedStudentId = String(requestingActor._id || requestingActor.userId);
+    if (String(studentId) !== authenticatedStudentId) {
+      await AuditLog.create({
+        actorId: requestingActor._id || requestingActor.userId,
+        actorRole: requestingActor.role,
+        actorName: requestingActor.fullName || '',
+        action: 'STUDENT_CROSS_USER_MARKSHEET_BLOCKED',
+        targetModel: 'Result',
+        targetId: studentId,
+        targetName: request.originalUrl,
+        schoolId: requestingActor.schoolId || null,
+        previousState: {
+          attemptedStudentId: studentId,
+          authenticatedStudentId,
+          examId,
+        },
+        result: 'DENIED',
+        reason: 'BOLA/IDOR attempt intercepted: Student attempted to download another student\'s official marksheet.',
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+      });
+      return sendError(response, 403, 'Access denied. You can only download your own official marksheet.');
+    }
+  }
+
   const exam = await Exam.findById(examId).lean();
   if (!exam) {
     return sendError(response, 404, 'Exam record not found.');
@@ -800,7 +856,35 @@ export const handleDownloadStudentMarksheet = asyncHandler(async (request, respo
     return sendError(response, 404, 'Exam result not found for this student.');
   }
 
-  // State Machine Verification Gate: Only VERIFIED_BY_HM or PUBLISHED results can be issued as official marksheets
+  // ── Student Publication Gate: Students can ONLY download PUBLISHED results ─
+  if (requestingActor.role === ROLES.STUDENT && result.status !== 'PUBLISHED') {
+    await AuditLog.create({
+      actorId: requestingActor._id || requestingActor.userId,
+      actorRole: requestingActor.role,
+      actorName: requestingActor.fullName || '',
+      action: 'STUDENT_UNPUBLISHED_MARKSHEET_BLOCKED',
+      targetModel: 'Result',
+      targetId: result._id,
+      targetName: request.originalUrl,
+      schoolId: requestingActor.schoolId || null,
+      previousState: {
+        resultStatus: result.status,
+        examId,
+        studentId,
+      },
+      result: 'DENIED',
+      reason: 'Student attempted to download an unapproved/unpublished examination marksheet.',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+    });
+    return sendError(
+      response,
+      403,
+      'Access denied. Official Marksheet is not available until examination results are formally published.'
+    );
+  }
+
+  // State Machine Verification Gate for Staff: Only VERIFIED_BY_HM or PUBLISHED results can be issued as official marksheets
   if (!['VERIFIED_BY_HM', 'PUBLISHED'].includes(result.status)) {
     return sendError(
       response,
@@ -865,6 +949,10 @@ export const handleDownloadClassTabulationPdf = asyncHandler(async (request, res
   const requestingActor = request.user;
   const { id: examId } = request.params;
   const { classId, sectionId } = request.query;
+
+  if (requestingActor.role === ROLES.STUDENT) {
+    return sendError(response, 403, 'Access denied. Students are not authorized to download class tabulation sheets.');
+  }
 
   if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
     return sendError(response, 400, 'Invalid exam ID format.');
@@ -946,6 +1034,10 @@ export const handleGetClassTabulationData = asyncHandler(async (request, respons
   const requestingActor = request.user;
   const { id: examId } = request.params;
   const { classId, sectionId } = request.query;
+
+  if (requestingActor.role === ROLES.STUDENT) {
+    return sendError(response, 403, 'Access denied. Students are not authorized to view class tabulation data.');
+  }
 
   if (!examId || !/^[0-9a-fA-F]{24}$/.test(examId)) {
     return sendError(response, 400, 'Invalid exam ID format.');
@@ -1445,4 +1537,105 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
     throw error;
   }
 });
+
+/**
+ * GET /api/v1/exams/my-results
+ * Dedicated Student Workspace Endpoint: Retrieves authenticated student's published exam results.
+ * Strictly filters by studentId = request.user._id AND status = 'PUBLISHED'.
+ * Client-provided studentId or userId in query or body are completely ignored.
+ * Sanitized projection of academic particulars: Islamiat split, Drawing letter grade, 700 aggregate.
+ */
+export const handleGetMyExamResults = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+
+  if (requestingActor.role !== ROLES.STUDENT) {
+    return sendError(response, 403, 'Access denied. Only registered students may access this examination results endpoint.');
+  }
+
+  const authenticatedStudentId = requestingActor._id || requestingActor.userId;
+  const filterCriteria = {
+    studentId: authenticatedStudentId,
+    status: 'PUBLISHED',
+  };
+
+  const { examId } = request.query;
+  if (examId) {
+    if (!/^[0-9a-fA-F]{24}$/.test(examId)) {
+      return sendError(response, 400, 'Invalid examId format.');
+    }
+    filterCriteria.examId = examId;
+  }
+
+  const publishedResults = await Result.find(filterCriteria)
+    .populate('examId', 'name term session academicYear examType startDate endDate publicationDate')
+    .populate('schoolId', 'name code')
+    .populate('classId', 'name numericGrade code')
+    .populate('sectionId', 'name roomNumber')
+    .populate('subjectMarks.subjectId', 'name code')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const sanitizedResults = publishedResults.map((resultRecord) => ({
+    _id: resultRecord._id,
+    exam: resultRecord.examId ? {
+      _id: resultRecord.examId._id,
+      name: resultRecord.examId.name,
+      term: resultRecord.examId.term,
+      session: resultRecord.examId.session,
+      academicYear: resultRecord.examId.academicYear,
+      examType: resultRecord.examId.examType,
+      startDate: resultRecord.examId.startDate,
+      endDate: resultRecord.examId.endDate,
+      publicationDate: resultRecord.examId.publicationDate,
+    } : null,
+    school: resultRecord.schoolId ? {
+      _id: resultRecord.schoolId._id,
+      name: resultRecord.schoolId.name,
+      code: resultRecord.schoolId.code,
+    } : null,
+    class: resultRecord.classId ? {
+      _id: resultRecord.classId._id,
+      name: resultRecord.classId.name,
+      numericGrade: resultRecord.classId.numericGrade,
+      code: resultRecord.classId.code,
+    } : null,
+    section: resultRecord.sectionId ? {
+      _id: resultRecord.sectionId._id,
+      name: resultRecord.sectionId.name,
+      roomNumber: resultRecord.sectionId.roomNumber || '',
+    } : null,
+    subjectMarks: (resultRecord.subjectMarks || []).map((subjectMarkItem) => ({
+      subjectId: subjectMarkItem.subjectId?._id || subjectMarkItem.subjectId,
+      subjectName: subjectMarkItem.subjectId?.name || subjectMarkItem.subjectName || 'Subject',
+      subjectCode: subjectMarkItem.subjectId?.code || '',
+      subComponents: subjectMarkItem.subComponents ? {
+        nazra: subjectMarkItem.subComponents.nazra ?? null,
+        written: subjectMarkItem.subComponents.written ?? null,
+      } : null,
+      obtainedMarks: subjectMarkItem.obtainedMarks,
+      maxMarks: subjectMarkItem.maxMarks,
+      isGradedOnly: Boolean(subjectMarkItem.isGradedOnly),
+      letterGrade: subjectMarkItem.letterGrade || '',
+      isPassed: subjectMarkItem.isPassed,
+    })),
+    totalObtainedMarks: resultRecord.totalObtainedMarks,
+    totalMaxMarks: resultRecord.totalMaxMarks,
+    percentage: resultRecord.percentage,
+    grade: resultRecord.grade,
+    position: resultRecord.position,
+    rank: resultRecord.rank,
+    rankFormatted: resultRecord.rankFormatted,
+    resultStatus: resultRecord.resultStatus,
+    remarks: resultRecord.remarks || '',
+    status: resultRecord.status, // Always 'PUBLISHED'
+    createdAt: resultRecord.createdAt,
+    updatedAt: resultRecord.updatedAt,
+  }));
+
+  return sendSuccess(response, 200, 'Student examination results retrieved successfully.', {
+    results: sanitizedResults,
+    totalCount: sanitizedResults.length,
+  });
+});
+
 

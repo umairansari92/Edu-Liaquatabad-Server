@@ -16,6 +16,7 @@ import {
   handleSetSchoolCode,
   handleGetSectionStudents,
   handleGetSchoolStudents,
+  handleGetMyStudentProfile,
 } from '../controllers/studentController.js';
 
 const router = express.Router();
@@ -26,6 +27,9 @@ const router = express.Router();
  */
 router.use(authenticate);
 router.use(authorizeScope);
+
+// Dedicated Student Workspace Self-Profile endpoint
+router.get('/my-profile', handleGetMyStudentProfile);
 
 // Preview next auto-generated GR No (before form submission)
 router.get('/next-gr/:schoolId', handlePreviewNextGr);

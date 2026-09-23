@@ -12,6 +12,7 @@ import {
   handleGetClassTabulationData,
   handleGetExamMarksEntryRoster,
   handleBulkSubmitStudentMarks,
+  handleGetMyExamResults,
 } from '../controllers/examController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
@@ -28,6 +29,14 @@ router.get(
   '/',
   authorizePermissions(PERMISSIONS.EXAMS_VIEW),
   handleGetExams
+);
+
+// Student Self Results endpoint (published results only)
+router.get(
+  '/my-results',
+  authorizeRoles(ROLES.STUDENT),
+  authorizePermissions(PERMISSIONS.EXAMS_VIEW),
+  handleGetMyExamResults
 );
 
 // Schedule exam

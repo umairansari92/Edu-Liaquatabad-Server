@@ -297,10 +297,94 @@ export const handleSetSchoolCode = asyncHandler(async (request, response) => {
 });
 
 /**
+ * GET /api/v1/students/my-profile
+ * Dedicated Student Workspace Profile Endpoint
+ * Resolves exclusively from authenticated request.user._id (Zero trust for client input).
+ * Sanitized projection: Zero credentials, tokens, session metadata, or administrative notes.
+ * Enforces active lifecycleStatus and verified school linkage.
+ */
+export const handleGetMyStudentProfile = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+
+  if (requestingActor.role !== ROLES.STUDENT) {
+    return sendError(response, 403, 'Access denied. Only registered students may access the student profile endpoint.');
+  }
+
+  const authenticatedStudentUserId = requestingActor._id || requestingActor.userId;
+
+  const studentProfile = await StudentProfile.findOne({
+    userId: authenticatedStudentUserId,
+  })
+    .populate('userId', 'fullName email phoneNumber status')
+    .populate('schoolId', 'name code address townId')
+    .populate('classId', 'name numericGrade code')
+    .populate('sectionId', 'name roomNumber capacity')
+    .lean();
+
+  if (!studentProfile) {
+    return sendError(response, 404, 'Active student profile record not found. Please contact your school Head Master.');
+  }
+
+  if (studentProfile.lifecycleStatus !== STUDENT_STATUS.ACTIVE) {
+    return sendError(
+      response,
+      403,
+      `Your student profile status is "${studentProfile.lifecycleStatus}". Only active students can access their workspace.`
+    );
+  }
+
+  const sanitizedProfile = {
+    _id: studentProfile._id,
+    studentFullName: studentProfile.studentFullName || studentProfile.userId?.fullName || 'Student',
+    grNumber: studentProfile.grNumber,
+    rollNumber: studentProfile.rollNumber || String(studentProfile.grNumber),
+    admissionRegisterNumber: studentProfile.admissionRegisterNumber || '',
+    globalStudentId: studentProfile.globalStudentId || '',
+    admissionType: studentProfile.admissionType,
+    dateOfBirth: studentProfile.dateOfBirth,
+    dateOfBirthInWords: studentProfile.dateOfBirthInWords || '',
+    gender: studentProfile.gender,
+    religion: studentProfile.religion || 'ISLAM',
+    placeOfBirth: studentProfile.placeOfBirth || '',
+    studentPhotoUrl: studentProfile.studentPhotoUrl || '',
+    bFormNumber: studentProfile.bFormNumber || '',
+    school: studentProfile.schoolId ? {
+      _id: studentProfile.schoolId._id,
+      name: studentProfile.schoolId.name,
+      code: studentProfile.schoolId.code,
+      address: studentProfile.schoolId.address || '',
+    } : null,
+    class: studentProfile.classId ? {
+      _id: studentProfile.classId._id,
+      name: studentProfile.classId.name,
+      numericGrade: studentProfile.classId.numericGrade,
+      code: studentProfile.classId.code,
+    } : null,
+    section: studentProfile.sectionId ? {
+      _id: studentProfile.sectionId._id,
+      name: studentProfile.sectionId.name,
+      roomNumber: studentProfile.sectionId.roomNumber || '',
+    } : null,
+    guardian: {
+      fullName: studentProfile.fatherFullName || studentProfile.fatherOrGuardianName || '',
+      cellNumber: studentProfile.guardianCellNumber || studentProfile.guardianContactNumber || '',
+      relationship: studentProfile.relationshipWithStudent || 'FATHER',
+    },
+    admissionDate: studentProfile.admissionDate,
+    lifecycleStatus: studentProfile.lifecycleStatus,
+  };
+
+  return sendSuccess(response, 200, 'Student profile retrieved successfully.', {
+    profile: sanitizedProfile,
+  });
+});
+
+/**
  * GET /api/v1/students/section/:sectionId
  * Authoritative Student Roster for an assigned section
  * Strict server-side verification:
  * - Active session required
+ * - Role = STUDENT explicitly rejected with 403 Forbidden (Privacy boundary)
  * - If TEACHER: must match teacher's schoolId and assigned section
  * - Strictly strips all credentials, passwords, tokens, and admin-only fields
  */
@@ -319,6 +403,29 @@ export const handleGetSectionStudents = asyncHandler(async (request, response) =
 
   if (!section) {
     return sendError(response, 404, 'Class section not found in municipal registry.');
+  }
+
+  // ── Privacy & Anti-Harassment Boundary: Students cannot inspect section rosters ──
+  if (requestingActor.role === ROLES.STUDENT) {
+    await AuditLog.create({
+      actorId: requestingActor._id || requestingActor.userId,
+      actorRole: requestingActor.role,
+      actorName: requestingActor.fullName || '',
+      action: 'STUDENT_ROSTER_ACCESS_BLOCKED',
+      targetModel: 'Section',
+      targetId: sectionId,
+      targetName: request.originalUrl,
+      schoolId: requestingActor.schoolId || null,
+      previousState: {
+        attemptedSectionId: sectionId,
+        studentUserId: String(requestingActor._id || requestingActor.userId),
+      },
+      result: 'DENIED',
+      reason: 'Privacy boundary violation: Student attempted to access class section student roster.',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+    });
+    return sendError(response, 403, 'Access denied. Students are not authorized to view class section rosters.');
   }
 
   // Enforce active account
