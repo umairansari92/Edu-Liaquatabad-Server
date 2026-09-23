@@ -59,21 +59,21 @@ import AuditLog from '../src/models/AuditLog.js';
 let totalTests = 0;
 let passedTests = 0;
 
-async function runAsyncTest(testName, fn) {
+async function runAsyncTest(testName, testExecutionFunction) {
   totalTests++;
   try {
-    await fn();
+    await testExecutionFunction();
     passedTests++;
     console.log(`  ✅ PASS [${totalTests}]: ${testName}`);
-  } catch (err) {
+  } catch (caughtError) {
     console.error(`  ❌ FAIL [${totalTests}]: ${testName}`);
-    console.error(err);
-    throw err;
+    console.error(caughtError);
+    throw caughtError;
   }
 }
 
-function createMockRes() {
-  const res = {
+function createMockResponse() {
+  const mockResponse = {
     statusCode: 200,
     headers: {},
     body: null,
@@ -81,17 +81,17 @@ function createMockRes() {
       this.statusCode = code;
       return this;
     },
-    json(data) {
-      this.body = data;
+    json(responseData) {
+      this.body = responseData;
       return this;
     },
   };
-  return res;
+  return mockResponse;
 }
 
-function makeChainable(data) {
+function makeChainable(mockData) {
   return {
-    _data: data,
+    _data: mockData,
     session() { return this; },
     populate() { return this; },
     sort() { return this; },
@@ -129,16 +129,16 @@ const teacherA_User = {
 
 // Generate 40 active student profiles for Section A
 const mock40StudentProfiles = [];
-for (let i = 1; i <= 40; i++) {
-  const hexIdx = i < 10 ? '0' + i : String(i);
-  const pId = `607f1f77bcf86cd7994390${hexIdx}`;
-  const uId = `507f1f77bcf86cd7994390${hexIdx}`;
+for (let studentIndex = 1; studentIndex <= 40; studentIndex++) {
+  const hexIndexString = studentIndex < 10 ? '0' + studentIndex : String(studentIndex);
+  const studentProfileId = `607f1f77bcf86cd7994390${hexIndexString}`;
+  const studentUserId = `507f1f77bcf86cd7994390${hexIndexString}`;
   mock40StudentProfiles.push({
-    _id: pId,
-    userId: { _id: uId, fullName: `Student ${i}` },
+    _id: studentProfileId,
+    userId: { _id: studentUserId, fullName: `Student ${studentIndex}` },
     sectionId: sectionA_Id,
     schoolId: schoolA_Id,
-    grNumber: 1000 + i,
+    grNumber: 1000 + studentIndex,
     lifecycleStatus: STUDENT_STATUS.ACTIVE,
   });
 }
@@ -181,7 +181,7 @@ await runAsyncTest('Scenario 01: Authorized Class Teacher can submit attendance'
     return Promise.resolve({ _id: 'att_123', ...savedRecord });
   };
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -190,11 +190,11 @@ await runAsyncTest('Scenario 01: Authorized Class Teacher can submit attendance'
       leaveStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.strictEqual(savedRecord.records.length, 40);
 
   Section.findById = origSectionFindById;
@@ -234,7 +234,7 @@ await runAsyncTest('Scenario 02: Authorized Subject Teacher with active Teaching
   Attendance.findOne = () => makeChainable(null);
   Attendance.findOneAndUpdate = (query, update) => Promise.resolve({ _id: 'att_st' });
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -243,11 +243,11 @@ await runAsyncTest('Scenario 02: Authorized Subject Teacher with active Teaching
       leaveStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
 
   Section.findById = origSectionFindById;
   School.findById = origSchoolFindById;
@@ -269,7 +269,7 @@ await runAsyncTest('Scenario 03: Unauthorized section rejected with 403 Forbidde
   });
   TeachingAssignment.isTeacherAssigned = async () => false; // teacherA is NOT assigned
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionB_Id,
@@ -277,12 +277,12 @@ await runAsyncTest('Scenario 03: Unauthorized section rejected with 403 Forbidde
       absentStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 403);
-  assert.match(res.body.message, /no active teaching assignment or class teacher role/i);
+  assert.strictEqual(mockResponse.statusCode, 403);
+  assert.match(mockResponse.body.message, /no active teaching assignment or class teacher role/i);
 
   Section.findById = origSectionFindById;
   TeachingAssignment.isTeacherAssigned = origTeachingAssignment;
@@ -298,19 +298,19 @@ await runAsyncTest('Scenario 04: Cross-school section rejected with 403 Forbidde
     classTeacherId: teacherA_Id,
   });
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User, // Teacher posted at School A
     body: {
       sectionId: '507f1f77bcf86cd799439033',
       date: new Date().toISOString().split('T')[0],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 403);
-  assert.match(res.body.message, /belongs to a different school/i);
+  assert.strictEqual(mockResponse.statusCode, 403);
+  assert.match(mockResponse.body.message, /belongs to a different school/i);
 
   Section.findById = origSectionFindById;
 });
@@ -321,16 +321,16 @@ await runAsyncTest('Scenario 05: Inactive / unauthorized teacher rejected with 4
     status: USER_STATUS.SUSPENDED,
   };
 
-  const req = {
+  const mockRequest = {
     user: inactiveTeacher,
     body: { sectionId: sectionA_Id },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 403);
-  assert.match(res.body.message, /not in an active state/i);
+  assert.strictEqual(mockResponse.statusCode, 403);
+  assert.match(mockResponse.body.message, /not in an active state/i);
 });
 
 await runAsyncTest('Scenario 06: 40-student roster with zero exceptions produces 40 Present records', async () => {
@@ -367,7 +367,7 @@ await runAsyncTest('Scenario 06: 40-student roster with zero exceptions produces
   };
 
   // Zero exceptions submitted
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -376,11 +376,11 @@ await runAsyncTest('Scenario 06: 40-student roster with zero exceptions produces
       leaveStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.strictEqual(capturedRecords.length, 40);
   const presentCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length;
   assert.strictEqual(presentCount, 40, 'All 40 students must automatically default to PRESENT');
@@ -427,7 +427,7 @@ await runAsyncTest('Scenario 07: 40 students + 2 Absent produces 38 Present + 2 
 
   const absentIds = [mock40StudentProfiles[2]._id, mock40StudentProfiles[7]._id]; // Student 3 & 8
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -436,11 +436,11 @@ await runAsyncTest('Scenario 07: 40 students + 2 Absent produces 38 Present + 2 
       leaveStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.strictEqual(capturedRecords.length, 40);
   const presentCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length;
   const absentCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length;
@@ -490,7 +490,7 @@ await runAsyncTest('Scenario 08: 40 students + 2 Absent + 1 Leave produces 37 Pr
   const absentIds = [mock40StudentProfiles[0]._id, mock40StudentProfiles[1]._id];
   const leaveIds = [mock40StudentProfiles[2]._id];
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -499,11 +499,11 @@ await runAsyncTest('Scenario 08: 40 students + 2 Absent + 1 Leave produces 37 Pr
       leaveStudentProfileIds: leaveIds,
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.strictEqual(capturedRecords.length, 40);
   const presentCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length;
   const absentCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length;
@@ -554,7 +554,7 @@ await runAsyncTest('Scenario 09: Student omitted from exception payload automati
   };
 
   // Only Student 1 is marked Absent; Students 2..40 are completely omitted from the payload
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -563,11 +563,11 @@ await runAsyncTest('Scenario 09: Student omitted from exception payload automati
       leaveStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   const student2Record = capturedRecords.find((r) => String(r.userId) === String(mock40StudentProfiles[1].userId._id));
   assert.strictEqual(student2Record.status, ATTENDANCE_STATUS.PRESENT, 'Omitted student must be PRESENT');
 
@@ -605,7 +605,7 @@ await runAsyncTest('Scenario 10: Inactive student profile rejected if submitted 
 
   const inactiveStudentProfileId = '607f1f77bcf86cd799439999';
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -613,12 +613,12 @@ await runAsyncTest('Scenario 10: Inactive student profile rejected if submitted 
       absentStudentProfileIds: [inactiveStudentProfileId],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /does not belong to the authorized roster/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /does not belong to the authorized roster/i);
 
   Section.findById = origSectionFindById;
   School.findById = origSchoolFindById;
@@ -649,7 +649,7 @@ await runAsyncTest('Scenario 11: Foreign student ID rejected with 400 Bad Reques
   });
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -657,12 +657,12 @@ await runAsyncTest('Scenario 11: Foreign student ID rejected with 400 Bad Reques
       absentStudentProfileIds: [foreignStudentProfile_Id],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /Cross-section or external student IDs are rejected/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /Cross-section or external student IDs are rejected/i);
 
   Section.findById = origSectionFindById;
   School.findById = origSchoolFindById;
@@ -695,7 +695,7 @@ await runAsyncTest('Scenario 12: Cross-school student ID rejected with 400 Bad R
 
   const crossSchoolStudentId = '607f1f77bcf86cd799439098';
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -703,12 +703,12 @@ await runAsyncTest('Scenario 12: Cross-school student ID rejected with 400 Bad R
       leaveStudentProfileIds: [crossSchoolStudentId],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /Cross-section or external student IDs are rejected/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /Cross-section or external student IDs are rejected/i);
 
   Section.findById = origSectionFindById;
   School.findById = origSchoolFindById;
@@ -727,7 +727,7 @@ await runAsyncTest('Scenario 13: Duplicate student ID in exceptions rejected wit
 
   const dupStudentId = mock40StudentProfiles[0]._id;
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -735,12 +735,12 @@ await runAsyncTest('Scenario 13: Duplicate student ID in exceptions rejected wit
       absentStudentProfileIds: [dupStudentId, dupStudentId], // duplicate ID!
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /duplicate studentProfileId detected/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /duplicate studentProfileId detected/i);
 
   Section.findById = origSectionFindById;
 });
@@ -757,7 +757,7 @@ await runAsyncTest('Scenario 14: Same student in both Absent and Leave rejected 
 
   const conflictingId = mock40StudentProfiles[0]._id;
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -766,12 +766,12 @@ await runAsyncTest('Scenario 14: Same student in both Absent and Leave rejected 
       leaveStudentProfileIds: [conflictingId], // overlap!
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /cannot be marked both Absent and Leave simultaneously/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /cannot be marked both Absent and Leave simultaneously/i);
 
   Section.findById = origSectionFindById;
 });
@@ -786,7 +786,7 @@ await runAsyncTest('Scenario 15: Invalid attendance status in records rejected w
     classTeacherId: teacherA_Id,
   });
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -796,18 +796,18 @@ await runAsyncTest('Scenario 15: Invalid attendance status in records rejected w
       ],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /Invalid attendance status/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /Invalid attendance status/i);
 
   Section.findById = origSectionFindById;
 });
 
 await runAsyncTest('Scenario 16: Malformed / non-hex student ID rejected with 400 Bad Request', async () => {
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -815,12 +815,12 @@ await runAsyncTest('Scenario 16: Malformed / non-hex student ID rejected with 40
       absentStudentProfileIds: ['not-a-valid-24-hex-id'],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /Invalid studentProfileId format/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /Invalid studentProfileId format/i);
 });
 
 await runAsyncTest('Scenario 17: Future attendance date rejected with 400 Bad Request', async () => {
@@ -836,19 +836,19 @@ await runAsyncTest('Scenario 17: Future attendance date rejected with 400 Bad Re
   const futureDate = new Date();
   futureDate.setDate(futureDate.getDate() + 5);
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
       date: futureDate.toISOString().split('T')[0],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /cannot be submitted for a future date/i);
+  assert.strictEqual(mockResponse.statusCode, 400);
+  assert.match(mockResponse.body.message, /cannot be submitted for a future date/i);
 
   Section.findById = origSectionFindById;
 });
@@ -887,7 +887,7 @@ await runAsyncTest('Scenario 18: Duplicate submission handles idempotency with c
   // Emulate existing record
   Attendance.findOne = () => makeChainable({ _id: 'existing_att', contentHash: 'some_hash' });
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -895,11 +895,11 @@ await runAsyncTest('Scenario 18: Duplicate submission handles idempotency with c
       absentStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.strictEqual(findOneAndUpdateCount, 1);
 
   Section.findById = origSectionFindById;
@@ -949,7 +949,7 @@ await runAsyncTest('Scenario 19: Full records array payload compatibility (legac
     { studentProfileId: mock40StudentProfiles[2]._id, status: ATTENDANCE_STATUS.PRESENT },
   ];
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -957,11 +957,11 @@ await runAsyncTest('Scenario 19: Full records array payload compatibility (legac
       records: legacyRecords,
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.strictEqual(capturedRecords.length, 40);
   const absentCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length;
   const leaveCount = capturedRecords.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length;
@@ -1001,7 +1001,7 @@ await runAsyncTest('Scenario 20: Attendance window closure / holiday rules enfor
     },
   });
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -1009,12 +1009,12 @@ await runAsyncTest('Scenario 20: Attendance window closure / holiday rules enfor
       absentStudentProfileIds: [],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 403);
-  assert.match(res.body.message, /Weekly holiday|window/i);
+  assert.strictEqual(mockResponse.statusCode, 403);
+  assert.match(mockResponse.body.message, /Weekly holiday|window/i);
 
   Section.findById = origSectionFindById;
   School.findById = origSchoolFindById;
@@ -1053,7 +1053,7 @@ await runAsyncTest('Scenario 21: Individual student remarks persistence alongsid
     return Promise.resolve({ _id: 'att_remarks', records: capturedRecords });
   };
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -1065,11 +1065,11 @@ await runAsyncTest('Scenario 21: Individual student remarks persistence alongsid
       ],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   const rec1 = capturedRecords.find((r) => String(r.userId) === String(mock40StudentProfiles[0].userId._id));
   const rec2 = capturedRecords.find((r) => String(r.userId) === String(mock40StudentProfiles[1].userId._id));
 
@@ -1120,7 +1120,7 @@ await runAsyncTest('Scenario 22: AuditLog creation with detailed before/after co
     return Promise.resolve({ _id: 'audit_created_id' });
   };
 
-  const req = {
+  const mockRequest = {
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
@@ -1129,11 +1129,11 @@ await runAsyncTest('Scenario 22: AuditLog creation with detailed before/after co
       leaveStudentProfileIds: [mock40StudentProfiles[1]._id],
     },
   };
-  const res = createMockRes();
+  const mockResponse = createMockResponse();
 
-  await handleSubmitAttendance(req, res);
+  await handleSubmitAttendance(mockRequest, mockResponse);
 
-  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(mockResponse.statusCode, 200);
   assert.ok(auditPayload, 'AuditLog must be created');
   assert.strictEqual(auditPayload.action, 'ATTENDANCE_SUBMITTED');
   assert.strictEqual(auditPayload.targetModel, 'Attendance');
