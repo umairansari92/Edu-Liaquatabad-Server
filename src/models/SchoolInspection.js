@@ -22,11 +22,18 @@ export const INSPECTION_STATUS = {
   REVIEWED_BY_ADMIN: 'REVIEWED_BY_ADMIN',
 };
 
+/**
+ * TBD (ARTICLE I CONVENTION):
+ * The inspection letter grading thresholds below (A: >=85%, B: 70-84%, C: 50-69%, D: <50%)
+ * are working placeholder defaults. No statutory DMC / Sindh School Education & Literacy
+ * Department (SELD) quality evaluation gazette notification is currently recorded in docs/.
+ * These cutoffs are explicitly flagged as TBD pending formal notification from municipal authorities.
+ */
 export const OVERALL_GRADE = {
-  A: 'A', // Exemplary (>= 85%)
-  B: 'B', // Satisfactory (70% - 84%)
-  C: 'C', // Needs Improvement (50% - 69%)
-  D: 'D', // Deficient / Escalated (< 50%)
+  A: 'A', // TBD: Working default >= 85% (Exemplary)
+  B: 'B', // TBD: Working default 70% - 84% (Satisfactory)
+  C: 'C', // TBD: Working default 50% - 69% (Needs Improvement)
+  D: 'D', // TBD: Working default < 50% (Deficient / Action Required)
 };
 
 const remedialDirectiveSchema = new mongoose.Schema(
