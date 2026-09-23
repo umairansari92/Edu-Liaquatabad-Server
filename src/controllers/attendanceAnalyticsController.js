@@ -229,10 +229,10 @@ export const handleGetSectionAttendanceAnalytics = asyncHandler(async (request, 
     const calcPct = (pDays, wDays) => wDays > 0 ? Number(((pDays / wDays) * 100).toFixed(1)) : 0;
 
     return {
-      userId: p.userId?._id,
-      fullName: p.userId?.fullName || 'Student',
-      grNumber: p.grNumber,
-      globalStudentId: p.globalStudentId || `GR-${p.grNumber}`,
+      userId: studentProfile.userId?._id,
+      fullName: studentProfile.userId?.fullName || 'Student',
+      grNumber: studentProfile.grNumber,
+      globalStudentId: studentProfile.globalStudentId || `GR-${studentProfile.grNumber}`,
       currentMonth: {
         present: curr.presentDays,
         absent: curr.absentDays,

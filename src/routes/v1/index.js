@@ -21,6 +21,7 @@ import announcementRoutes from '../announcementRoutes.js';
 import notificationRoutes from '../notificationRoutes.js';
 import examRoutes from '../examRoutes.js';
 import documentRoutes from '../documentRoutes.js';
+import schoolInspectionRoutes from '../schoolInspectionRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -93,6 +94,9 @@ router.use('/exams', examRoutes);
 
 // Official Documents, circulars & school notices
 router.use('/documents', documentRoutes);
+
+// Municipal School Inspections & Supervisor Oversight
+router.use('/inspections', schoolInspectionRoutes);
 
 export default router;
 
