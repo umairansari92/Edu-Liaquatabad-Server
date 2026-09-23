@@ -347,22 +347,61 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
       .map((submittedRecord) => submittedRecord.studentProfileId || submittedRecord.userId);
   }
 
-  // Validate all submitted IDs are valid ObjectIds
-  const allIds = [...effectiveAbsentIds, ...effectiveLeaveIds];
-  for (const id of allIds) {
-    if (!/^[0-9a-fA-F]{24}$/.test(String(id))) {
+  // Validate format and reject duplicates within absent exceptions
+  const seenAbsentIds = new Set();
+  for (const id of effectiveAbsentIds) {
+    const idStr = String(id);
+    if (!/^[0-9a-fA-F]{24}$/.test(idStr)) {
       return sendError(response, 400, `Invalid studentProfileId format: ${id}`);
     }
+    if (seenAbsentIds.has(idStr)) {
+      return sendError(response, 400, `Duplicate studentProfileId detected in attendance payload: ${idStr}`);
+    }
+    seenAbsentIds.add(idStr);
+  }
+
+  // Validate format and reject duplicates within leave exceptions
+  const seenLeaveIds = new Set();
+  for (const id of effectiveLeaveIds) {
+    const idStr = String(id);
+    if (!/^[0-9a-fA-F]{24}$/.test(idStr)) {
+      return sendError(response, 400, `Invalid studentProfileId format: ${id}`);
+    }
+    if (seenLeaveIds.has(idStr)) {
+      return sendError(response, 400, `Duplicate studentProfileId detected in attendance payload: ${idStr}`);
+    }
+    seenLeaveIds.add(idStr);
   }
 
   // A + L overlap check — same student cannot be both Absent AND Leave
-  const absentSet = new Set(effectiveAbsentIds.map(String));
-  const leaveSet  = new Set(effectiveLeaveIds.map(String));
-  const overlaps  = [...absentSet].filter((id) => leaveSet.has(id));
+  const overlaps = [...seenAbsentIds].filter((id) => seenLeaveIds.has(id));
   if (overlaps.length > 0) {
     return sendError(response, 400,
       `A student cannot be marked both Absent and Leave simultaneously. Conflicting IDs: ${overlaps.join(", ")}`
     );
+  }
+
+  const absentSet = seenAbsentIds;
+  const leaveSet  = seenLeaveIds;
+
+  // Validate records array if provided (duplicate checks and status enum validation)
+  if (Array.isArray(records) && records.length > 0) {
+    const seenRecordIds = new Set();
+    for (const rec of records) {
+      const pid = String(rec.studentProfileId || rec.userId || '');
+      if (pid) {
+        if (!/^[0-9a-fA-F]{24}$/.test(pid)) {
+          return sendError(response, 400, `Invalid studentProfileId format in records: ${pid}`);
+        }
+        if (seenRecordIds.has(pid)) {
+          return sendError(response, 400, `Duplicate studentProfileId detected in attendance records: ${pid}`);
+        }
+        seenRecordIds.add(pid);
+      }
+      if (rec.status && !Object.values(ATTENDANCE_STATUS).includes(rec.status)) {
+        return sendError(response, 400, `Invalid attendance status: "${rec.status}". Allowed values: ${Object.values(ATTENDANCE_STATUS).join(', ')}`);
+      }
+    }
   }
 
   const section = await resolveTeacherSection(requestingActor, sectionId, response);
@@ -406,14 +445,37 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     .lean();
 
   const authorizedProfileIds = new Set(authorizedStudents.map((studentProfile) => String(studentProfile._id)));
+  const userToProfileId      = new Map(authorizedStudents.map((studentProfile) => [
+    String(studentProfile.userId?._id || studentProfile.userId || ''),
+    String(studentProfile._id),
+  ]));
   const profileToUserId      = Object.fromEntries(authorizedStudents.map((studentProfile) => [
     String(studentProfile._id),
     studentProfile.userId?._id || studentProfile.userId || studentProfile._id,
   ]));
 
   // Verify submitted IDs are in the authoritative roster — reject injected IDs
-  for (const id of [...absentSet, ...leaveSet]) {
-    if (!authorizedProfileIds.has(id)) {
+  const normalizedAbsentSet = new Set();
+  for (const id of absentSet) {
+    if (authorizedProfileIds.has(id)) {
+      normalizedAbsentSet.add(id);
+    } else if (userToProfileId.has(id)) {
+      normalizedAbsentSet.add(userToProfileId.get(id));
+    } else {
+      return sendError(response, 400,
+        `Student profile ${id} does not belong to the authorized roster for this section. ` +
+        "Cross-section or external student IDs are rejected."
+      );
+    }
+  }
+
+  const normalizedLeaveSet = new Set();
+  for (const id of leaveSet) {
+    if (authorizedProfileIds.has(id)) {
+      normalizedLeaveSet.add(id);
+    } else if (userToProfileId.has(id)) {
+      normalizedLeaveSet.add(userToProfileId.get(id));
+    } else {
       return sendError(response, 400,
         `Student profile ${id} does not belong to the authorized roster for this section. ` +
         "Cross-section or external student IDs are rejected."
@@ -424,7 +486,7 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   if (Array.isArray(records) && records.length > 0) {
     for (const rec of records) {
       const pid = String(rec.studentProfileId || rec.userId || '');
-      if (pid && !authorizedProfileIds.has(pid)) {
+      if (pid && !authorizedProfileIds.has(pid) && !userToProfileId.has(pid)) {
         return sendError(response, 400,
           `Student profile ${pid} does not belong to the authorized roster for this section. ` +
           "Cross-section or external student IDs are rejected."
@@ -449,8 +511,8 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     const pid = String(profile._id);
     const uid = String(profile.userId?._id || profileToUserId[pid]);
     let status = ATTENDANCE_STATUS.PRESENT; // default
-    if (absentSet.has(pid))      status = ATTENDANCE_STATUS.ABSENT;
-    else if (leaveSet.has(pid))  status = ATTENDANCE_STATUS.LEAVE;
+    if (normalizedAbsentSet.has(pid))      status = ATTENDANCE_STATUS.ABSENT;
+    else if (normalizedLeaveSet.has(pid))  status = ATTENDANCE_STATUS.LEAVE;
     const studentRemark = remarksMap.get(pid) || remarksMap.get(uid) || "";
     return {
       userId:  profileToUserId[pid],
