@@ -166,15 +166,15 @@ export const authorizeScope = async (request, response, nextFunction) => {
         }
       }
 
-      // A2. If actor is a Supervisor with assignedSchools list
-      if (requestingActor.role === ROLES.SUPERVISOR && requestingActor.assignedSchools?.length > 0) {
-        const isAssigned = requestingActor.assignedSchools.some(
+      // A2. If actor is a Supervisor: fail-closed boundary enforcement against assignedSchools cluster
+      if (requestingActor.role === ROLES.SUPERVISOR) {
+        const isAssigned = (requestingActor.assignedSchools || []).some(
           (assignedSchoolId) => String(assignedSchoolId) === targetSchoolString
         );
         if (!isAssigned) {
           await logScopeViolation(request, requestingActor, 'SUPERVISOR_UNASSIGNED_SCHOOL_VIOLATION', {
             attemptedSchoolId: targetSchoolString,
-            assignedSchools: requestingActor.assignedSchools.map(String),
+            assignedSchools: (requestingActor.assignedSchools || []).map(String),
           });
           return sendError(
             response,

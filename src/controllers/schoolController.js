@@ -244,10 +244,15 @@ export const handleGetSchools = asyncHandler(async (request, response) => {
 
 /**
  * GET /api/v1/schools/:id
- * Retrieve single municipal school details
+ * Retrieve single municipal school details (Hardened with SEC-HIGH-04 scope checks)
  */
 export const handleGetSchoolById = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
   const { id: targetSchoolId } = request.params;
+
+  if (!targetSchoolId || !/^[0-9a-fA-F]{24}$/.test(targetSchoolId)) {
+    return sendError(response, 400, 'Invalid school ID format.');
+  }
 
   const schoolRecord = await School.findById(targetSchoolId)
     .populate('townId', 'name code officeAddress')
@@ -256,6 +261,42 @@ export const handleGetSchoolById = asyncHandler(async (request, response) => {
 
   if (!schoolRecord) {
     return sendError(response, 404, 'Municipal school entity not found.');
+  }
+
+  // ── Jurisdictional Inspection Cluster Guard for SUPERVISOR (SEC-HIGH-04) ─────
+  if (requestingActor.role === ROLES.SUPERVISOR) {
+    const isAssigned = (requestingActor.assignedSchools || []).some(
+      (assignedSchoolId) => String(assignedSchoolId?._id || assignedSchoolId) === String(targetSchoolId)
+    );
+    if (!isAssigned) {
+      await AuditLog.create({
+        actorId: requestingActor._id || requestingActor.userId,
+        actorRole: requestingActor.role,
+        actorName: requestingActor.fullName || '',
+        action: 'SUPERVISOR_CROSS_SCHOOL_VIEW_BLOCKED',
+        targetModel: 'School',
+        targetId: targetSchoolId,
+        targetName: schoolRecord.name || 'Unassigned School',
+        schoolId: targetSchoolId,
+        previousState: {
+          assignedSchools: (requestingActor.assignedSchools || []).map((s) => String(s?._id || s)),
+          attemptedSchoolId: targetSchoolId,
+        },
+        result: 'DENIED',
+        reason: 'BOLA/IDOR attempt intercepted: Supervisor attempted to access unassigned school details.',
+        ipAddress: request.ip || '',
+        userAgent: request.headers['user-agent'] || '',
+      });
+      return sendError(response, 403, 'Access denied. You do not hold supervisory jurisdiction over this municipal school.');
+    }
+  } else if ([ROLES.HM, ROLES.TEACHER].includes(requestingActor.role)) {
+    if (String(requestingActor.schoolId?._id || requestingActor.schoolId) !== String(targetSchoolId)) {
+      return sendError(response, 403, 'Access denied. You can only inspect your own assigned school.');
+    }
+  } else if (requestingActor.role === ROLES.ADMIN) {
+    if (requestingActor.townId && schoolRecord.townId?._id && String(requestingActor.townId) !== String(schoolRecord.townId._id)) {
+      return sendError(response, 403, 'Access denied. School belongs to a different administrative town.');
+    }
   }
 
   const [facultyMembersList, headMasterUser] = await Promise.all([

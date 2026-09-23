@@ -1,10 +1,11 @@
 import asyncHandler from 'express-async-handler';
+import { sendError } from '../utils/apiResponse.js';
 import School from '../models/School.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import TeacherProfile from '../models/TeacherProfile.js';
 import AuditLog from '../models/AuditLog.js';
-import { BASE_ROLES } from '../../config/constants.js';
+import { ROLES, BASE_ROLES } from '../../config/constants.js';
 
 /**
  * Always-quote CSV cell strategy (RFC 4180 safe).
@@ -242,7 +243,40 @@ export const handleExportStudentsCsv = asyncHandler(async (request, response) =>
   const { schoolId, classId, sectionId, status, search } = request.query;
 
   const profileFilter = {};
-  if (schoolId)  profileFilter.schoolId  = schoolId;
+
+  // ── Jurisdictional Scoping Guard (SEC-HIGH-05) ─────────────────────────────
+  if (actor.role === ROLES.HM) {
+    const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
+    if (!actorSchoolId) {
+      return sendError(response, 400, 'Your Head Master account is not linked to an authorized school.');
+    }
+    if (schoolId && String(schoolId) !== actorSchoolId) {
+      return sendError(response, 403, 'Access denied. You can only export students belonging to your assigned school.');
+    }
+    profileFilter.schoolId = actorSchoolId;
+  } else if (actor.role === ROLES.SUPERVISOR) {
+    const assignedSchoolIds = (actor.assignedSchools || []).map((s) => String(s?._id || s));
+    if (assignedSchoolIds.length === 0) {
+      return sendError(response, 403, 'Access denied. No municipal schools assigned to your supervisory cluster.');
+    }
+    if (schoolId) {
+      if (!assignedSchoolIds.includes(String(schoolId))) {
+        return sendError(response, 403, 'Access denied. You cannot export students from a school outside your supervisory cluster.');
+      }
+      profileFilter.schoolId = schoolId;
+    } else {
+      profileFilter.schoolId = { $in: assignedSchoolIds };
+    }
+  } else {
+    // ADMIN, SUPER_ADMIN, ROOT_ADMIN
+    if (schoolId) {
+      if (!/^[0-9a-fA-F]{24}$/.test(schoolId)) {
+        return sendError(response, 400, 'Invalid school ID format.');
+      }
+      profileFilter.schoolId = schoolId;
+    }
+  }
+
   if (classId)   profileFilter.classId   = classId;
   if (sectionId) profileFilter.sectionId = sectionId;
   if (status)    profileFilter.lifecycleStatus = status;
