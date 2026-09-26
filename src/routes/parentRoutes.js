@@ -1,6 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
-import { authorizeRoles } from '../middlewares/authorizeRoles.js';
+import { authorizeRoles } from '../middlewares/authorize.js';
 import { validate } from '../middlewares/validate.js';
 import { authLimiter, otpLimiter, parentLookupLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { ROLES } from '../../config/constants.js';
