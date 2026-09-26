@@ -22,6 +22,8 @@ import notificationRoutes from '../notificationRoutes.js';
 import examRoutes from '../examRoutes.js';
 import documentRoutes from '../documentRoutes.js';
 import schoolInspectionRoutes from '../schoolInspectionRoutes.js';
+import parentRoutes from '../parentRoutes.js';
+import hmParentLinkRoutes from '../hmParentLinkRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -97,6 +99,12 @@ router.use('/documents', documentRoutes);
 
 // Municipal School Inspections & Supervisor Oversight
 router.use('/inspections', schoolInspectionRoutes);
+
+// Parent Portal & Ward Linkage (Phase 3)
+router.use('/parent', parentRoutes);
+
+// Head Master Parent Link Verification Queue (Phase 3)
+router.use('/hm/parent-links', hmParentLinkRoutes);
 
 export default router;
 

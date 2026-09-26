@@ -146,6 +146,26 @@ for (let studentIndex = 1; studentIndex <= 40; studentIndex++) {
 // Stub AuditLog.create
 AuditLog.create = async () => ({ _id: 'mock_audit_log_id' });
 
+// Mock school with full 24-hour attendance submission window for both regular and Friday schedules.
+// Prevents time-of-day and day-of-week test flakiness regardless of when the test suite runs.
+const createMockOpenSchool = (targetSchoolId = schoolA_Id) => ({
+  _id: targetSchoolId,
+  timings: {
+    regular: {
+      startTime: '08:00',
+      endTime: '13:30',
+      attendanceWindowStart: '00:00',
+      attendanceWindowEnd: '23:59',
+    },
+    friday: {
+      startTime: '07:30',
+      endTime: '12:00',
+      attendanceWindowStart: '00:00',
+      attendanceWindowEnd: '23:59',
+    },
+  },
+});
+
 // ─── Tests Execution ─────────────────────────────────────────────────────────
 
 await runAsyncTest('Scenario 01: Authorized Class Teacher can submit attendance', async () => {
@@ -161,17 +181,7 @@ await runAsyncTest('Scenario 01: Authorized Class Teacher can submit attendance'
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id, // designated class teacher
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -219,17 +229,7 @@ await runAsyncTest('Scenario 02: Authorized Subject Teacher with active Teaching
     classTeacherId: teacherB_Id, // someone else is Class Teacher
   });
   TeachingAssignment.isTeacherAssigned = async () => true; // Subject Teacher holds assignment
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
   Attendance.findOneAndUpdate = (query, update) => Promise.resolve({ _id: 'att_st' });
@@ -346,17 +346,7 @@ await runAsyncTest('Scenario 06: 40-student roster with zero exceptions produces
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -405,17 +395,7 @@ await runAsyncTest('Scenario 07: 40 students + 2 Absent produces 38 Present + 2 
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -467,17 +447,7 @@ await runAsyncTest('Scenario 08: 40 students + 2 Absent + 1 Leave produces 37 Pr
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -533,17 +503,7 @@ await runAsyncTest('Scenario 09: Student omitted from exception payload automati
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -589,17 +549,7 @@ await runAsyncTest('Scenario 10: Inactive student profile rejected if submitted 
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   // Database only returns ACTIVE students for authoritative roster
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
 
@@ -636,17 +586,7 @@ await runAsyncTest('Scenario 11: Foreign student ID rejected with 400 Bad Reques
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
 
   const mockRequest = {
@@ -680,17 +620,7 @@ await runAsyncTest('Scenario 12: Cross-school student ID rejected with 400 Bad R
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
 
   const crossSchoolStudentId = '607f1f77bcf86cd799439098';
@@ -866,17 +796,7 @@ await runAsyncTest('Scenario 18: Duplicate submission handles idempotency with c
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
 
   let findOneAndUpdateCount = 0;
@@ -922,17 +842,7 @@ await runAsyncTest('Scenario 19: Full records array payload compatibility (legac
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -1033,17 +943,7 @@ await runAsyncTest('Scenario 21: Individual student remarks persistence alongsid
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
 
@@ -1099,17 +999,7 @@ await runAsyncTest('Scenario 22: AuditLog creation with detailed before/after co
     schoolId: schoolA_Id,
     classTeacherId: teacherA_Id,
   });
-  School.findById = () => makeChainable({
-    _id: schoolA_Id,
-    timings: {
-      regular: {
-        startTime: '08:00',
-        endTime: '13:30',
-        attendanceWindowStart: '00:00',
-        attendanceWindowEnd: '23:59',
-      },
-    },
-  });
+  School.findById = () => makeChainable(createMockOpenSchool(schoolA_Id));
   StudentProfile.find = () => makeChainable(mock40StudentProfiles);
   Attendance.findOne = () => makeChainable(null);
   Attendance.findOneAndUpdate = () => Promise.resolve({ _id: 'att_audit_test' });

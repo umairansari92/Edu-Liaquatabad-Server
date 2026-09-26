@@ -235,11 +235,21 @@ export const ROLE_PERMISSION_CEILING = Object.freeze({
   ),
 
   [ROLES.STUDENT]: Object.values(PERMISSIONS).filter(
-    (permissionKey) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(permissionKey)
+    (permissionKey) => ![
+      PERMISSIONS.ATTENDANCE_VIEW,
+      PERMISSIONS.EXAMS_VIEW,
+      PERMISSIONS.DOCUMENTS_VIEW,
+      PERMISSIONS.HOMEWORK_VIEW,
+    ].includes(permissionKey)
   ),
 
   [ROLES.PARENT]: Object.values(PERMISSIONS).filter(
-    (permissionKey) => ![PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.EXAMS_VIEW, PERMISSIONS.DOCUMENTS_VIEW].includes(permissionKey)
+    (permissionKey) => ![
+      PERMISSIONS.ATTENDANCE_VIEW,
+      PERMISSIONS.EXAMS_VIEW,
+      PERMISSIONS.DOCUMENTS_VIEW,
+      PERMISSIONS.HOMEWORK_VIEW,
+    ].includes(permissionKey)
   ),
 });
 

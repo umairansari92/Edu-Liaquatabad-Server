@@ -196,3 +196,19 @@ export const AUDIENCE_TYPES = Object.freeze({
   STUDENTS:            'STUDENTS',
   PARENTS:             'PARENTS',
 });
+
+// ─── Parent-Student Relationship & Verification Enums ────────────────────────
+
+export const PARENT_STUDENT_LINK_STATUS = Object.freeze({
+  PENDING_OTP:         'PENDING_OTP',
+  PENDING_HM_APPROVAL: 'PENDING_HM_APPROVAL',
+  VERIFIED:            'VERIFIED',
+  REJECTED:            'REJECTED',
+  REVOKED:             'REVOKED',
+});
+
+export const PARENT_RELATIONSHIP = Object.freeze({
+  FATHER:   'FATHER',
+  MOTHER:   'MOTHER',
+  GUARDIAN: 'GUARDIAN',
+});

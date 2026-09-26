@@ -99,6 +99,70 @@ await runTest('PARENT cannot be granted HOMEWORK_CREATE via customPermissions (C
   assert(!effective.includes(PERMISSIONS.HOMEWORK_CREATE), 'Ceiling must filter out HOMEWORK_CREATE for PARENT');
 });
 
+await runTest('STUDENT HOMEWORK_VIEW is not incorrectly rejected by permission ceiling', () => {
+  const validation = validatePermissionCeiling(ROLES.STUDENT, [PERMISSIONS.HOMEWORK_VIEW]);
+  assert.strictEqual(validation.valid, true, 'validatePermissionCeiling must allow HOMEWORK_VIEW for STUDENT');
+  assert.strictEqual(validation.forbiddenPermissions.length, 0);
+});
+
+await runTest('PARENT HOMEWORK_VIEW is not incorrectly rejected by permission ceiling', () => {
+  const validation = validatePermissionCeiling(ROLES.PARENT, [PERMISSIONS.HOMEWORK_VIEW]);
+  assert.strictEqual(validation.valid, true, 'validatePermissionCeiling must allow HOMEWORK_VIEW for PARENT');
+  assert.strictEqual(validation.forbiddenPermissions.length, 0);
+});
+
+await runTest('STUDENT cannot obtain staff or admin permissions through custom permissions or ceiling bypass', () => {
+  const staffPerms = [
+    PERMISSIONS.USERS_ASSIGN_ROLE,
+    PERMISSIONS.USERS_CREATE,
+    PERMISSIONS.TRANSFERS_INITIATE,
+    PERMISSIONS.AUDIT_VIEW,
+    PERMISSIONS.HOMEWORK_CREATE,
+  ];
+  const validation = validatePermissionCeiling(ROLES.STUDENT, staffPerms);
+  assert.strictEqual(validation.valid, false, 'STUDENT must not be granted staff permissions');
+  assert.strictEqual(validation.forbiddenPermissions.length, staffPerms.length);
+
+  const forgedStudent = {
+    role: ROLES.STUDENT,
+    customPermissions: staffPerms,
+  };
+  const effective = getEffectivePermissions(forgedStudent);
+  for (const perm of staffPerms) {
+    assert(!effective.includes(perm), `STUDENT must not have ${perm} in effective permissions`);
+  }
+});
+
+await runTest('PARENT cannot obtain staff or admin permissions through custom permissions or ceiling bypass', () => {
+  const staffPerms = [
+    PERMISSIONS.USERS_ASSIGN_ROLE,
+    PERMISSIONS.USERS_CREATE,
+    PERMISSIONS.TRANSFERS_INITIATE,
+    PERMISSIONS.AUDIT_VIEW,
+    PERMISSIONS.HOMEWORK_CREATE,
+    PERMISSIONS.ATTENDANCE_MARK,
+  ];
+  const validation = validatePermissionCeiling(ROLES.PARENT, staffPerms);
+  assert.strictEqual(validation.valid, false, 'PARENT must not be granted staff permissions');
+  assert.strictEqual(validation.forbiddenPermissions.length, staffPerms.length);
+
+  const forgedParent = {
+    role: ROLES.PARENT,
+    customPermissions: staffPerms,
+  };
+  const effective = getEffectivePermissions(forgedParent);
+  for (const perm of staffPerms) {
+    assert(!effective.includes(perm), `PARENT must not have ${perm} in effective permissions`);
+  }
+});
+
+await runTest('Existing permission ceilings remain strictly intact for all other roles', () => {
+  assert.strictEqual(validatePermissionCeiling(ROLES.ADMIN, [PERMISSIONS.USERS_ASSIGN_ROLE]).valid, false);
+  assert.strictEqual(validatePermissionCeiling(ROLES.HM, [PERMISSIONS.SCHOOLS_CREATE, PERMISSIONS.USERS_ASSIGN_ROLE]).valid, false);
+  assert.strictEqual(validatePermissionCeiling(ROLES.TEACHER, [PERMISSIONS.USERS_CREATE, PERMISSIONS.AUDIT_VIEW]).valid, false);
+  assert.strictEqual(validatePermissionCeiling(ROLES.PEON, [PERMISSIONS.EXAMS_CREATE, PERMISSIONS.USERS_CREATE]).valid, false);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. TEACHING ASSIGNMENT AUTHORIZATION BOUNDARY
 // ─────────────────────────────────────────────────────────────────────────────

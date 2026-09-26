@@ -8,6 +8,7 @@ import {
   handleActivateStudentPortal,
   handleRegisterTeacher,
   handleRegisterStaff,
+  handleRegisterParent,
   handleLogin,
   handleRefreshToken,
   handleLogout,
@@ -41,6 +42,7 @@ import {
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
 } from '../validations/authSchemas.js';
+import { registerParentSchema } from '../validations/parentSchemas.js';
 
 const router = express.Router();
 
@@ -117,6 +119,14 @@ router.post(
   honeypotCheck,
   validate(registerStaffSchema),
   handleRegisterStaff
+);
+
+router.post(
+  '/register-parent',
+  registrationLimiter,
+  honeypotCheck,
+  validate(registerParentSchema),
+  handleRegisterParent
 );
 
 router.post(

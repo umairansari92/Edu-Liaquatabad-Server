@@ -5,16 +5,20 @@ import { isDisposableEmail } from '../utils/disposableEmailValidator.js';
 const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
 
-export const requestOtp = async (email, purpose = 'REGISTRATION') => {
-  const normalizedEmail = email.toLowerCase().trim();
+export const requestOtp = async (target, purpose = 'REGISTRATION') => {
+  const normalizedTarget = String(target).toLowerCase().trim();
+  const isEmail = normalizedTarget.includes('@');
 
-  // 1. Verify not disposable email
-  if (isDisposableEmail(normalizedEmail)) {
+  // 1. Verify not disposable email (if email)
+  if (isEmail && isDisposableEmail(normalizedTarget)) {
     throw new Error('Disposable and temporary email addresses are strictly prohibited.');
   }
 
   // 2. Check if active OTP exists and enforce rate-limiting / cooldown
-  let existingOtp = await OtpVerification.findOne({ email: normalizedEmail, purpose });
+  let existingOtp = await OtpVerification.findOne({
+    $or: [{ email: normalizedTarget }, { identifier: normalizedTarget }, { phoneNumber: normalizedTarget }],
+    purpose,
+  });
 
   if (existingOtp) {
     const now = Date.now();
@@ -46,7 +50,9 @@ export const requestOtp = async (email, purpose = 'REGISTRATION') => {
     await existingOtp.save();
   } else {
     await OtpVerification.create({
-      email: normalizedEmail,
+      identifier: normalizedTarget,
+      email: isEmail ? normalizedTarget : undefined,
+      phoneNumber: !isEmail ? normalizedTarget : undefined,
       otpHash,
       purpose,
       expiresAt,
@@ -56,8 +62,10 @@ export const requestOtp = async (email, purpose = 'REGISTRATION') => {
     });
   }
 
-  // 4. Send email notification
-  await sendOtpEmail(normalizedEmail, plainOtp, purpose);
+  // 4. Send email notification if target is email
+  if (isEmail) {
+    await sendOtpEmail(normalizedTarget, plainOtp, purpose);
+  }
 
   return {
     success: true,
@@ -67,12 +75,15 @@ export const requestOtp = async (email, purpose = 'REGISTRATION') => {
   };
 };
 
-export const verifyOtp = async (email, plainOtp, purpose = 'REGISTRATION') => {
-  const normalizedEmail = email.toLowerCase().trim();
-  const record = await OtpVerification.findOne({ email: normalizedEmail, purpose });
+export const verifyOtp = async (target, plainOtp, purpose = 'REGISTRATION') => {
+  const normalizedTarget = String(target).toLowerCase().trim();
+  const record = await OtpVerification.findOne({
+    $or: [{ email: normalizedTarget }, { identifier: normalizedTarget }, { phoneNumber: normalizedTarget }],
+    purpose,
+  });
 
   if (!record) {
-    throw new Error('No active verification code found for this email. Please request a new one.');
+    throw new Error('No active verification code found for this identifier. Please request a new one.');
   }
 
   // Check application-level expiry

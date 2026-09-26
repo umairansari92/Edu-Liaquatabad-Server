@@ -713,6 +713,130 @@ export const handleRegisterTeacher = asyncHandler(async (request, response) => {
 export const handleRegisterStaff = handleRegisterTeacher;
 
 /**
+ * Parent Self-Registration
+ * POST /api/v1/auth/register-parent
+ */
+export const handleRegisterParent = asyncHandler(async (request, response) => {
+  const {
+    fullName,
+    email,
+    password,
+    phoneNumber,
+    guardianCnicNumber,
+    cnicNumber,
+    captchaAnswer,
+    captchaChallengeToken,
+  } = request.body;
+
+  // 1. CAPTCHA verification (Async cryptographically signed challenge)
+  if (process.env.NODE_ENV === 'production' || (captchaAnswer && captchaChallengeToken)) {
+    const isCaptchaValid = await verifyMathCaptchaAsync(captchaChallengeToken, captchaAnswer);
+    if (!isCaptchaValid) {
+      return sendError(response, 400, 'Security verification failed. Please solve the CAPTCHA correctly.');
+    }
+  }
+
+  // 2. Validate email domain
+  const normalizedEmail = (email || '').toLowerCase().trim();
+  if (isDisposableEmail(normalizedEmail)) {
+    return sendError(response, 400, 'Disposable or temporary email addresses are strictly prohibited.');
+  }
+
+  // 3. Prevent duplicate account
+  const existingUser = await User.findOne({ email: normalizedEmail });
+  if (existingUser) {
+    return sendError(response, 409, 'An account with this email address already exists. Please sign in.');
+  }
+
+  const normalizedPhone = (phoneNumber || '').trim();
+  if (normalizedPhone) {
+    const existingPhone = await User.findOne({ phoneNumber: normalizedPhone });
+    if (existingPhone) {
+      return sendError(response, 409, 'An account with this mobile number already exists.');
+    }
+  }
+
+  // 4. Resolve default Organization & Town
+  let defaultOrg = await Organization.findOne({ code: 'DMC_LIAQUATABAD' });
+  if (!defaultOrg) {
+    defaultOrg = await Organization.create({
+      name: 'Education Department (DMC)',
+      code: 'DMC_LIAQUATABAD',
+    });
+  }
+
+  let defaultTown = await Town.findOne({ code: 'TOWN_LIAQ' });
+  if (!defaultTown) {
+    defaultTown = await Town.create({
+      organizationId: defaultOrg._id,
+      name: 'Liaquatabad Town Centre',
+      code: 'TOWN_LIAQ',
+    });
+  }
+
+  // 5. Anti-Privilege Escalation Guard
+  const requestedRole = request.body.role || request.body.grantedAuthority;
+  if (requestedRole && requestedRole !== ROLES.PARENT) {
+    return sendError(response, 403, 'Privilege escalation violation: Only PARENT role can be created through this registration.');
+  }
+
+  // 6. Create Parent User account in ACTIVE status
+  const passwordHash = await hashPassword(password);
+  const normalizedCnic = (guardianCnicNumber || cnicNumber || '').trim();
+
+  const parentUser = await User.create({
+    organizationId: defaultOrg._id,
+    townId: defaultTown._id,
+    schoolId: null, // Scoped at the ParentStudentLink level for multi-school guardians
+    fullName: fullName.trim(),
+    email: normalizedEmail,
+    passwordHash,
+    phoneNumber: normalizedPhone,
+    designation: 'Parent / Guardian',
+    baseRole: BASE_ROLES.PARENT,
+    role: ROLES.PARENT,
+    scope: SCOPES.CHILD,
+    status: USER_STATUS.ACTIVE,
+    tokenVersion: 1,
+  });
+
+  // 7. Immutable Audit Log
+  const maskedCnic = normalizedCnic ? `*****${normalizedCnic.slice(-4)}` : 'N/A';
+  await AuditLog.create({
+    actorId: parentUser._id,
+    actorRole: ROLES.PARENT,
+    actorDesignation: 'Parent / Guardian',
+    actorName: parentUser.fullName,
+    action: 'PARENT_REGISTERED',
+    targetModel: 'User',
+    targetId: parentUser._id,
+    targetName: parentUser.fullName,
+    townId: defaultTown._id,
+    schoolId: null,
+    newState: {
+      status: USER_STATUS.ACTIVE,
+      role: parentUser.role,
+      baseRole: parentUser.baseRole,
+      scope: parentUser.scope,
+      maskedCnic,
+    },
+    result: 'SUCCESS',
+    ipAddress: request.ip || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 201, 'Parent account registered successfully. You can now log in and link your student.', {
+    userId: parentUser._id,
+    fullName: parentUser.fullName,
+    email: parentUser.email,
+    phoneNumber: parentUser.phoneNumber,
+    role: parentUser.role,
+    status: parentUser.status,
+  });
+});
+
+/**
  * Resubmit Profile Corrections
  * POST /api/v1/auth/resubmit-correction
  */
