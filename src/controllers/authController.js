@@ -730,7 +730,7 @@ export const handleRegisterParent = asyncHandler(async (request, response) => {
 
   // 1. CAPTCHA verification (Async cryptographically signed challenge)
   if (process.env.NODE_ENV === 'production' || (captchaAnswer && captchaChallengeToken)) {
-    const isCaptchaValid = await verifyMathCaptchaAsync(captchaChallengeToken, captchaAnswer);
+    const isCaptchaValid = await verifyMathCaptchaAsync(String(captchaAnswer).trim(), captchaChallengeToken);
     if (!isCaptchaValid) {
       return sendError(response, 400, 'Security verification failed. Please solve the CAPTCHA correctly.');
     }
@@ -742,7 +742,13 @@ export const handleRegisterParent = asyncHandler(async (request, response) => {
     return sendError(response, 400, 'Disposable or temporary email addresses are strictly prohibited.');
   }
 
-  // 3. Prevent duplicate account
+  // 3. Anti-Privilege Escalation Guard (Fail fast before database operations)
+  const requestedRole = request.body.role || request.body.grantedAuthority;
+  if (requestedRole && requestedRole !== ROLES.PARENT) {
+    return sendError(response, 403, 'Privilege escalation violation: Only PARENT role can be created through this registration.');
+  }
+
+  // 4. Prevent duplicate account
   const existingUser = await User.findOne({ email: normalizedEmail });
   if (existingUser) {
     return sendError(response, 409, 'An account with this email address already exists. Please sign in.');
@@ -756,7 +762,7 @@ export const handleRegisterParent = asyncHandler(async (request, response) => {
     }
   }
 
-  // 4. Resolve default Organization & Town
+  // 5. Resolve default Organization & Town
   let defaultOrg = await Organization.findOne({ code: 'DMC_LIAQUATABAD' });
   if (!defaultOrg) {
     defaultOrg = await Organization.create({
@@ -772,12 +778,6 @@ export const handleRegisterParent = asyncHandler(async (request, response) => {
       name: 'Liaquatabad Town Centre',
       code: 'TOWN_LIAQ',
     });
-  }
-
-  // 5. Anti-Privilege Escalation Guard
-  const requestedRole = request.body.role || request.body.grantedAuthority;
-  if (requestedRole && requestedRole !== ROLES.PARENT) {
-    return sendError(response, 403, 'Privilege escalation violation: Only PARENT role can be created through this registration.');
   }
 
   // 6. Create Parent User account in ACTIVE status

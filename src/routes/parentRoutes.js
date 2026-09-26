@@ -2,7 +2,7 @@ import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorizeRoles.js';
 import { validate } from '../middlewares/validate.js';
-import { authLimiter, otpLimiter } from '../middlewares/tripleLockRateLimiter.js';
+import { authLimiter, otpLimiter, parentLookupLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { ROLES } from '../../config/constants.js';
 import {
   handleLookupWard,
@@ -26,7 +26,7 @@ router.use(authorizeRoles(ROLES.PARENT));
 // ─── 1. Candidate Ward Lookup (Anti-Enumeration Guard) ───────────────────────
 router.post(
   '/lookup-ward',
-  authLimiter,
+  parentLookupLimiter,
   validate(lookupWardSchema),
   handleLookupWard
 );

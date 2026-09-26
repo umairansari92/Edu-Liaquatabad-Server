@@ -152,32 +152,43 @@ export const handleInitiateClaim = asyncHandler(async (request, response) => {
   let link;
   let otpResult = null;
 
-  if (officialPhone && officialPhone.length >= 10) {
-    // Standard 3-Layer Path: Dispatch OTP to official phone on file
-    try {
-      otpResult = await requestOtp(officialPhone, 'PARENT_WARD_CLAIM');
-    } catch (otpError) {
-      return sendError(response, 429, otpError.message);
-    }
+  try {
+    if (officialPhone && officialPhone.length >= 10) {
+      // Standard 3-Layer Path: Dispatch OTP to official phone on file
+      try {
+        otpResult = await requestOtp(officialPhone, 'PARENT_WARD_CLAIM');
+      } catch (otpError) {
+        return sendError(response, 429, otpError.message);
+      }
 
-    link = await ParentStudentLink.create({
-      parentId: request.user._id,
-      studentProfileId: studentProfile._id,
-      schoolId: studentProfile.schoolId._id || studentProfile.schoolId,
-      relationship,
-      verificationStatus: PARENT_STUDENT_LINK_STATUS.PENDING_OTP,
-      contactOtpVerified: false,
-    });
-  } else {
-    // Fallback: No phone on paper record -> route directly to HM physical verification
-    link = await ParentStudentLink.create({
-      parentId: request.user._id,
-      studentProfileId: studentProfile._id,
-      schoolId: studentProfile.schoolId._id || studentProfile.schoolId,
-      relationship,
-      verificationStatus: PARENT_STUDENT_LINK_STATUS.PENDING_HM_APPROVAL,
-      contactOtpVerified: false,
-    });
+      link = await ParentStudentLink.create({
+        parentId: request.user._id,
+        studentProfileId: studentProfile._id,
+        schoolId: studentProfile.schoolId._id || studentProfile.schoolId,
+        relationship,
+        verificationStatus: PARENT_STUDENT_LINK_STATUS.PENDING_OTP,
+        contactOtpVerified: false,
+      });
+    } else {
+      // Fallback: No phone on paper record -> route directly to HM physical verification
+      link = await ParentStudentLink.create({
+        parentId: request.user._id,
+        studentProfileId: studentProfile._id,
+        schoolId: studentProfile.schoolId._id || studentProfile.schoolId,
+        relationship,
+        verificationStatus: PARENT_STUDENT_LINK_STATUS.PENDING_HM_APPROVAL,
+        contactOtpVerified: false,
+      });
+    }
+  } catch (createError) {
+    if (createError.code === 11000 || createError.name === 'MongoServerError') {
+      return sendError(
+        response,
+        409,
+        'An active or pending link claim already exists for this student.'
+      );
+    }
+    throw createError;
   }
 
   // 4. Audit Log
@@ -214,7 +225,6 @@ export const handleInitiateClaim = asyncHandler(async (request, response) => {
         maskedPhone: maskPhone(officialPhone),
         expiresInSeconds: otpResult?.expiresInSeconds || 300,
         cooldownSeconds: otpResult?.cooldownSeconds || 60,
-        ...(otpResult?.devOtp ? { devOtp: otpResult.devOtp } : {}),
       }
     );
   }

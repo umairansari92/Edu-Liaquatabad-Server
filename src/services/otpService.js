@@ -71,7 +71,6 @@ export const requestOtp = async (target, purpose = 'REGISTRATION') => {
     success: true,
     expiresInSeconds: 300,
     cooldownSeconds: 60,
-    ...(process.env.NODE_ENV !== 'production' ? { devOtp: plainOtp } : {}),
   };
 };
 
@@ -103,6 +102,10 @@ export const verifyOtp = async (target, plainOtp, purpose = 'REGISTRATION') => {
 
   if (!isValid) {
     record.attempts += 1;
+    if (record.attempts >= 5) {
+      await OtpVerification.deleteOne({ _id: record._id });
+      throw new Error('Maximum invalid attempts exceeded. This verification code has been invalidated.');
+    }
     await record.save();
     const remainingAttempts = 5 - record.attempts;
     throw new Error(`Invalid verification code. ${remainingAttempts} attempt(s) remaining.`);

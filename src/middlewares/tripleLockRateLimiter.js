@@ -254,3 +254,25 @@ export const clearLoginLockout = async (emailAddress, clientIpAddress) => {
   }
 };
 
+/**
+ * Dedicated Parent Ward Lookup Limiter (Anti-Enumeration Guard)
+ * Keyed on authenticated Parent user._id with IP fallback
+ */
+export const parentLookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopmentEnvironment ? 50 : 10, // Max 10 lookups per 15 minutes in production
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (incomingRequest) => {
+    return incomingRequest.user?._id
+      ? `parent:${incomingRequest.user._id}`
+      : (incomingRequest.ip || 'unknown');
+  },
+  skip: (incomingRequest) => isLocalhostRequest(incomingRequest),
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many student lookup attempts. Please wait 15 minutes before searching again.',
+  },
+});
+
