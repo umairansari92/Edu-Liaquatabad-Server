@@ -17,6 +17,16 @@ import {
   verifyClaimOtpSchema,
 } from '../validations/parentSchemas.js';
 
+import {
+  handleGetWardProfile,
+  handleGetWardAttendance,
+  handleGetWardMarksheets,
+  handleDownloadWardMarksheetPdf,
+  handleGetWardHomework,
+  handleGetWardCirculars,
+} from '../controllers/parentBffController.js';
+import { verifyParentWardLink } from '../middlewares/verifyParentWardLink.js';
+
 const router = express.Router();
 
 // All parent routes require authenticated session with PARENT role
@@ -52,5 +62,17 @@ router.get('/my-claims', handleGetMyClaims);
 
 // ─── 5. List Authoritative Verified Wards ───────────────────────────────────
 router.get('/my-wards', handleGetMyWards);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── 6. PARENT BFF WARD WORKSPACE (Guarded by verifyParentWardLink) ─────────
+// Core Invariant: Authenticated Parent → VERIFIED ParentStudentLink → 200, else 403
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/wards/:studentProfileId/profile', verifyParentWardLink, handleGetWardProfile);
+router.get('/wards/:studentProfileId/attendance', verifyParentWardLink, handleGetWardAttendance);
+router.get('/wards/:studentProfileId/marksheets', verifyParentWardLink, handleGetWardMarksheets);
+router.get('/wards/:studentProfileId/marksheets/:examId/download', verifyParentWardLink, handleDownloadWardMarksheetPdf);
+router.get('/wards/:studentProfileId/homework', verifyParentWardLink, handleGetWardHomework);
+router.get('/wards/:studentProfileId/circulars', verifyParentWardLink, handleGetWardCirculars);
 
 export default router;
