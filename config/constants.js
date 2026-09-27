@@ -212,3 +212,29 @@ export const PARENT_RELATIONSHIP = Object.freeze({
   MOTHER:   'MOTHER',
   GUARDIAN: 'GUARDIAN',
 });
+
+// ─── Timetable Engine Constants & Enums ──────────────────────────────────────
+
+export const TIMETABLE_SLOT_TYPE = Object.freeze({
+  TEACHING:         'TEACHING',
+  ASSEMBLY:         'ASSEMBLY',
+  RECESS:           'RECESS',
+  ZERO_PERIOD:      'ZERO_PERIOD',
+  SPECIAL_ACTIVITY: 'SPECIAL_ACTIVITY',
+});
+
+export const TIMETABLE_STATUS = Object.freeze({
+  ACTIVE:   'ACTIVE',
+  DRAFT:    'DRAFT',
+  ARCHIVED: 'ARCHIVED',
+});
+
+export const TIMETABLE_DAYS = Object.freeze([
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+]);
+

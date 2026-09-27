@@ -24,6 +24,7 @@ import documentRoutes from '../documentRoutes.js';
 import schoolInspectionRoutes from '../schoolInspectionRoutes.js';
 import parentRoutes from '../parentRoutes.js';
 import hmParentLinkRoutes from '../hmParentLinkRoutes.js';
+import timetableRoutes from '../timetableRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -106,7 +107,11 @@ router.use('/parent', parentRoutes);
 // Head Master Parent Link Verification Queue (Phase 3)
 router.use('/hm/parent-links', hmParentLinkRoutes);
 
+// Institutional Timetable Engine & Live Monitor (Option 3 / Phase G)
+router.use('/timetables', timetableRoutes);
+
 export default router;
+
 
 
 
