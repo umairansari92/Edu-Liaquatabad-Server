@@ -53,7 +53,7 @@ export const handleMfaSetup = asyncHandler(async (request, response) => {
 
   // Step-Up Authentication: If caller is authenticated via standard session, require password verification
   if (!request.mfaUser) {
-    const { password } = request.body || {};
+    const password = request.body?.password || request.body?.currentPassword;
     if (!password) {
       return sendError(response, 401, 'Password confirmation is required to initiate MFA setup from an active session.');
     }
@@ -643,7 +643,7 @@ export const handleMfaStatus = asyncHandler(async (request, response) => {
  * POST /api/v1/auth/mfa/disable
  */
 export const handleMfaDisable = asyncHandler(async (request, response) => {
-  const { password } = request.body;
+  const password = request.body?.password || request.body?.currentPassword;
 
   // Root Admin policy: Root Admin MFA is unconditional and CANNOT be disabled
   if (request.user.role === ROLES.ROOT_ADMIN) {
@@ -700,8 +700,8 @@ export const handleMfaDisable = asyncHandler(async (request, response) => {
  * POST /api/v1/auth/mfa/regenerate-recovery-codes
  */
 export const handleMfaRegenerateRecoveryCodes = asyncHandler(async (request, response) => {
-  const { password } = request.body;
-  const user = await User.findById(request.user.userId).select('+passwordHash +mfa +tokenVersion');
+  const password = request.body?.password || request.body?.currentPassword;
+  const user = await User.findById(request.user.userId).select('+passwordHash +mfa +tokenVersion +activeSessions');
 
   if (!user || !user.mfa?.enabled) {
     return sendError(response, 400, 'MFA is not enabled on this account.');
@@ -718,7 +718,55 @@ export const handleMfaRegenerateRecoveryCodes = asyncHandler(async (request, res
 
   // State-change invalidation: increment tokenVersion to revoke pre-existing sessions
   user.tokenVersion = (user.tokenVersion || 0) + 1;
+
+  // Re-issue a fresh authenticated session under the new tokenVersion for the active caller
+  const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+  const tokenPayload = {
+    userId: user._id,
+    role: user.role,
+    roleLevel,
+    designation: user.designation || '',
+    scope: user.scope,
+    tokenVersion: user.tokenVersion,
+    organizationId: user.organizationId,
+    townId: user.townId,
+    schoolId: user.schoolId,
+    assignedSchools: user.assignedSchools || [],
+    mfaVerified: true,
+  };
+
+  const sessionId = crypto.randomUUID();
+  const tokenFamilyId = crypto.randomUUID();
+  const deviceLabel = parseDeviceLabel(request.headers['user-agent']);
+
+  const refreshToken = signRefreshToken({
+    userId: user._id,
+    tokenVersion: user.tokenVersion,
+    sessionId,
+    tokenFamilyId,
+  });
+
+  const hashedRefreshToken = hashToken(refreshToken);
+
+  // Preserve only the current verified session under the new tokenVersion
+  user.activeSessions = [
+    {
+      sessionId,
+      tokenFamilyId,
+      refreshTokenHash: hashedRefreshToken,
+      previousRefreshTokenHash: null,
+      tokenRotatedAt: null,
+      deviceLabel,
+      mfaVerified: true,
+      createdAt: new Date(),
+      lastUsedAt: new Date(),
+    },
+  ];
+
   await user.save();
+
+  setRefreshCookie(response, refreshToken);
+  const accessToken = signAccessToken(tokenPayload);
 
   await AuditLog.create({
     actorId: user._id,
@@ -739,6 +787,7 @@ export const handleMfaRegenerateRecoveryCodes = asyncHandler(async (request, res
 
   return sendSuccess(response, 200, 'Emergency recovery codes regenerated successfully. Prior recovery codes have been revoked.', {
     recoveryCodes: recResult.plainCodes,
+    accessToken,
   });
 });
 

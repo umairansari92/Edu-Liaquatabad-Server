@@ -306,9 +306,19 @@ export const mfaRecoveryLoginSchema = z.object({
   mfaPendingToken: z.string().trim().optional(),
 });
 
-export const mfaStepUpPasswordSchema = z.object({
-  password: z.string().min(1, 'Password confirmation is required for this operation.').max(128),
-});
+export const mfaStepUpPasswordSchema = z
+  .object({
+    password: z.string().min(1, 'Password confirmation is required for this operation.').max(128).optional(),
+    currentPassword: z.string().min(1, 'Password confirmation is required for this operation.').max(128).optional(),
+  })
+  .refine((data) => Boolean(data.password || data.currentPassword), {
+    message: 'Password confirmation is required for this operation.',
+    path: ['password'],
+  })
+  .transform((data) => ({
+    password: data.password || data.currentPassword,
+    currentPassword: data.currentPassword || data.password,
+  }));
 
 export const adminMfaResetSchema = z.object({
   reason: safeString(300, 5, 'A clear justification reason (minimum 5 characters) is mandatory for resetting MFA.'),

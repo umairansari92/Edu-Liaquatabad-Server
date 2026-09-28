@@ -44,6 +44,7 @@ import {
 } from '../src/utils/tokenUtils.js';
 import { hashPassword, verifyPassword } from '../src/utils/passwordUtils.js';
 import { requireMfaVerified } from '../src/middlewares/requireMfa.js';
+import { mfaStepUpPasswordSchema } from '../src/validations/authSchemas.js';
 import { ROLES } from '../config/constants.js';
 
 let totalTests = 0;
@@ -671,6 +672,21 @@ async function runRootAdminMfaSuite() {
   const replayedTicketTokenVersion = 4;
   const replayInvalidated = replayedTicketTokenVersion !== activeUserTokenVersion;
   testAssert(replayInvalidated === true, 'Adversarial: Outdated MFA ticket strictly rejected on tokenVersion revocation');
+
+  // --- 18. Step-Up Authentication Schema Compatibility ---
+  const stepUpWithPassword = mfaStepUpPasswordSchema.safeParse({ password: 'TestAccountPassword123' });
+  testAssert(stepUpWithPassword.success === true, 'Step-Up Schema: Accepts standard { password } payload');
+  testAssert(stepUpWithPassword.data?.password === 'TestAccountPassword123', 'Step-Up Schema: Retains correct password value');
+
+  const stepUpWithCurrentPassword = mfaStepUpPasswordSchema.safeParse({ currentPassword: 'TestAccountPassword123' });
+  testAssert(stepUpWithCurrentPassword.success === true, 'Step-Up Schema: Accepts client { currentPassword } payload');
+  testAssert(stepUpWithCurrentPassword.data?.password === 'TestAccountPassword123', 'Step-Up Schema: Transforms currentPassword to password');
+
+  const stepUpEmpty = mfaStepUpPasswordSchema.safeParse({});
+  testAssert(stepUpEmpty.success === false, 'Step-Up Schema: Strictly rejects missing password payload (Fail-closed)');
+
+  const stepUpBlank = mfaStepUpPasswordSchema.safeParse({ password: '', currentPassword: '' });
+  testAssert(stepUpBlank.success === false, 'Step-Up Schema: Strictly rejects empty string password payload');
 
   console.log('\n================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} ROOT ADMIN MFA TESTS PASSED PERFECTLY!`);
