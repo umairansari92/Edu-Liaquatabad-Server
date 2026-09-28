@@ -41,6 +41,16 @@ export const handleMfaSetup = asyncHandler(async (request, response) => {
     return sendError(response, 401, 'User account not found.');
   }
 
+  // INVARIANT 1 (SEC-01): Fail-closed if MFA is already active on this account
+  if (user.mfa?.enabled === true) {
+    return sendError(response, 400, 'Multi-Factor Authentication is already active on this account. Re-enrollment is prohibited.');
+  }
+
+  // INVARIANT 2 (SEC-01): Intermediate MFA ticket must explicitly authorize setup
+  if (request.mfaUser && request.mfaTokenPayload?.requiresSetup !== true) {
+    return sendError(response, 403, 'MFA setup is not permitted with this authentication ticket. Complete standard MFA verification instead.');
+  }
+
   // Step-Up Authentication: If caller is authenticated via standard session, require password verification
   if (!request.mfaUser) {
     const { password } = request.body || {};
@@ -107,6 +117,13 @@ export const handleMfaConfirm = asyncHandler(async (request, response) => {
 
   if (!user || !user.mfa?.pendingSecret?.ciphertext) {
     return sendError(response, 400, 'No pending MFA setup found. Please initiate setup first.');
+  }
+
+  // INVARIANT (SEC-01 Defense-in-Depth): Reject confirmation if MFA is already enabled
+  if (user.mfa?.enabled === true) {
+    user.mfa.pendingSecret = undefined;
+    await user.save();
+    return sendError(response, 400, 'Multi-Factor Authentication is already active on this account.');
   }
 
   if (new Date() > new Date(user.mfa.pendingSecret.expiresAt)) {
@@ -211,6 +228,7 @@ export const handleMfaConfirm = asyncHandler(async (request, response) => {
       previousRefreshTokenHash: null,
       tokenRotatedAt: null,
       deviceLabel,
+      mfaVerified: true,
       createdAt: new Date(),
       lastUsedAt: new Date(),
     });
@@ -382,6 +400,7 @@ export const handleMfaVerifyLogin = asyncHandler(async (request, response) => {
     previousRefreshTokenHash: null,
     tokenRotatedAt: null,
     deviceLabel,
+    mfaVerified: true,
     createdAt: new Date(),
     lastUsedAt: new Date(),
   });
@@ -563,6 +582,7 @@ export const handleMfaRecoveryLogin = asyncHandler(async (request, response) => 
     previousRefreshTokenHash: null,
     tokenRotatedAt: null,
     deviceLabel,
+    mfaVerified: true,
     createdAt: new Date(),
     lastUsedAt: new Date(),
   });

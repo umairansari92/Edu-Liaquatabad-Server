@@ -1137,6 +1137,7 @@ export const handleLogin = asyncHandler(async (request, response) => {
     previousRefreshTokenHash: null,
     tokenRotatedAt: null,
     deviceLabel,
+    mfaVerified: false,
     createdAt: new Date(),
     lastUsedAt: new Date(),
   });
@@ -1208,7 +1209,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     return sendError(response, 401, 'Session token expired or invalid. Please sign in again.');
   }
 
-  const user = await User.findById(decoded.userId).select('+activeSessions +tokenVersion');
+  const user = await User.findById(decoded.userId).select('+activeSessions +tokenVersion +mfa.enabled');
   if (!user || user.status !== USER_STATUS.ACTIVE) {
     clearRefreshCookie(response);
     return sendError(response, 401, 'Account session revoked or account is no longer active.');
@@ -1236,6 +1237,10 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
 
   const session = user.activeSessions[sessionIndex];
 
+  // Strict Fail-Closed Invariant (SEC-02): MFA assurance MUST be an explicit boolean true on the session.
+  // Never inferred from role, account enrollment status, or undefined legacy session values.
+  const isMfaVerified = session.mfaVerified === true;
+
   // 3. Per-Session Rotation, Grace Window, and Reuse Detection Evaluation
   const tokenPayload = {
     userId: user._id,
@@ -1248,6 +1253,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     townId: user.townId,
     schoolId: user.schoolId,
     assignedSchools: user.assignedSchools || [],
+    mfaVerified: isMfaVerified,
   };
 
   // ─── Scenario A: Current Active Token Presented (Legitimate Routine Rotation) ───
@@ -1255,6 +1261,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     session.previousRefreshTokenHash = session.refreshTokenHash;
     session.tokenRotatedAt = new Date();
     session.lastUsedAt = new Date();
+    session.mfaVerified = isMfaVerified;
 
     const newRefreshToken = signRefreshToken({
       userId: user._id,
@@ -1284,6 +1291,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
         schoolId: user.schoolId,
         townId: user.townId,
         assignedSchools: user.assignedSchools || [],
+        mfaVerified: isMfaVerified,
       },
     });
   }
@@ -1314,6 +1322,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
           schoolId: user.schoolId,
           townId: user.townId,
           assignedSchools: user.assignedSchools || [],
+          mfaVerified: isMfaVerified,
         },
       });
     }

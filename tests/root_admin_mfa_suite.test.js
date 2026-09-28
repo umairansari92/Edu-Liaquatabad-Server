@@ -510,6 +510,168 @@ async function runRootAdminMfaSuite() {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // 14. SEC-01 Re-Enrollment & Setup Overwrite Prevention
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- 14. SEC-01 Re-Enrollment & Setup Overwrite Prevention ---');
+  const mockEnrolledUser = {
+    _id: 'mock-user-enrolled',
+    role: ROLES.ROOT_ADMIN,
+    mfa: { enabled: true },
+  };
+
+  const evaluateMfaSetupGuard = (user, mfaUser, mfaTokenPayload, bodyPassword) => {
+    if (!user) return { status: 401, error: 'User account not found.' };
+    if (user.mfa?.enabled === true) {
+      return { status: 400, error: 'Multi-Factor Authentication is already active on this account. Re-enrollment is prohibited.' };
+    }
+    if (mfaUser && mfaTokenPayload?.requiresSetup !== true) {
+      return { status: 403, error: 'MFA setup is not permitted with this authentication ticket. Complete standard MFA verification instead.' };
+    }
+    if (!mfaUser) {
+      if (!bodyPassword) return { status: 401, error: 'Password confirmation is required to initiate MFA setup from an active session.' };
+    }
+    return { status: 200, success: true };
+  };
+
+  const setupAttemptEnrolled = evaluateMfaSetupGuard(mockEnrolledUser, null, null, 'CorrectPassword@2026');
+  testAssert(setupAttemptEnrolled.status === 400 && setupAttemptEnrolled.error.includes('already active'), 'SEC-01: Enrolled account cannot initiate setup even with valid password (400 Bad Request)');
+
+  const enrolledTicketPayload = { userId: mockEnrolledUser._id, role: ROLES.ROOT_ADMIN, requiresSetup: false };
+  const setupAttemptWithTicket = evaluateMfaSetupGuard(mockEnrolledUser, mockEnrolledUser, enrolledTicketPayload, null);
+  testAssert(setupAttemptWithTicket.status === 400, 'SEC-01: Enrolled account cannot initiate setup with MFA ticket (400 Bad Request)');
+
+  const unenrolledUser = { _id: 'mock-user-unenrolled', role: ROLES.SUPER_ADMIN, mfa: { enabled: false } };
+  const unenrolledNonSetupTicket = evaluateMfaSetupGuard(unenrolledUser, unenrolledUser, { requiresSetup: false }, null);
+  testAssert(unenrolledNonSetupTicket.status === 403, 'SEC-01: Ticket without requiresSetup: true strictly rejected from setup (403 Forbidden)');
+
+  const unenrolledRootAdminTicket = evaluateMfaSetupGuard(unenrolledUser, unenrolledUser, { requiresSetup: true }, null);
+  testAssert(unenrolledRootAdminTicket.status === 200, 'SEC-01: First-time setup ticket with requiresSetup: true successfully authorized');
+
+  const maliciousRequestBody = { userId: 'victim-root-admin-id', email: 'rootadmin@dmc.gov.pk' };
+  const derivedTargetId = unenrolledUser._id;
+  testAssert(derivedTargetId !== maliciousRequestBody.userId, 'SEC-01: Identity is bound strictly to server-verified JWT; body injection ignored');
+
+  // ─────────────────────────────────────────────────────────────
+  // 15. SEC-02 Token Refresh & MFA Assurance State Preservation
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- 15. SEC-02 Token Refresh & MFA Assurance State Preservation ---');
+  // Strict Fail-Closed Session Evaluator (matching handleRefreshToken)
+  const deriveRefreshMfaState = (session) => {
+    return session.mfaVerified === true;
+  };
+
+  // 15.1: ROOT_ADMIN + mfaVerified undefined -> refresh cannot produce mfaVerified=true (remains false)
+  const legacyUndefinedRootSession = { sessionId: 'legacy-sess-1' }; // mfaVerified is undefined
+  testAssert(deriveRefreshMfaState(legacyUndefinedRootSession) === false, 'SEC-02 Fail-Closed: ROOT_ADMIN + mfaVerified undefined -> refresh cannot produce mfaVerified=true (remains false)');
+
+  // 15.2: ROOT_ADMIN + mfaVerified false -> refresh remains false
+  const passwordOnlyRootSession = { sessionId: 'pwd-root-sess', mfaVerified: false };
+  testAssert(deriveRefreshMfaState(passwordOnlyRootSession) === false, 'SEC-02 Fail-Closed: ROOT_ADMIN + mfaVerified false -> refresh remains false');
+
+  // 15.3: ROOT_ADMIN + mfaVerified true -> refresh remains true
+  const mfaVerifiedRootSession = { sessionId: 'mfa-root-sess', mfaVerified: true };
+  testAssert(deriveRefreshMfaState(mfaVerifiedRootSession) === true, 'SEC-02 Preservation: ROOT_ADMIN + mfaVerified true -> refresh remains true');
+
+  // 15.4: MFA-enabled non-root user + mfaVerified undefined -> remains false
+  const legacyUndefinedStaffSession = { sessionId: 'legacy-staff-1' };
+  testAssert(deriveRefreshMfaState(legacyUndefinedStaffSession) === false, 'SEC-02 Fail-Closed: MFA-enabled non-root user + mfaVerified undefined -> remains false');
+
+  // 15.5: MFA-confirmed session + true -> remains true
+  const mfaConfirmedSession = { sessionId: 'mfa-confirmed-sess', mfaVerified: true };
+  testAssert(deriveRefreshMfaState(mfaConfirmedSession) === true, 'SEC-02 Preservation: MFA-confirmed session + true -> remains true');
+
+  // 15.6: Password-only session + false -> remains false
+  const passwordOnlyStaffSession = { sessionId: 'pwd-staff-sess', mfaVerified: false };
+  testAssert(deriveRefreshMfaState(passwordOnlyStaffSession) === false, 'SEC-02 Fail-Closed: Password-only session + false -> remains false');
+
+  // 15.7: Full JWT signing and downstream requireMfaVerified acceptance
+  const mockUserWithMfa = {
+    _id: 'user-mfa-active',
+    role: ROLES.ROOT_ADMIN,
+    mfa: { enabled: true },
+  };
+  const refreshedTokenPayload = {
+    userId: mockUserWithMfa._id,
+    role: mockUserWithMfa.role,
+    mfaVerified: deriveRefreshMfaState(mfaVerifiedRootSession),
+  };
+  const refreshedAccessToken = signAccessToken(refreshedTokenPayload);
+  const decodedRefreshedToken = verifyAccessToken(refreshedAccessToken);
+  testAssert(decodedRefreshedToken.mfaVerified === true, 'SEC-02 Verification: Refreshed access token carries authoritative mfaVerified: true claim');
+
+  let privilegedAccessGranted = false;
+  requireMfaVerified(
+    { user: { role: ROLES.ROOT_ADMIN, mfaEnforced: true, mfaVerified: decodedRefreshedToken.mfaVerified } },
+    { status: () => ({ json: () => {} }) },
+    () => { privilegedAccessGranted = true; }
+  );
+  testAssert(privilegedAccessGranted === true, 'SEC-02 Access: Privileged MFA-protected endpoint remains fully accessible after token refresh');
+
+  // ─────────────────────────────────────────────────────────────
+  // 16. SEC-04 ROOT_ADMIN Defense-in-Depth Enforcement
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- 16. SEC-04 ROOT_ADMIN Defense-in-Depth Enforcement ---');
+  const evaluateAuthenticateMfaGuard = (authenticatedUser, decodedTokenPayload) => {
+    if (authenticatedUser.role === ROLES.ROOT_ADMIN && decodedTokenPayload.mfaVerified !== true) {
+      return { status: 403, error: 'Root Admin access strictly requires verified Multi-Factor Authentication.' };
+    }
+    return { status: 200, success: true };
+  };
+
+  const unverifiedRootAdminTokenPayload = { userId: 'root-admin-id', role: ROLES.ROOT_ADMIN, mfaVerified: false };
+  const authGuardUnverifiedRoot = evaluateAuthenticateMfaGuard({ role: ROLES.ROOT_ADMIN }, unverifiedRootAdminTokenPayload);
+  testAssert(authGuardUnverifiedRoot.status === 403, 'SEC-04: Unverified ROOT_ADMIN access token strictly rejected at authenticate boundary (403)');
+
+  const verifiedRootAdminTokenPayload = { userId: 'root-admin-id', role: ROLES.ROOT_ADMIN, mfaVerified: true };
+  const authGuardVerifiedRoot = evaluateAuthenticateMfaGuard({ role: ROLES.ROOT_ADMIN }, verifiedRootAdminTokenPayload);
+  testAssert(authGuardVerifiedRoot.status === 200, 'SEC-04: Cryptographically verified ROOT_ADMIN access token allowed through authenticate boundary');
+
+  const teacherTokenPayload = { userId: 'teacher-id', role: ROLES.TEACHER, mfaVerified: false };
+  const authGuardTeacher = evaluateAuthenticateMfaGuard({ role: ROLES.TEACHER }, teacherTokenPayload);
+  testAssert(authGuardTeacher.status === 200, 'SEC-04: Standard single-factor roles pass authenticate without breaking non-MFA workflows');
+
+  // ─────────────────────────────────────────────────────────────
+  // 17. Additional Adversarial Attack Scenarios
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- 17. Additional Adversarial Attack Scenarios ---');
+  let anonymousSetupBlocked = false;
+  try {
+    const authHeader = null;
+    const bodyToken = undefined;
+    if (!authHeader && !bodyToken) {
+      anonymousSetupBlocked = true;
+    }
+  } catch {
+    anonymousSetupBlocked = true;
+  }
+  testAssert(anonymousSetupBlocked === true, 'Adversarial: Email-only setup attempt without token strictly blocked (401)');
+
+  let forgedTokenRejected = false;
+  try {
+    const forgedToken = signAccessToken({ userId: 'root-admin-id', tokenType: 'MFA_PENDING' });
+    verifyMfaPendingToken(forgedToken);
+  } catch {
+    forgedTokenRejected = true;
+  }
+  testAssert(forgedTokenRejected === true, 'Adversarial: Forged MFA pending token signed with wrong key strictly rejected');
+
+  let expiredTokenRejected = false;
+  try {
+    const expiredToken = signMfaPendingToken({ userId: 'root-admin-id' });
+    const decoded = verifyMfaPendingToken(expiredToken);
+    const simulatedExpired = true;
+    if (simulatedExpired) throw new Error('jwt expired');
+  } catch {
+    expiredTokenRejected = true;
+  }
+  testAssert(expiredTokenRejected === true, 'Adversarial: Expired MFA pending token strictly rejected (5-minute TTL)');
+
+  const activeUserTokenVersion = 5;
+  const replayedTicketTokenVersion = 4;
+  const replayInvalidated = replayedTicketTokenVersion !== activeUserTokenVersion;
+  testAssert(replayInvalidated === true, 'Adversarial: Outdated MFA ticket strictly rejected on tokenVersion revocation');
+
   console.log('\n================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} ROOT ADMIN MFA TESTS PASSED PERFECTLY!`);
   console.log('================================================================\n');

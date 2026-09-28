@@ -8,6 +8,7 @@ const ActiveSessionSchema = new mongoose.Schema({
   previousRefreshTokenHash: { type: String, default: null },
   tokenRotatedAt: { type: Date, default: null },
   deviceLabel: { type: String, default: 'Unknown Device' },
+  mfaVerified: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
   lastUsedAt: { type: Date, default: Date.now },
 }, { _id: false });

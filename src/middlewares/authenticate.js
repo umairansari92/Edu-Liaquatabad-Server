@@ -62,6 +62,12 @@ export const authenticate = async (request, response, nextFunction) => {
       mfaEnforced: authenticatedUser.role === ROLES.ROOT_ADMIN || authenticatedUser.mfa?.enabled === true,
     };
 
+    // INVARIANT (SEC-04 Defense-in-Depth): ROOT_ADMIN access strictly mandates verified MFA assurance.
+    // Unverified ROOT_ADMIN access tokens cannot access application endpoints.
+    if (authenticatedUser.role === ROLES.ROOT_ADMIN && decodedTokenPayload.mfaVerified !== true) {
+      return sendError(response, 403, 'Root Admin access strictly requires verified Multi-Factor Authentication.');
+    }
+
     nextFunction();
   } catch (authenticationError) {
     return sendError(response, 401, 'Session expired or token invalid.', [{ message: authenticationError.message }]);
