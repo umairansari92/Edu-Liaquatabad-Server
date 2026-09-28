@@ -792,6 +792,231 @@ export const handleMfaRegenerateRecoveryCodes = asyncHandler(async (request, res
 });
 
 /**
+ * Initiate MFA Device Rotation (Reconfigure Authenticator on New Phone)
+ * POST /api/v1/auth/mfa/rotate-device
+ * Requires: Authenticated session + mfaVerified: true + Step-Up password
+ */
+export const handleMfaRotateDevice = asyncHandler(async (request, response) => {
+  const password = request.body?.password || request.body?.currentPassword;
+  const user = await User.findById(request.user.userId).select(
+    '+passwordHash +mfa.secretCiphertext +mfa.secretIv +mfa.secretTag +mfa.pendingSecret +tokenVersion'
+  );
+
+  if (!user || !user.mfa?.enabled) {
+    return sendError(response, 400, 'Multi-Factor Authentication is not enabled on this account.');
+  }
+
+  // Step-up authentication: require current password confirmation
+  const isPasswordValid = await verifyPassword(password || '', user.passwordHash);
+  if (!isPasswordValid) {
+    return sendError(response, 401, 'Invalid password. Password confirmation is required to rotate authenticator device.');
+  }
+
+  // Generate a fresh 20-byte Base32 secret for the new device
+  const plaintextSecret = generateTotpSecret();
+  const encrypted = encryptMfaSecret(plaintextSecret);
+
+  // Store as unconfirmed pendingSecret (10-minute validity window)
+  user.mfa.pendingSecret = {
+    ciphertext: encrypted.ciphertext,
+    iv: encrypted.iv,
+    tag: encrypted.tag,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  };
+
+  await user.save();
+
+  const otpAuthUri = generateTotpUri({
+    secret: plaintextSecret,
+    accountName: user.email,
+  });
+
+  await AuditLog.create({
+    actorId: user._id,
+    actorRole: user.role,
+    actorDesignation: user.designation || '',
+    actorName: user.fullName,
+    action: 'MFA_DEVICE_ROTATION_INITIATED',
+    targetModel: 'User',
+    targetId: user._id,
+    targetName: user.fullName,
+    townId: user.townId,
+    schoolId: user.schoolId || null,
+    result: 'SUCCESS',
+    reason: 'User initiated MFA device reconfiguration for new phone.',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Device rotation initiated. Scan the new QR code or enter the key on your new device.', {
+    secret: plaintextSecret,
+    otpAuthUri,
+  });
+});
+
+/**
+ * Confirm MFA Device Rotation (Activate New Authenticator on New Phone)
+ * POST /api/v1/auth/mfa/confirm-device-rotation
+ * Requires: Authenticated session + mfaVerified: true + 6-digit TOTP code from NEW device
+ */
+export const handleMfaConfirmDeviceRotation = asyncHandler(async (request, response) => {
+  const { totpCode } = request.body;
+  const user = await User.findById(request.user.userId).select(
+    '+mfa.secretCiphertext +mfa.secretIv +mfa.secretTag +mfa.pendingSecret +mfa.recoveryCodes +tokenVersion +activeSessions'
+  );
+
+  if (!user || !user.mfa?.enabled) {
+    return sendError(response, 400, 'Multi-Factor Authentication is not enabled on this account.');
+  }
+
+  const pending = user.mfa?.pendingSecret;
+  if (!pending || !pending.ciphertext || !pending.expiresAt) {
+    return sendError(response, 400, 'No active device rotation pending. Please initiate device setup first.');
+  }
+
+  if (new Date() > new Date(pending.expiresAt)) {
+    user.mfa.pendingSecret = null;
+    await user.save();
+    return sendError(response, 400, 'Pending device rotation has expired. Please initiate device setup again.');
+  }
+
+  // Decrypt pending secret
+  let plaintextSecret;
+  try {
+    plaintextSecret = decryptMfaSecret({
+      ciphertext: pending.ciphertext,
+      iv: pending.iv,
+      tag: pending.tag,
+    });
+  } catch {
+    return sendError(response, 500, 'Failed to decrypt pending secret. Please initiate setup again.');
+  }
+
+  // Verify TOTP token from NEW device
+  const verification = verifyTotpToken(plaintextSecret, totpCode, 0);
+  if (!verification.valid) {
+    await AuditLog.create({
+      actorId: user._id,
+      actorRole: user.role,
+      actorDesignation: user.designation || '',
+      actorName: user.fullName,
+      action: 'MFA_DEVICE_ROTATION_CONFIRM_FAILED',
+      targetModel: 'User',
+      targetId: user._id,
+      targetName: user.fullName,
+      townId: user.townId,
+      schoolId: user.schoolId || null,
+      result: 'DENIED',
+      reason: 'INVALID_TOTP_CODE_FROM_NEW_DEVICE',
+      ipAddress: request.ip || '',
+      userAgent: request.headers['user-agent'] || '',
+      requestId: request.headers['x-request-id'] || '',
+    });
+    return sendError(response, 401, 'Invalid 6-digit verification code from new authenticator app. Check your device clock.');
+  }
+
+  // Atomically activate new secret & clear pendingSecret
+  user.mfa.secretCiphertext = pending.ciphertext;
+  user.mfa.secretIv = pending.iv;
+  user.mfa.secretTag = pending.tag;
+  user.mfa.pendingSecret = null;
+  user.mfa.lastUsedAt = new Date();
+  user.mfa.lastConsumedWindow = verification.matchedWindow;
+
+  // Generate 8 fresh emergency recovery codes for the rotated device
+  const recResult = await generateRecoveryCodes(8);
+  user.mfa.recoveryCodes = recResult.hashedCodes;
+
+  // Invalidate all other sessions across devices (State Change Invalidation)
+  user.tokenVersion = (user.tokenVersion || 0) + 1;
+
+  // Re-issue active session for the current caller under new tokenVersion
+  const roleLevel = ROLE_HIERARCHY[user.role] || 0;
+  const tokenPayload = {
+    userId: user._id,
+    role: user.role,
+    roleLevel,
+    designation: user.designation || '',
+    scope: user.scope,
+    tokenVersion: user.tokenVersion,
+    organizationId: user.organizationId,
+    townId: user.townId,
+    schoolId: user.schoolId,
+    assignedSchools: user.assignedSchools || [],
+    mfaVerified: true,
+  };
+
+  const sessionId = crypto.randomUUID();
+  const tokenFamilyId = crypto.randomUUID();
+  const deviceLabel = parseDeviceLabel(request.headers['user-agent']);
+
+  const refreshToken = signRefreshToken({
+    userId: user._id,
+    tokenVersion: user.tokenVersion,
+    sessionId,
+    tokenFamilyId,
+  });
+
+  const hashedRefreshToken = hashToken(refreshToken);
+
+  user.activeSessions = [
+    {
+      sessionId,
+      tokenFamilyId,
+      refreshTokenHash: hashedRefreshToken,
+      previousRefreshTokenHash: null,
+      tokenRotatedAt: null,
+      deviceLabel,
+      mfaVerified: true,
+      createdAt: new Date(),
+      lastUsedAt: new Date(),
+    },
+  ];
+
+  await user.save();
+
+  setRefreshCookie(response, refreshToken);
+  const accessToken = signAccessToken(tokenPayload);
+
+  // Record High-Severity Audit Event
+  await AuditLog.create({
+    actorId: user._id,
+    actorRole: user.role,
+    actorDesignation: user.designation || '',
+    actorName: user.fullName,
+    action: 'MFA_DEVICE_ROTATED',
+    targetModel: 'User',
+    targetId: user._id,
+    targetName: user.fullName,
+    townId: user.townId,
+    schoolId: user.schoolId || null,
+    result: 'SUCCESS',
+    reason: 'Multi-Factor Authentication secret successfully rotated to new authenticator device. Prior device revoked.',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  // Alert all Super Admins
+  const superAdmins = await User.find({ role: ROLES.SUPER_ADMIN, status: USER_STATUS.ACTIVE });
+  for (const sa of superAdmins) {
+    await Notification.create({
+      recipientUserId: sa._id,
+      title: 'SECURITY NOTICE: MFA Authenticator Device Rotated',
+      message: `Account ${user.fullName} (${user.role}) has successfully rotated their MFA Authenticator app to a new mobile device.`,
+      notificationType: 'SECURITY_ALERT',
+      actionLink: '/dashboard',
+    });
+  }
+
+  return sendSuccess(response, 200, 'Authenticator device successfully updated to your new mobile phone! Prior device has been revoked.', {
+    recoveryCodes: recResult.plainCodes,
+    accessToken,
+  });
+});
+
+/**
  * Admin Reset MFA for Subordinate User
  * POST /api/v1/auth/mfa/admin-reset/:userId
  *

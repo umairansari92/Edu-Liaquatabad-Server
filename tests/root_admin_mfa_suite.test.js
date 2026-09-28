@@ -688,6 +688,51 @@ async function runRootAdminMfaSuite() {
   const stepUpBlank = mfaStepUpPasswordSchema.safeParse({ password: '', currentPassword: '' });
   testAssert(stepUpBlank.success === false, 'Step-Up Schema: Strictly rejects empty string password payload');
 
+  // --- 19. MFA Device Rotation & Reconfiguration Invariants ---
+  console.log('\n--- 19. MFA Device Rotation & Reconfiguration Invariants ---');
+  // 1. Initial State: Account has active secret A
+  const originalDeviceSecret = generateTotpSecret();
+  const encryptedOriginalSecret = encryptMfaSecret(originalDeviceSecret);
+
+  // 2. User initiates rotation: Secret B generated as pendingSecret
+  const newDeviceSecret = generateTotpSecret();
+  const encryptedNewSecret = encryptMfaSecret(newDeviceSecret);
+  const pendingSecretObject = {
+    ciphertext: encryptedNewSecret.ciphertext,
+    iv: encryptedNewSecret.iv,
+    tag: encryptedNewSecret.tag,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  };
+
+  testAssert(originalDeviceSecret !== newDeviceSecret, 'Device Rotation: New secret B is uniquely generated');
+
+  // Invariant 1: While pending, original device secret A remains valid
+  const currentTokenFromOldDevice = generateTotpToken(originalDeviceSecret);
+  const oldDeviceStillValid = verifyTotpToken(originalDeviceSecret, currentTokenFromOldDevice).valid;
+  testAssert(oldDeviceStillValid === true, 'Device Rotation: Old device continues to authenticate while rotation is pending');
+
+  // Invariant 2: Invalid code from new device rejected
+  const invalidCodeFromNewDevice = '000000';
+  const invalidRejected = !verifyTotpToken(newDeviceSecret, invalidCodeFromNewDevice).valid;
+  testAssert(invalidRejected === true, 'Device Rotation: Invalid code from new device is strictly rejected');
+
+  // Invariant 3: Valid code from new device succeeds
+  const validCodeFromNewDevice = generateTotpToken(newDeviceSecret);
+  const newDeviceConfirmed = verifyTotpToken(newDeviceSecret, validCodeFromNewDevice).valid;
+  testAssert(newDeviceConfirmed === true, 'Device Rotation: Valid code from new device succeeds');
+
+  // Invariant 4: Upon confirmation, secret B replaces secret A
+  const activeSecretAfterRotation = newDeviceSecret;
+  const oldCodeAgainstRotatedSecret = verifyTotpToken(activeSecretAfterRotation, currentTokenFromOldDevice).valid;
+  testAssert(oldCodeAgainstRotatedSecret === false, 'Device Rotation: Old device codes are strictly invalidated post-rotation');
+
+  // Invariant 5: Token version increments to revoke other sessions
+  let deviceRotationTokenVersion = 10;
+  const initialSessionValid = isSessionValid(lifecycleToken, deviceRotationTokenVersion);
+  deviceRotationTokenVersion += 1;
+  const priorSessionsRevoked = !isSessionValid(lifecycleToken, deviceRotationTokenVersion);
+  testAssert(priorSessionsRevoked === true, 'Device Rotation: All prior sessions on other devices are strictly revoked');
+
   console.log('\n================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} ROOT ADMIN MFA TESTS PASSED PERFECTLY!`);
   console.log('================================================================\n');

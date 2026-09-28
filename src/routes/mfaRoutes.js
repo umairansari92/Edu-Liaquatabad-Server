@@ -7,6 +7,8 @@ import {
   handleMfaStatus,
   handleMfaDisable,
   handleMfaRegenerateRecoveryCodes,
+  handleMfaRotateDevice,
+  handleMfaConfirmDeviceRotation,
   handleAdminMfaReset,
 } from '../controllers/mfaController.js';
 import {
@@ -116,6 +118,25 @@ router.post(
   requireMfaVerified,
   validate(mfaStepUpPasswordSchema),
   handleMfaRegenerateRecoveryCodes
+);
+
+// ─── Authenticator Device Rotation / Reconfiguration (Step-up required) ───────
+router.post(
+  '/rotate-device',
+  mfaSetupLimiter,
+  authenticate,
+  requireMfaVerified,
+  validate(mfaStepUpPasswordSchema),
+  handleMfaRotateDevice
+);
+
+router.post(
+  '/confirm-device-rotation',
+  mfaSetupLimiter,
+  authenticate,
+  requireMfaVerified,
+  validate(mfaConfirmSetupSchema),
+  handleMfaConfirmDeviceRotation
 );
 
 // ─── Admin Reset Subordinate MFA (Privileged Session + mfaVerified) ───────────
