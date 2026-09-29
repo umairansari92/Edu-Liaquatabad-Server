@@ -64,7 +64,7 @@ export const signMfaPendingToken = (payload) => {
     getMfaPendingSecret(),
     {
       algorithm: 'HS256',
-      expiresIn: '5m', // Short-lived 5-minute boundary
+      expiresIn: '15m', // Relaxed 15-minute window prevents premature timeout
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
     }
