@@ -6,6 +6,8 @@ import {
   handleGetUserById,
   handleGetUserAuditHistory,
   handleBulkUserAction,
+  handleGetUserSummaryCounts,
+  handleAssignEmployeeSchool,
 } from '../controllers/userManagementController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeHierarchy } from '../middlewares/authorizeHierarchy.js';
@@ -13,7 +15,12 @@ import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
 import { blockRootAdminCreation } from '../middlewares/blockRootAdminCreation.js';
 import { validate } from '../middlewares/validate.js';
-import { assignRoleSchema, updateLifecycleSchema, bulkUserActionSchema } from '../validations/userSchemas.js';
+import {
+  assignRoleSchema,
+  updateLifecycleSchema,
+  bulkUserActionSchema,
+  assignSchoolSchema,
+} from '../validations/userSchemas.js';
 import { PERMISSIONS } from '../config/permissions.js';
 
 const router = express.Router();
@@ -24,6 +31,14 @@ router.get(
   authenticate,
   authorizePermissions(PERMISSIONS.USERS_VIEW),
   handleGetUsers
+);
+
+// ─── Scoped User Summary Counts (Must precede /:id parameterized route) ───────
+router.get(
+  '/summary-counts',
+  authenticate,
+  authorizePermissions(PERMISSIONS.USERS_VIEW),
+  handleGetUserSummaryCounts
 );
 
 // ─── Get User by ID (Protected Identity Enforcement) ──────────────────────────
@@ -44,6 +59,16 @@ router.post(
   handleBulkUserAction
 );
 
+// ─── Assign School to Employee ────────────────────────────────────────────────
+router.patch(
+  '/:id/assign-school',
+  authenticate,
+  authorizePermissions(PERMISSIONS.USERS_ASSIGN_ROLE),
+  authorizeHierarchy,
+  authorizeScope,
+  validate(assignSchoolSchema),
+  handleAssignEmployeeSchool
+);
 
 // ─── Assign Designation, Role & Scope (Hierarchy, Scope & Ceiling Protected) ───
 // blockRootAdminCreation: prevents body injection of role: ROOT_ADMIN by non-root actors

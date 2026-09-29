@@ -3,6 +3,8 @@ import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import User from '../models/User.js';
 import School from '../models/School.js';
 import TeacherProfile from '../models/TeacherProfile.js';
+import StudentProfile from '../models/StudentProfile.js';
+import ParentStudentLink from '../models/ParentStudentLink.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
 import { validatePermissionCeiling } from '../config/permissions.js';
@@ -377,11 +379,79 @@ export const handleUpdateUserStatus = asyncHandler(async (request, response) => 
 });
 
 /**
+ * Get User Summary Counts Scoped by Caller Permissions
+ * GET /api/v1/users/summary-counts
+ */
+export const handleGetUserSummaryCounts = asyncHandler(async (request, response) => {
+  const query = {};
+
+  // Apply scope boundaries
+  if (request.user.role === ROLES.SUPERVISOR) {
+    query.schoolId = { $in: request.user.assignedSchools || [] };
+  } else if ([ROLES.HM, ROLES.TEACHER].includes(request.user.role)) {
+    query.schoolId = request.user.schoolId;
+  } else if (request.user.role === ROLES.ADMIN) {
+    if (!request.user.townId) {
+      return sendError(response, 403, 'Access denied. Town Administrator must be assigned to a valid town.');
+    }
+    query.townId = request.user.townId;
+  }
+
+  // Hide ROOT_ADMIN from non-root actors
+  const baseMatch = { ...query };
+  if (request.user.role !== ROLES.ROOT_ADMIN) {
+    baseMatch.role = { $ne: ROLES.ROOT_ADMIN };
+  }
+
+  const roleCounts = await User.aggregate([
+    { $match: baseMatch },
+    { $group: { _id: '$role', count: { $sum: 1 } } },
+  ]);
+
+  const countsMap = {};
+  roleCounts.forEach((rc) => {
+    countsMap[rc._id] = rc.count;
+  });
+
+  const totalTeachers = countsMap[ROLES.TEACHER] || 0;
+  const totalHMs = countsMap[ROLES.HM] || 0;
+  const totalPeons = countsMap[ROLES.PEON] || 0;
+  const totalSupervisors = countsMap[ROLES.SUPERVISOR] || 0;
+  const totalAdmins = countsMap[ROLES.ADMIN] || 0;
+  const totalSuperAdmins = countsMap[ROLES.SUPER_ADMIN] || 0;
+  const totalRootAdmins = countsMap[ROLES.ROOT_ADMIN] || 0;
+  const totalStudents = countsMap[ROLES.STUDENT] || 0;
+  const totalParents = countsMap[ROLES.PARENT] || 0;
+
+  const totalEmployees =
+    totalTeachers +
+    totalHMs +
+    totalPeons +
+    totalSupervisors +
+    totalAdmins +
+    totalSuperAdmins +
+    totalRootAdmins;
+
+  const totalAdminStaff = totalSupervisors + totalAdmins + totalSuperAdmins + totalRootAdmins + totalPeons;
+  const totalAccounts = totalEmployees + totalStudents + totalParents;
+
+  return sendSuccess(response, 200, 'User summary counts retrieved successfully.', {
+    totalAccounts,
+    totalEmployees,
+    totalTeachers,
+    totalHMs,
+    totalAdminStaff,
+    totalStudents,
+    totalParents,
+  });
+});
+
+/**
  * Get Users Scoped by Caller Permissions and Role Protection Policies
  * GET /api/v1/users
  */
 export const handleGetUsers = asyncHandler(async (request, response) => {
-  const { role, status, schoolId, search, page = 1, limit = 20 } = request.query;
+  const { role, status, schoolId, search, category, page = 1, limit = 20 } = request.query;
 
   const query = {};
 
@@ -420,6 +490,23 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     }
   }
 
+  // Category Filtering (EMPLOYEES, STUDENTS, PARENTS, ALL)
+  if (category === 'EMPLOYEE') {
+    if (!role) {
+      if (query.role && typeof query.role === 'object' && query.role.$nin) {
+        query.role.$nin = Array.from(new Set([...query.role.$nin, ROLES.STUDENT, ROLES.PARENT]));
+      } else if (query.role && typeof query.role === 'object' && query.role.$ne) {
+        query.role = { $nin: [query.role.$ne, ROLES.STUDENT, ROLES.PARENT] };
+      } else {
+        query.role = { $nin: [ROLES.STUDENT, ROLES.PARENT, ROLES.ROOT_ADMIN] };
+      }
+    }
+  } else if (category === 'STUDENT') {
+    query.role = ROLES.STUDENT;
+  } else if (category === 'PARENT') {
+    query.role = ROLES.PARENT;
+  }
+
   if (status) query.status = status;
   if (schoolId && (!query.schoolId || [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(request.user.role))) {
     query.schoolId = schoolId;
@@ -449,11 +536,150 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     User.countDocuments(query),
   ]);
 
+  // Enrich Users with Profile Metadata
+  const userIds = users.map((u) => u._id);
+  const [teacherProfiles, studentProfiles, parentLinks] = await Promise.all([
+    TeacherProfile.find({ userId: { $in: userIds } })
+      .select('userId employeeId cnic joiningDate qualification specializationSubjects')
+      .lean(),
+    StudentProfile.find({ userId: { $in: userIds } })
+      .select('userId grNumber admissionRegisterNumber bFormNumber classId sectionId schoolId')
+      .populate('classId', 'name grade')
+      .populate('sectionId', 'name')
+      .lean(),
+    ParentStudentLink.find({ parentId: { $in: userIds } })
+      .select('parentId studentProfileId relationship verificationStatus schoolId')
+      .populate({
+        path: 'studentProfileId',
+        select: 'studentFullName grNumber admissionRegisterNumber classId sectionId',
+        populate: [
+          { path: 'classId', select: 'name grade' },
+          { path: 'sectionId', select: 'name' },
+        ],
+      })
+      .populate('schoolId', 'name schoolCode')
+      .lean(),
+  ]);
+
+  const teacherMap = new Map(teacherProfiles.map((tp) => [String(tp.userId), tp]));
+  const studentMap = new Map(studentProfiles.map((sp) => [String(sp.userId), sp]));
+  const parentMap = new Map();
+  parentLinks.forEach((link) => {
+    const parentIdString = String(link.parentId);
+    if (!parentMap.has(parentIdString)) parentMap.set(parentIdString, []);
+    parentMap.get(parentIdString).push(link);
+  });
+
+  const enrichedUsers = users.map((u) => {
+    const plainUser = u.toObject ? u.toObject() : { ...u };
+    const userIdString = String(plainUser._id);
+    if (teacherMap.has(userIdString)) {
+      plainUser.teacherProfile = teacherMap.get(userIdString);
+    }
+    if (studentMap.has(userIdString)) {
+      plainUser.studentProfile = studentMap.get(userIdString);
+    }
+    if (parentMap.has(userIdString)) {
+      plainUser.linkedWards = parentMap.get(userIdString);
+    }
+    return plainUser;
+  });
+
   return sendSuccess(response, 200, 'Users retrieved successfully.', {
-    users,
+    users: enrichedUsers,
     total,
     page: safePage,
     totalPages: Math.ceil(total / safeLimit),
+  });
+});
+
+/**
+ * Assign Employee to Municipal School
+ * PATCH /api/v1/users/:id/assign-school
+ */
+export const handleAssignEmployeeSchool = asyncHandler(async (request, response) => {
+  const targetUser = request.targetUser || (await User.findById(request.params.id));
+  if (!targetUser) {
+    return sendError(response, 404, 'Target employee account not found.');
+  }
+
+  const requestingActor = request.user;
+  const { schoolId, designation, reason } = request.body;
+
+  // Block academic beneficiaries from employee school assignments
+  if ([ROLES.STUDENT, ROLES.PARENT].includes(targetUser.role)) {
+    return sendError(response, 400, 'Invalid operation: School assignment is reserved for institutional employee records.');
+  }
+
+  // Block mutation of Root Admin
+  if (targetUser.role === ROLES.ROOT_ADMIN) {
+    return sendError(response, 403, 'Forbidden: ROOT_ADMIN accounts are immutable via web APIs.');
+  }
+
+  // Validate target school exists in municipal registry
+  const targetSchool = await School.findById(schoolId).lean();
+  if (!targetSchool) {
+    return sendError(response, 404, 'Specified municipal school entity not found in registry.');
+  }
+
+  // Capture previous state
+  const previousState = {
+    schoolId: targetUser.schoolId || null,
+    designation: targetUser.designation || '',
+    tokenVersion: targetUser.tokenVersion || 0,
+  };
+
+  targetUser.schoolId = targetSchool._id;
+  if (designation) {
+    targetUser.designation = String(designation).trim();
+  }
+
+  // Update TeacherProfile if one exists
+  await TeacherProfile.findOneAndUpdate(
+    { userId: targetUser._id },
+    {
+      currentSchoolId: targetSchool._id,
+      ...(designation ? { designation: String(designation).trim() } : {}),
+    },
+    { upsert: false }
+  );
+
+  // Invalidate token version to refresh JWT claims
+  targetUser.tokenVersion = (targetUser.tokenVersion || 0) + 1;
+  await targetUser.save();
+  await targetUser.populate('schoolId', 'name schoolCode emisCode');
+
+  // Capture new state
+  const newState = {
+    schoolId: targetUser.schoolId._id,
+    schoolName: targetUser.schoolId.name,
+    designation: targetUser.designation,
+    tokenVersion: targetUser.tokenVersion,
+  };
+
+  // Create immutable AuditLog entry
+  await AuditLog.create({
+    actorId: requestingActor._id || requestingActor.userId,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName || '',
+    action: 'EMPLOYEE_SCHOOL_ASSIGNED',
+    targetModel: 'User',
+    targetId: targetUser._id,
+    targetName: targetUser.fullName,
+    townId: requestingActor.townId || targetUser.townId,
+    schoolId: targetSchool._id,
+    previousState,
+    newState,
+    result: 'SUCCESS',
+    reason: reason || `Assigned to ${targetSchool.name}`,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, `Employee successfully assigned to ${targetSchool.name}.`, {
+    user: targetUser,
   });
 });
 

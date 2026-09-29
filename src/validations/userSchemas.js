@@ -92,5 +92,15 @@ export const flushLockoutsSchema = z.object({
   }),
 }).strict();
 
+/**
+ * Zod Schema: Assign Employee to Municipal School
+ */
+export const assignSchoolSchema = z.object({
+  schoolId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid School ID format.'),
+  designation: safeString(100).optional(),
+  effectiveDate: z.string().optional(),
+  reason: safeString(500).optional(),
+}).strict();
+
 
 
