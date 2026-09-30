@@ -12,10 +12,11 @@ export const authenticateMfaPending = async (request, response, nextFunction) =>
     const authHeader = request.headers.authorization;
     let bearerToken = null;
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      bearerToken = authHeader.split(' ')[1];
-    } else if (request.body?.mfaPendingToken) {
+    // 1. Prioritize explicit mfaPendingToken from request body (prevents stale access token collisions)
+    if (request.body?.mfaPendingToken) {
       bearerToken = request.body.mfaPendingToken;
+    } else if (authHeader && authHeader.startsWith('Bearer ')) {
+      bearerToken = authHeader.split(' ')[1];
     }
 
     if (!bearerToken) {

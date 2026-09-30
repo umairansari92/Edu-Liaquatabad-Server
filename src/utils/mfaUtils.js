@@ -215,7 +215,7 @@ export const verifyTotpToken = (
   }
 
   const currentWindow = Math.floor(timestampMs / 30000);
-  // Allowed drift: [-1, 0, +1] (covers 30s past, current, and 30s future)
+  // RFC 6238 standard tolerance window: [-1, 0, +1] (30s past, current, 30s future)
   const candidateWindows = [currentWindow, currentWindow - 1, currentWindow + 1];
 
   for (const win of candidateWindows) {
