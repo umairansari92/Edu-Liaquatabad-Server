@@ -48,7 +48,8 @@ const ScheduleEntrySchema = new mongoose.Schema({
   sectionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Section',
-    required: true,
+    required: false,
+    default: null,
     index: true,
   },
   subjectId: {

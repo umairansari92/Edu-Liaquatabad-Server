@@ -32,7 +32,7 @@ export const scheduleEntrySchema = z.object({
   }),
   periodNumber: z.number().int().min(0).max(25),
   classId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid classId format.'),
-  sectionId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid sectionId format.'),
+  sectionId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid sectionId format.').optional().nullable(),
   subjectId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid subjectId format.').optional().nullable(),
   teacherId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid teacherId format.').optional().nullable(),
   roomNumber: safeString(30).optional().default(''),

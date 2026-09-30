@@ -187,11 +187,11 @@ export const validateTimetableConflicts = async ({
       );
     }
 
-    // A. Class/Section Clash Check (same class + section cannot have multiple subjects at same day+period)
-    const classSectionKey = `${entry.dayOfWeek}_${entry.periodNumber}_${entry.classId}_${entry.sectionId}`;
+    // A. Class/Section Clash Check (same class cannot have multiple subjects at same day+period)
+    const classSectionKey = `${entry.dayOfWeek}_${entry.periodNumber}_${entry.classId}_${entry.sectionId || 'CLASS'}`;
     if (classSectionAssignedKeys.has(classSectionKey)) {
       throw new TimetableValidationError(
-        `Class/Section double-booking: Section is already scheduled on ${entry.dayOfWeek} for period ${entry.periodNumber}.`,
+        `Class/Section double-booking: Class is already scheduled on ${entry.dayOfWeek} for period ${entry.periodNumber}.`,
         409,
         'SECTION_PERIOD_CLASH',
         { dayOfWeek: entry.dayOfWeek, periodNumber: entry.periodNumber, classId: entry.classId, sectionId: entry.sectionId }
@@ -216,7 +216,7 @@ export const validateTimetableConflicts = async ({
 
   // ── 4. Collect IDs for Batch Database Verification ───────────────────────────
   const uniqueClassIds = [...new Set(schedule.map((entry) => String(entry.classId)))];
-  const uniqueSectionIds = [...new Set(schedule.map((entry) => String(entry.sectionId)))];
+  const uniqueSectionIds = [...new Set(schedule.map((entry) => entry.sectionId ? String(entry.sectionId) : null).filter(Boolean))];
   const uniqueSubjectIds = [...new Set(schedule.filter((entry) => entry.subjectId).map((entry) => String(entry.subjectId)))];
   const uniqueTeacherIds = [...new Set(schedule.filter((entry) => entry.teacherId).map((entry) => String(entry.teacherId)))];
 
@@ -249,6 +249,7 @@ export const validateTimetableConflicts = async ({
     const sectionMap = new Map(sectionRecords.map((sec) => [String(sec._id), sec]));
 
     for (const entry of schedule) {
+      if (!entry.sectionId) continue;
       const sectionRecord = sectionMap.get(String(entry.sectionId));
       if (!sectionRecord) {
         throw new TimetableValidationError(`Section ID '${entry.sectionId}' not found.`, 404, 'SECTION_NOT_FOUND');
@@ -352,14 +353,17 @@ export const validateTimetableConflicts = async ({
       }
 
       // Check TeachingAssignment in DB
-      const hasActiveAssignment = await TeachingAssignment.findOne({
+      const assignmentQuery = {
         teacherId: entry.teacherId,
         schoolId: normalizedSchoolId,
         classId: entry.classId,
-        sectionId: entry.sectionId,
         subjectId: entry.subjectId,
         status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
-      }).lean();
+      };
+      if (entry.sectionId) {
+        assignmentQuery.sectionId = entry.sectionId;
+      }
+      const hasActiveAssignment = await TeachingAssignment.findOne(assignmentQuery).lean();
 
       if (!hasActiveAssignment) {
         throw new TimetableValidationError(

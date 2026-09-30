@@ -1,4 +1,5 @@
 import Class from '../models/Class.js';
+import Section from '../models/Section.js';
 import Subject from '../models/Subject.js';
 
 /**
@@ -173,18 +174,29 @@ export const provisionSchoolClassesAndCurriculum = async (schoolId, lowestGrade 
   // 1. Provision Classes for the Grade Range (e.g. Class 1 to Class 5)
   const createdClasses = [];
   for (let grade = minGrade; grade <= maxGrade; grade++) {
-    const existingClass = await Class.findOne({ schoolId, numericGrade: grade });
+    let existingClass = await Class.findOne({ schoolId, numericGrade: grade });
     if (!existingClass) {
-      const newClass = await Class.create({
+      existingClass = await Class.create({
         schoolId,
         name: `Class ${grade}`,
         code: `CL-${grade}`,
         numericGrade: grade,
         status: 'ACTIVE',
       });
-      createdClasses.push(newClass);
-    } else {
-      createdClasses.push(existingClass);
+    }
+    createdClasses.push(existingClass);
+
+    // In DMC Liaquatabad government schools, there are NO multiple sections (A/B/C).
+    // Ensure exactly one primary section exists per class for database foreign keys.
+    const existingSection = await Section.findOne({ classId: existingClass._id, schoolId });
+    if (!existingSection) {
+      await Section.create({
+        schoolId,
+        classId: existingClass._id,
+        name: 'General',
+        capacity: 50,
+        status: 'ACTIVE',
+      });
     }
   }
 

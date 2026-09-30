@@ -5,6 +5,8 @@ import School from '../models/School.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import ParentStudentLink from '../models/ParentStudentLink.js';
+import Section from '../models/Section.js';
+import TeachingAssignment from '../models/TeachingAssignment.js';
 import AuditLog from '../models/AuditLog.js';
 import {
   ROLES,
@@ -50,10 +52,64 @@ export const handleGetSchoolTimetable = asyncHandler(async (request, response) =
     return sendError(response, 404, 'No active timetable found for this school.');
   }
 
+  let schoolDetails = null;
+  if (typeof School.findById === 'function') {
+    const query = School.findById(schoolId).select('name schoolCode emisCode townId');
+    schoolDetails = query && typeof query.lean === 'function' ? await query.lean() : await query;
+  }
+
+  let schoolFaculty = [];
+  if (typeof User.find === 'function') {
+    const query = User.find({
+      schoolId,
+      role: { $in: [ROLES.TEACHER, ROLES.HM] },
+      status: 'ACTIVE',
+    }).select('_id fullName designation');
+    schoolFaculty = query && typeof query.lean === 'function' ? await query.lean() : await query;
+  }
+  if (!Array.isArray(schoolFaculty)) schoolFaculty = [];
+
+  const teachingSlots = (activeTimetable.periodSlots || []).filter(
+    (slot) => slot.slotType === 'TEACHING'
+  );
+
+  const teacherFreePeriods = {};
+  const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+  for (const day of DAYS) {
+    teacherFreePeriods[day] = schoolFaculty.map((teacher) => {
+      const assignedPeriods = new Set(
+        activeTimetable.schedule
+          .filter(
+            (entry) =>
+              entry.dayOfWeek === day &&
+              String(entry.teacherId?._id || entry.teacherId) === String(teacher._id)
+          )
+          .map((entry) => entry.periodNumber)
+      );
+
+      const freeSlotNumbers = teachingSlots
+        .filter((slot) => !assignedPeriods.has(slot.periodNumber))
+        .map((slot) => slot.periodNumber)
+        .sort((a, b) => a - b);
+
+      return {
+        teacherId: teacher._id,
+        teacherName: teacher.fullName,
+        designation: teacher.designation || 'Teacher',
+        freePeriods: freeSlotNumbers,
+        formatted: freeSlotNumbers.map((num) => String(num).padStart(2, '0')).join(', '),
+        totalAssigned: assignedPeriods.size,
+        totalFree: freeSlotNumbers.length,
+      };
+    });
+  }
+
   const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
 
   return sendSuccess(response, 200, 'School timetable retrieved successfully.', {
     ...activeTimetable,
+    schoolDetails,
+    teacherFreePeriods,
     liveStatus,
   });
 });
@@ -94,6 +150,50 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
         requestId: request.headers?.['x-request-id'] || '',
       });
       return sendError(response, 403, 'Access denied: You can only manage your own school timetable.');
+    }
+  }
+
+  // 1.5. Section resolution & auto-sync of TeachingAssignments for allocated classes
+  if (Array.isArray(schedule) && schedule.length > 0) {
+    const missingSectionEntries = schedule.filter((entry) => !entry.sectionId);
+    if (mongoose.connection?.readyState === 1 && missingSectionEntries.length > 0 && typeof Section.find === 'function') {
+      const classIds = [...new Set(missingSectionEntries.map((entry) => String(entry.classId)).filter(Boolean))];
+      const secQuery = Section.find({ classId: { $in: classIds }, schoolId });
+      const sections = secQuery && typeof secQuery.lean === 'function' ? await secQuery.lean() : await secQuery;
+      const sectionByClass = new Map();
+      if (Array.isArray(sections)) {
+        for (const sec of sections) {
+          if (!sectionByClass.has(String(sec.classId))) {
+            sectionByClass.set(String(sec.classId), sec);
+          }
+        }
+      }
+
+      for (const entry of missingSectionEntries) {
+        if (!entry.sectionId && sectionByClass.has(String(entry.classId))) {
+          entry.sectionId = sectionByClass.get(String(entry.classId))._id;
+        }
+      }
+    }
+
+    if (mongoose.connection?.readyState === 1 && typeof TeachingAssignment.findOneAndUpdate === 'function') {
+      for (const entry of schedule) {
+        if (entry.teacherId && entry.subjectId && entry.classId && entry.sectionId) {
+          await TeachingAssignment.findOneAndUpdate(
+            {
+              teacherId: entry.teacherId,
+              schoolId,
+              classId: entry.classId,
+              sectionId: entry.sectionId,
+              subjectId: entry.subjectId,
+            },
+            {
+              $set: { status: 'ACTIVE' },
+            },
+            { upsert: true, new: true }
+          );
+        }
+      }
     }
   }
 
@@ -339,11 +439,25 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       }
     }
 
+    const teachingSlots = (activeTimetable.periodSlots || []).filter(
+      (slot) => slot.slotType === 'TEACHING'
+    );
+    const assignedPeriodNumbers = new Set(
+      teacherAllocations
+        .filter((entry) => entry.dayOfWeek === (liveStatus.currentDay && liveStatus.currentDay !== 'SUNDAY' ? liveStatus.currentDay : 'MONDAY'))
+        .map((entry) => entry.periodNumber)
+    );
+    const myFreePeriodsToday = teachingSlots
+      .filter((slot) => !assignedPeriodNumbers.has(slot.periodNumber))
+      .map((slot) => slot.periodNumber)
+      .sort((a, b) => a - b);
+
     return sendSuccess(response, 200, 'Teacher personal schedule retrieved.', {
       schoolId: teacherSchoolId,
       academicYear: activeTimetable.academicYear,
       periodSlots: activeTimetable.periodSlots,
       mySchedule: teacherAllocations,
+      myFreePeriodsToday,
       liveStatus,
       currentTeacherActivity,
       nextTeacherActivity,
@@ -371,11 +485,15 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       return sendError(response, 404, 'No active timetable found for your school.');
     }
 
-    const studentClassSchedule = activeTimetable.schedule.filter(
-      (entry) =>
-        String(entry.classId?._id || entry.classId) === String(studentProfile.classId) &&
-        String(entry.sectionId?._id || entry.sectionId) === String(studentProfile.sectionId)
-    );
+    const studentClassSchedule = activeTimetable.schedule.filter((entry) => {
+      const entryClassId = String(entry.classId?._id || entry.classId);
+      const studentClassId = String(studentProfile.classId?._id || studentProfile.classId);
+      if (entryClassId !== studentClassId) return false;
+      if (studentProfile.sectionId && entry.sectionId) {
+        return String(entry.sectionId?._id || entry.sectionId) === String(studentProfile.sectionId?._id || studentProfile.sectionId);
+      }
+      return true;
+    });
 
     const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
     let currentClassActivity = null;
@@ -444,11 +562,15 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       return sendError(response, 404, 'No active timetable found for this school.');
     }
 
-    const wardSchedule = activeTimetable.schedule.filter(
-      (entry) =>
-        String(entry.classId?._id || entry.classId) === String(studentProfile.classId) &&
-        String(entry.sectionId?._id || entry.sectionId) === String(studentProfile.sectionId)
-    );
+    const wardSchedule = activeTimetable.schedule.filter((entry) => {
+      const entryClassId = String(entry.classId?._id || entry.classId);
+      const studentClassId = String(studentProfile.classId?._id || studentProfile.classId);
+      if (entryClassId !== studentClassId) return false;
+      if (studentProfile.sectionId && entry.sectionId) {
+        return String(entry.sectionId?._id || entry.sectionId) === String(studentProfile.sectionId?._id || studentProfile.sectionId);
+      }
+      return true;
+    });
 
     const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
 
