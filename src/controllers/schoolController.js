@@ -14,6 +14,7 @@ import Town from '../models/Town.js';
 import User from '../models/User.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, SCOPES } from '../../config/constants.js';
+import { provisionSchoolClassesAndCurriculum } from '../utils/curriculumStandards.js';
 
 /**
  * Helper to write immutable audit record
@@ -73,6 +74,8 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
     contactPhone = '',
     contactEmail = '',
     status = 'ACTIVE',
+    lowestGrade,
+    highestGrade,
   } = request.body;
 
   // 1. Resolve Town & Organization
@@ -116,6 +119,12 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
     }
   }
 
+  // 2b. Compute standard grade range based on school type or custom selection
+  const defaultLowest = schoolType === 'SECONDARY' ? 6 : 1;
+  const defaultHighest = schoolType === 'PRIMARY' ? 5 : schoolType === 'ELEMENTARY' ? 8 : schoolType === 'SECONDARY' ? 10 : 2;
+  const minGrade = Math.max(1, Number(lowestGrade) || defaultLowest);
+  const maxGrade = Math.min(12, Math.max(minGrade, Number(highestGrade) || defaultHighest));
+
   // 3. Create Municipal School Entity
   const newSchool = await School.create({
     organizationId: targetOrganizationId,
@@ -127,11 +136,18 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
     emisCode: emisCode ? emisCode.trim() : undefined,
     schoolType,
     genderType,
+    gradeRange: {
+      lowestGrade: String(minGrade),
+      highestGrade: String(maxGrade),
+    },
     address: address.trim(),
     contactPhone: contactPhone.trim(),
     contactEmail: contactEmail.trim().toLowerCase(),
     status,
   });
+
+  // 3b. Automatically provision standard classes and grade-appropriate curriculum subjects
+  await provisionSchoolClassesAndCurriculum(newSchool._id, minGrade, maxGrade);
 
   // 4. Record Immutable Audit Trail
   await writeSchoolAuditLog({
@@ -339,6 +355,8 @@ export const handleUpdateSchool = asyncHandler(async (request, response) => {
     contactPhone,
     contactEmail,
     status,
+    lowestGrade,
+    highestGrade,
     reason = 'Municipal administrative update',
   } = request.body;
 
@@ -438,6 +456,18 @@ export const handleUpdateSchool = asyncHandler(async (request, response) => {
       return sendError(response, 409, `EMIS code "${emisCode}" is already in use.`);
     }
     schoolRecord.emisCode = emisCode.trim();
+  }
+
+  if (lowestGrade !== undefined || highestGrade !== undefined) {
+    const curLowest = Number(schoolRecord.gradeRange?.lowestGrade) || (schoolRecord.schoolType === 'SECONDARY' ? 6 : 1);
+    const curHighest = Number(schoolRecord.gradeRange?.highestGrade) || (schoolRecord.schoolType === 'PRIMARY' ? 5 : schoolRecord.schoolType === 'ELEMENTARY' ? 8 : 10);
+    const updatedLowest = Math.max(1, Number(lowestGrade !== undefined ? lowestGrade : curLowest));
+    const updatedHighest = Math.min(12, Math.max(updatedLowest, Number(highestGrade !== undefined ? highestGrade : curHighest)));
+    schoolRecord.gradeRange = {
+      lowestGrade: String(updatedLowest),
+      highestGrade: String(updatedHighest),
+    };
+    await provisionSchoolClassesAndCurriculum(schoolRecord._id, updatedLowest, updatedHighest);
   }
 
   await schoolRecord.save();

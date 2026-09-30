@@ -46,8 +46,8 @@ const SchoolSchema = new mongoose.Schema({
     default: ['URDU', 'ENGLISH'],
   },
   gradeRange: {
-    lowestGrade: { type: String, default: 'KG1' },
-    highestGrade: { type: String, default: 'CLASS_5' },
+    lowestGrade: { type: String, default: '1' },
+    highestGrade: { type: String, default: '5' },
   },
   genderType: {
     type: String,

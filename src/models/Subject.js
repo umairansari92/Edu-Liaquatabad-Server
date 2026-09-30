@@ -5,6 +5,7 @@ const SubjectSchema = new mongoose.Schema({
   classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', index: true },
   name: { type: String, required: true, trim: true },
   code: { type: String, trim: true },
+  gradeLevels: { type: [Number], default: [] },
   isElective: { type: Boolean, default: false },
   totalMarks: { type: Number, default: 100 },
   passingMarks: { type: Number, default: 33 },

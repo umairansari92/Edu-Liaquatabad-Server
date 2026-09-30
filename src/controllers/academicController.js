@@ -46,10 +46,17 @@ const writeAcademicAudit = async ({ actorId, actorRole, actorName, action, targe
  * List all classes for a school (cascading: School → Classes)
  */
 export const handleGetClasses = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
   const { schoolId } = request.query;
   const filter = {};
-  if (schoolId && /^[0-9a-fA-F]{24}$/.test(schoolId)) {
-    filter.schoolId = schoolId;
+
+  // Enforce Cross-School Boundary Isolation (GEMINI.md Rule 7):
+  // If requesting actor is HM or has an assigned school, default to their school
+  const userSchoolId = requestingActor?.schoolId?._id || requestingActor?.schoolId;
+  const targetSchoolId = schoolId || (requestingActor?.role === ROLES.HM ? userSchoolId : null);
+
+  if (targetSchoolId && /^[0-9a-fA-F]{24}$/.test(String(targetSchoolId))) {
+    filter.schoolId = targetSchoolId;
   }
 
   const classes = await Class.find(filter).sort({ numericGrade: 1 }).lean();
@@ -187,10 +194,19 @@ export const handleUpdateClass = asyncHandler(async (request, response) => {
  * List sections cascaded under class or school
  */
 export const handleGetSections = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
   const { classId, schoolId } = request.query;
   const filter = {};
-  if (classId && /^[0-9a-fA-F]{24}$/.test(classId)) filter.classId = classId;
-  if (schoolId && /^[0-9a-fA-F]{24}$/.test(schoolId)) filter.schoolId = schoolId;
+
+  const userSchoolId = requestingActor?.schoolId?._id || requestingActor?.schoolId;
+  const targetSchoolId = schoolId || (requestingActor?.role === ROLES.HM ? userSchoolId : null);
+
+  if (targetSchoolId && /^[0-9a-fA-F]{24}$/.test(String(targetSchoolId))) {
+    filter.schoolId = targetSchoolId;
+  }
+  if (classId && /^[0-9a-fA-F]{24}$/.test(classId)) {
+    filter.classId = classId;
+  }
 
   const sections = await Section.find(filter)
     .populate('classId', 'name numericGrade code')
@@ -321,10 +337,35 @@ export const handleUpdateSection = asyncHandler(async (request, response) => {
  * List all subjects cascaded under a class or school
  */
 export const handleGetSubjects = asyncHandler(async (request, response) => {
-  const { classId, schoolId } = request.query;
+  const requestingActor = request.user;
+  const { classId, schoolId, numericGrade } = request.query;
   const filter = {};
-  if (classId && /^[0-9a-fA-F]{24}$/.test(classId)) filter.classId = classId;
-  if (schoolId && /^[0-9a-fA-F]{24}$/.test(schoolId)) filter.schoolId = schoolId;
+
+  const userSchoolId = requestingActor?.schoolId?._id || requestingActor?.schoolId;
+  const targetSchoolId = schoolId || (requestingActor?.role === ROLES.HM ? userSchoolId : null);
+
+  if (targetSchoolId && /^[0-9a-fA-F]{24}$/.test(String(targetSchoolId))) {
+    filter.schoolId = targetSchoolId;
+  }
+
+  // Grade-level subject scoping per Sindh DMC curriculum matrix
+  let targetNumericGrade = numericGrade ? Number(numericGrade) : null;
+  if (!targetNumericGrade && classId && /^[0-9a-fA-F]{24}$/.test(classId)) {
+    const classDoc = await Class.findById(classId).lean();
+    if (classDoc?.numericGrade) {
+      targetNumericGrade = classDoc.numericGrade;
+    }
+  }
+
+  if (targetNumericGrade) {
+    filter.$or = [
+      { gradeLevels: targetNumericGrade },
+      { classId: classId && /^[0-9a-fA-F]{24}$/.test(classId) ? classId : null },
+      { gradeLevels: { $size: 0 } },
+    ];
+  } else if (classId && /^[0-9a-fA-F]{24}$/.test(classId)) {
+    filter.classId = classId;
+  }
 
   const subjects = await Subject.find(filter)
     .populate('classId', 'name code numericGrade')
