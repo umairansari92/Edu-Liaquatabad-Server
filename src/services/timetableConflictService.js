@@ -361,7 +361,16 @@ export const validateTimetableConflicts = async ({
         status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
       };
       if (entry.sectionId) {
-        assignmentQuery.sectionId = entry.sectionId;
+        assignmentQuery.$or = [
+          { sectionId: entry.sectionId },
+          { sectionId: null },
+          { sectionId: { $exists: false } },
+        ];
+      } else {
+        assignmentQuery.$or = [
+          { sectionId: null },
+          { sectionId: { $exists: false } },
+        ];
       }
       const hasActiveAssignment = await TeachingAssignment.findOne(assignmentQuery).lean();
 

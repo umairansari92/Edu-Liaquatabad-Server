@@ -21,7 +21,7 @@ const homeworkSchema = new Schema(
     // ── Boundary fields (all server-verified, not client-supplied) ───────────
     schoolId:  { type: ObjectId, ref: 'School',   required: true, index: true },
     classId:   { type: ObjectId, ref: 'Class',    required: true, index: true },
-    sectionId: { type: ObjectId, ref: 'Section',  required: true, index: true },
+    sectionId: { type: ObjectId, ref: 'Section',  required: false, default: null, index: true },
     subjectId: { type: ObjectId, ref: 'Subject',  required: true, index: true },
 
     // ── Who created it ────────────────────────────────────────────────────────

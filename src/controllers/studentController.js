@@ -130,15 +130,24 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     return sendError(response, 400, 'Invalid class selected. The specified class does not belong to the target school.');
   }
 
-  const targetSection = await Section.findById(sectionId).lean();
-  if (!targetSection) {
-    return sendError(response, 400, 'Invalid section selected. The specified section does not exist.');
-  }
-  if (String(targetSection.classId) !== String(classId)) {
-    return sendError(response, 400, 'Invalid section selected. The section does not belong to the specified class.');
-  }
-  if (targetSection.schoolId && String(targetSection.schoolId) !== String(effectiveSchoolId)) {
-    return sendError(response, 400, 'Invalid section selected. The section does not belong to the target school.');
+  let resolvedSectionId = null;
+  if (sectionId) {
+    const targetSection = await Section.findById(sectionId).lean();
+    if (!targetSection) {
+      return sendError(response, 400, 'Invalid section selected. The specified section does not exist.');
+    }
+    if (String(targetSection.classId) !== String(classId)) {
+      return sendError(response, 400, 'Invalid section selected. The section does not belong to the specified class.');
+    }
+    if (targetSection.schoolId && String(targetSection.schoolId) !== String(effectiveSchoolId)) {
+      return sendError(response, 400, 'Invalid section selected. The section does not belong to the target school.');
+    }
+    resolvedSectionId = targetSection._id;
+  } else {
+    const defaultSection = await Section.findOne({ classId, schoolId: effectiveSchoolId }).lean();
+    if (defaultSection) {
+      resolvedSectionId = defaultSection._id;
+    }
   }
 
   // ── Step 1: Determine GR No ────────────────────────────────────────────────
@@ -203,7 +212,7 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     userId: enrolledUser._id,
     schoolId: effectiveSchoolId,
     classId,
-    sectionId,
+    sectionId: resolvedSectionId || undefined,
     grNumber: assignedGrNumber,
     globalStudentId: globalStudentId || undefined,
     studentFullName: fullName.trim(),
@@ -237,7 +246,7 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
       lifecycleStatus: STUDENT_STATUS.ACTIVE,
     },
     ipAddress: request.ip || '',
-    userAgent: request.headers['user-agent'] || '',
+    userAgent: request.headers?.['user-agent'] || '',
   });
 
   return sendSuccess(response, 201, 'Student enrolled successfully.', {

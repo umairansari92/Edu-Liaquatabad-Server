@@ -551,23 +551,45 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
   }
 
   for (const assignment of subjectAssignments) {
-    if (!assignment.sectionId) continue;
-    const sectionDoc = assignment.sectionId;
-    const sectionIdStr = String(sectionDoc._id || sectionDoc);
-    let sectionEntry = sectionMap.get(sectionIdStr);
+    let sectionIdStr;
+    let sectionEntry;
 
-    if (!sectionEntry) {
-      const isClassTeacher = sectionDoc.classTeacherId && String(sectionDoc.classTeacherId) === teacherId;
-      sectionEntry = {
-        _id: sectionDoc._id,
-        name: sectionDoc.name,
-        roomNumber: sectionDoc.roomNumber || '',
-        capacity: sectionDoc.capacity,
-        class: assignment.classId,
-        isClassTeacher: Boolean(isClassTeacher),
-        assignedSubjects: [],
-      };
-      sectionMap.set(sectionIdStr, sectionEntry);
+    if (assignment.sectionId) {
+      const sectionDoc = assignment.sectionId;
+      sectionIdStr = String(sectionDoc._id || sectionDoc);
+      sectionEntry = sectionMap.get(sectionIdStr);
+
+      if (!sectionEntry) {
+        const isClassTeacher = sectionDoc.classTeacherId && String(sectionDoc.classTeacherId) === teacherId;
+        sectionEntry = {
+          _id: sectionDoc._id,
+          name: sectionDoc.name,
+          roomNumber: sectionDoc.roomNumber || '',
+          capacity: sectionDoc.capacity,
+          class: assignment.classId,
+          isClassTeacher: Boolean(isClassTeacher),
+          assignedSubjects: [],
+        };
+        sectionMap.set(sectionIdStr, sectionEntry);
+      }
+    } else {
+      // Whole class single cohort (no sections)
+      const classDoc = assignment.classId;
+      sectionIdStr = `class_${String(classDoc?._id || classDoc)}`;
+      sectionEntry = sectionMap.get(sectionIdStr);
+
+      if (!sectionEntry) {
+        sectionEntry = {
+          _id: classDoc?._id || classDoc,
+          name: 'Whole Class',
+          roomNumber: '',
+          capacity: 50,
+          class: classDoc,
+          isClassTeacher: false,
+          assignedSubjects: [],
+        };
+        sectionMap.set(sectionIdStr, sectionEntry);
+      }
     }
 
     if (assignment.subjectId) {
@@ -592,18 +614,34 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
   const unifiedSections = Array.from(sectionMap.values());
   const sectionSummaries = await Promise.all(
     unifiedSections.map(async (section) => {
+      const studentCountFilter = {
+        schoolId: teacherSchoolId,
+        lifecycleStatus: STUDENT_STATUS.ACTIVE,
+      };
+      if (section.class?._id) {
+        studentCountFilter.classId = section.class._id;
+      }
+      if (section._id && !String(section._id).startsWith('class_')) {
+        studentCountFilter.$or = [
+          { sectionId: section._id },
+          { classId: section.class?._id }
+        ];
+      }
+
+      const attendanceQuery = {
+        schoolId: teacherSchoolId,
+        attendanceType: 'STUDENT',
+        date: { $gte: todayStart, $lte: todayEnd },
+      };
+      if (section._id && !String(section._id).startsWith('class_')) {
+        attendanceQuery.sectionId = section._id;
+      } else if (section.class?._id) {
+        attendanceQuery.classId = section.class._id;
+      }
+
       const [studentCount, attendanceRecord] = await Promise.all([
-        StudentProfile.countDocuments({
-          sectionId: section._id,
-          schoolId: teacherSchoolId,
-          lifecycleStatus: STUDENT_STATUS.ACTIVE,
-        }),
-        Attendance.findOne({
-          schoolId: teacherSchoolId,
-          sectionId: section._id,
-          attendanceType: 'STUDENT',
-          date: { $gte: todayStart, $lte: todayEnd },
-        }).lean(),
+        StudentProfile.countDocuments(studentCountFilter),
+        Attendance.findOne(attendanceQuery).lean(),
       ]);
 
       const attendanceStatus = attendanceRecord

@@ -5,7 +5,7 @@ const ResultSchema = new mongoose.Schema({
   schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true, index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
-  sectionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Section', required: true },
+  sectionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Section', required: false, default: null },
 
   subjectMarks: [{
     subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },

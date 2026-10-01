@@ -23,7 +23,8 @@ const TeachingAssignmentSchema = new mongoose.Schema({
   sectionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Section',
-    required: true,
+    required: false,
+    default: null,
     index: true,
   },
   subjectId: {
@@ -87,14 +88,19 @@ TeachingAssignmentSchema.statics.findActiveConflict = async function ({
   subjectId,
   academicSession,
 }) {
-  return this.findOne({
+  const query = {
     teacherId,
     classId,
-    sectionId,
     subjectId,
     academicSession,
     status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
-  });
+  };
+  if (sectionId) {
+    query.sectionId = sectionId;
+  } else {
+    query.$or = [{ sectionId: null }, { sectionId: { $exists: false } }];
+  }
+  return this.findOne(query);
 };
 
 /**
@@ -114,9 +120,15 @@ TeachingAssignmentSchema.statics.isTeacherAssigned = async function ({
 
   const query = {
     teacherId,
-    sectionId,
     status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
   };
+  if (sectionId) {
+    query.$or = [
+      { sectionId },
+      { sectionId: null },
+      { sectionId: { $exists: false } },
+    ];
+  }
   if (schoolId) query.schoolId = schoolId;
   if (subjectId) query.subjectId = subjectId;
 

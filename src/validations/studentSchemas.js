@@ -75,7 +75,7 @@ export const enrollStudentSchema = z
 
     // Academic placement
     classId: mongoId,
-    sectionId: mongoId,
+    sectionId: mongoId.optional().nullable(),
 
     // Admission date (defaults to today if not provided)
     admissionDate: z.string().trim().optional(),

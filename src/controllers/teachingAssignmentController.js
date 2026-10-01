@@ -130,8 +130,8 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     schoolId = actorSchoolId;
   }
 
-  if (!teacherId || !schoolId || !classId || !sectionId || !subjectId || !academicSession) {
-    return sendError(response, 400, 'All fields (teacherId, schoolId, classId, sectionId, subjectId, academicSession) are required.');
+  if (!teacherId || !schoolId || !classId || !subjectId || !academicSession) {
+    return sendError(response, 400, 'All fields (teacherId, schoolId, classId, subjectId, academicSession) are required.');
   }
 
   // School jurisdiction check
@@ -157,38 +157,50 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     return sendError(response, 400, 'Non-teaching staff (e.g. Clerks, Peons) cannot be assigned teaching duties.');
   }
 
-  // Cross-validate school structure integrity: class, section, and subject must belong to schoolId
-  const [targetClass, targetSection, targetSubject] = await Promise.all([
+  // Cross-validate school structure integrity: class and subject must belong to schoolId
+  const validationPromises = [
     Class.findById(classId).lean(),
-    Section.findById(sectionId).lean(),
     Subject.findById(subjectId).lean(),
-  ]);
+  ];
+  if (sectionId) {
+    validationPromises.push(Section.findById(sectionId).lean());
+  }
+
+  const [targetClass, targetSubject, targetSection] = await Promise.all(validationPromises);
 
   if (!targetClass || String(targetClass.schoolId) !== String(schoolId)) {
     return sendError(response, 400, 'Integrity violation: The specified class does not belong to this school.');
   }
-  if (!targetSection || String(targetSection.schoolId) !== String(schoolId) || String(targetSection.classId) !== String(classId)) {
-    return sendError(response, 400, 'Integrity violation: The specified section does not belong to this class or school.');
+  if (sectionId) {
+    if (!targetSection || String(targetSection.schoolId) !== String(schoolId) || String(targetSection.classId) !== String(classId)) {
+      return sendError(response, 400, 'Integrity violation: The specified section does not belong to this class or school.');
+    }
   }
   if (!targetSubject || String(targetSubject.schoolId) !== String(schoolId)) {
     return sendError(response, 400, 'Integrity violation: The specified subject does not belong to this school.');
   }
 
   // Overlap and Duplicate Check: Ensure no active assignment already exists for this exact combination
-  const activeConflict = await TeachingAssignment.findOne({
+  const conflictFilter = {
     teacherId,
     classId,
-    sectionId,
     subjectId,
     academicSession: academicSession.trim(),
     status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
-  });
+  };
+  if (sectionId) {
+    conflictFilter.sectionId = sectionId;
+  } else {
+    conflictFilter.$or = [{ sectionId: null }, { sectionId: { $exists: false } }];
+  }
+
+  const activeConflict = await TeachingAssignment.findOne(conflictFilter);
 
   if (activeConflict) {
     return sendError(
       response,
       409,
-      'An active teaching assignment already exists for this teacher in the same class, section, subject, and academic session.'
+      'An active teaching assignment already exists for this teacher in the same class, subject, and academic session.'
     );
   }
 
@@ -197,13 +209,13 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     teacherId,
     schoolId,
     classId,
-    sectionId,
+    sectionId: sectionId || null,
     subjectId,
     academicSession: academicSession.trim(),
     effectiveFrom: new Date(),
     status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
     assignedBy: actor._id,
-    remarks: remarks.trim(),
+    remarks: remarks ? remarks.trim() : '',
   });
 
   // Audit
