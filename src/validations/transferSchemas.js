@@ -27,13 +27,13 @@ export const initiateTransferSchema = z.object({
   isEmergencyOverride: z.boolean().optional(),
   overrideJustification: safeString(1000).optional(),
 }).refine(
-  (data) => Boolean(data.teacherUserId || data.teacherId || data.employeeUserId || data.employeeId || data.userId),
+  (transferPayload) => Boolean(transferPayload.teacherUserId || transferPayload.teacherId || transferPayload.employeeUserId || transferPayload.employeeId || transferPayload.userId),
   { message: 'A valid employee identifier is required.', path: ['teacherUserId'] }
 ).refine(
-  (data) => Boolean(data.targetSchoolId || data.destinationSchoolId || data.toSchoolId),
+  (transferPayload) => Boolean(transferPayload.targetSchoolId || transferPayload.destinationSchoolId || transferPayload.toSchoolId),
   { message: 'A valid targetSchoolId is required.', path: ['targetSchoolId'] }
 ).refine(
-  (data) => !data.isEmergencyOverride || (data.overrideJustification && data.overrideJustification.trim().length >= 10),
+  (transferPayload) => !transferPayload.isEmergencyOverride || Boolean(transferPayload.overrideJustification && transferPayload.overrideJustification.trim().length >= 10),
   { message: 'Emergency override requires a justification of at least 10 characters.', path: ['overrideJustification'] }
 );
 
@@ -43,7 +43,7 @@ export const relieveTeacherSchema = z.object({
   relievingOrderNumber: safeString(100).optional(),
   clearanceCertified: z.boolean({
     required_error: 'Clearance certification must be explicitly verified.',
-  }).refine((val) => val === true, {
+  }).refine((clearanceCertified) => clearanceCertified === true, {
     message: 'Clearance certification must be true before relieving faculty member.',
   }),
 });

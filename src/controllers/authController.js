@@ -1229,7 +1229,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     return sendError(response, 401, 'Session has expired or was terminated from this device. Please sign in again.');
   }
 
-  const sessionIndex = user.activeSessions.findIndex(s => s.sessionId === decoded.sessionId);
+  const sessionIndex = user.activeSessions.findIndex((sessionItem) => sessionItem.sessionId === decoded.sessionId);
   if (sessionIndex === -1) {
     clearRefreshCookie(response);
     return sendError(response, 401, 'Session has expired or was terminated from this device. Please sign in again.');
@@ -1416,7 +1416,7 @@ export const handleLogout = asyncHandler(async (request, response) => {
       if (callerSessionId && Array.isArray(user.activeSessions)) {
         // Routine single-device logout: Remove ONLY the calling session!
         // Deliberate design decision: DO NOT increment tokenVersion — sibling devices remain fully logged in!
-        user.activeSessions = user.activeSessions.filter(s => s.sessionId !== callerSessionId);
+        user.activeSessions = user.activeSessions.filter((sessionItem) => sessionItem.sessionId !== callerSessionId);
       } else if (Array.isArray(user.activeSessions) && user.activeSessions.length > 0) {
         user.activeSessions.pop();
       }
@@ -1589,7 +1589,7 @@ export const handleTerminateSession = asyncHandler(async (request, response) => 
   }
 
   const initialCount = user.activeSessions?.length || 0;
-  user.activeSessions = (user.activeSessions || []).filter(s => s.sessionId !== sessionId);
+  user.activeSessions = (user.activeSessions || []).filter((sessionItem) => sessionItem.sessionId !== sessionId);
 
   if (user.activeSessions.length === initialCount) {
     return sendError(response, 404, 'Session not found or already terminated.');

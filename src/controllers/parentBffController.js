@@ -212,7 +212,7 @@ export const handleDownloadWardMarksheetPdf = asyncHandler(async (request, respo
     }
     const allCohortResults = await Result.find(cohortFilter).lean();
     const { rankedResults } = computeClassTabulation(allCohortResults);
-    const matched = rankedResults.find((r) => String(r.studentId?._id || r.studentId) === studentUserId);
+    const matched = rankedResults.find((rankedResultItem) => String(rankedResultItem.studentId?._id || rankedResultItem.studentId) === studentUserId);
     if (matched) {
       result.rank = matched.rank;
       result.rankFormatted = matched.rankFormatted;
@@ -262,23 +262,23 @@ export const handleGetWardHomework = asyncHandler(async (request, response) => {
     .sort({ dueDate: 1 })
     .lean();
 
-  const formattedHomework = homeworkList.map((hw) => ({
-    id: hw._id,
-    title: hw.title,
-    description: hw.description,
+  const formattedHomework = homeworkList.map((homeworkRecord) => ({
+    id: homeworkRecord._id,
+    title: homeworkRecord.title,
+    description: homeworkRecord.description,
     subject: {
-      id: hw.subjectId?._id,
-      name: hw.subjectId?.name || 'General',
-      code: hw.subjectId?.code || '',
+      id: homeworkRecord.subjectId?._id,
+      name: homeworkRecord.subjectId?.name || 'General',
+      code: homeworkRecord.subjectId?.code || '',
     },
     teacher: {
-      id: hw.teacherId?._id,
-      fullName: hw.teacherId?.fullName || 'Teacher',
-      designation: hw.teacherId?.designation || '',
+      id: homeworkRecord.teacherId?._id,
+      fullName: homeworkRecord.teacherId?.fullName || 'Teacher',
+      designation: homeworkRecord.teacherId?.designation || '',
     },
-    dueDate: hw.dueDate,
-    attachments: hw.attachments || [],
-    createdAt: hw.createdAt,
+    dueDate: homeworkRecord.dueDate,
+    attachments: homeworkRecord.attachments || [],
+    createdAt: homeworkRecord.createdAt,
   }));
 
   return sendSuccess(response, 200, 'Ward homework assignments retrieved.', {
@@ -319,20 +319,20 @@ export const handleGetWardCirculars = asyncHandler(async (request, response) => 
     .limit(50)
     .lean();
 
-  const formattedCirculars = circulars.map((doc) => ({
-    id: doc._id,
-    title: doc.title,
-    documentType: doc.documentType,
-    scope: doc.scope,
-    category: doc.category,
-    summary: doc.summary,
-    fileUrl: doc.fileUrl,
-    fileSize: doc.fileSize,
-    mimeType: doc.mimeType,
-    publishedAt: doc.publishedAt || doc.createdAt,
+  const formattedCirculars = circulars.map((documentItem) => ({
+    id: documentItem._id,
+    title: documentItem.title,
+    documentType: documentItem.documentType,
+    scope: documentItem.scope,
+    category: documentItem.category,
+    summary: documentItem.summary,
+    fileUrl: documentItem.fileUrl,
+    fileSize: documentItem.fileSize,
+    mimeType: documentItem.mimeType,
+    publishedAt: documentItem.publishedAt || documentItem.createdAt,
     publisher: {
-      name: doc.publishedBy?.fullName || 'Administration',
-      designation: doc.publishedBy?.designation || 'Education Department',
+      name: documentItem.publishedBy?.fullName || 'Administration',
+      designation: documentItem.publishedBy?.designation || 'Education Department',
     },
   }));
 

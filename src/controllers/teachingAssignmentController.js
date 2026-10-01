@@ -326,8 +326,8 @@ export const handleGetSchoolTeachingAssignments = asyncHandler(async (request, r
     .sort({ status: 1, createdAt: -1 })
     .lean();
 
-  const activeAssignments = assignments.filter((item) => item.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
-  const historicalAssignments = assignments.filter((item) => item.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const activeAssignments = assignments.filter((assignmentRecord) => assignmentRecord.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE);
+  const historicalAssignments = assignments.filter((assignmentRecord) => assignmentRecord.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE);
 
   return sendSuccess(response, 200, 'School teaching assignments retrieved successfully.', {
     schoolId: targetSchoolId,

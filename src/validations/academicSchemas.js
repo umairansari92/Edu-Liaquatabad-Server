@@ -18,7 +18,7 @@ export const createClassSchema = z.object({
   code: safeString(20).optional(),
   numericGrade: z.number().int().min(1).max(14).optional(),
   gradeLevel: z.number().int().min(1).max(14).optional(),
-}).strict().refine((data) => data.numericGrade !== undefined || data.gradeLevel !== undefined, {
+}).strict().refine((classPayload) => classPayload.numericGrade !== undefined || classPayload.gradeLevel !== undefined, {
   message: 'Either numericGrade or gradeLevel is required.',
   path: ['numericGrade'],
 });

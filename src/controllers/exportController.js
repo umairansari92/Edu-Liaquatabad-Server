@@ -255,7 +255,7 @@ export const handleExportStudentsCsv = asyncHandler(async (request, response) =>
     }
     profileFilter.schoolId = actorSchoolId;
   } else if (actor.role === ROLES.SUPERVISOR) {
-    const assignedSchoolIds = (actor.assignedSchools || []).map((s) => String(s?._id || s));
+    const assignedSchoolIds = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool?._id || assignedSchool));
     if (assignedSchoolIds.length === 0) {
       return sendError(response, 403, 'Access denied. No municipal schools assigned to your supervisory cluster.');
     }

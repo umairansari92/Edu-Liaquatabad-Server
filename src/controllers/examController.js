@@ -912,7 +912,7 @@ export const handleDownloadStudentMarksheet = asyncHandler(async (request, respo
     }
     const allCohortResults = await Result.find(cohortFilter).lean();
     const { rankedResults } = computeClassTabulation(allCohortResults);
-    const matched = rankedResults.find((r) => String(r.studentId?._id || r.studentId) === String(studentId));
+    const matched = rankedResults.find((rankedResultItem) => String(rankedResultItem.studentId?._id || rankedResultItem.studentId) === String(studentId));
     if (matched) {
       result.rank = matched.rank;
       result.rankFormatted = matched.rankFormatted;
@@ -988,14 +988,14 @@ export const handleDownloadClassTabulationPdf = asyncHandler(async (request, res
   }
 
   // Fetch StudentProfiles for dual numbering (GR, Roll No, Father Name)
-  const studentUserIds = rawResults.map((r) => r.studentId?._id || r.studentId);
+  const studentUserIds = rawResults.map((resultItem) => resultItem.studentId?._id || resultItem.studentId);
   const profiles = await StudentProfile.find({ userId: { $in: studentUserIds } }).lean();
   const profileMap = new Map();
-  profiles.forEach((p) => profileMap.set(String(p.userId), p));
+  profiles.forEach((profileItem) => profileMap.set(String(profileItem.userId), profileItem));
 
-  const enrichedResults = rawResults.map((r) => ({
-    ...r,
-    studentProfile: profileMap.get(String(r.studentId?._id || r.studentId)) || {},
+  const enrichedResults = rawResults.map((resultItem) => ({
+    ...resultItem,
+    studentProfile: profileMap.get(String(resultItem.studentId?._id || resultItem.studentId)) || {},
   }));
 
   const { rankedResults, classStatistics } = computeClassTabulation(enrichedResults);
@@ -1065,14 +1065,14 @@ export const handleGetClassTabulationData = asyncHandler(async (request, respons
     .populate('subjectMarks.subjectId', 'name code')
     .lean();
 
-  const studentUserIds = rawResults.map((r) => r.studentId?._id || r.studentId);
+  const studentUserIds = rawResults.map((resultItem) => resultItem.studentId?._id || resultItem.studentId);
   const profiles = await StudentProfile.find({ userId: { $in: studentUserIds } }).lean();
   const profileMap = new Map();
-  profiles.forEach((p) => profileMap.set(String(p.userId), p));
+  profiles.forEach((profileItem) => profileMap.set(String(profileItem.userId), profileItem));
 
-  const enrichedResults = rawResults.map((r) => ({
-    ...r,
-    studentProfile: profileMap.get(String(r.studentId?._id || r.studentId)) || {},
+  const enrichedResults = rawResults.map((resultItem) => ({
+    ...resultItem,
+    studentProfile: profileMap.get(String(resultItem.studentId?._id || resultItem.studentId)) || {},
   }));
 
   const { rankedResults, classStatistics } = computeClassTabulation(enrichedResults);
@@ -1175,7 +1175,7 @@ export const handleGetExamMarksEntryRoster = asyncHandler(async (request, respon
 
   let targetSubject = null;
   if (subjectId) {
-    targetSubject = classSubjects.find((s) => String(s._id) === String(subjectId));
+    targetSubject = classSubjects.find((subjectItem) => String(subjectItem._id) === String(subjectId));
     if (!targetSubject) {
       targetSubject = await Subject.findById(subjectId).lean();
     }
@@ -1199,8 +1199,8 @@ export const handleGetExamMarksEntryRoster = asyncHandler(async (request, respon
   }).lean();
 
   const resultsMap = new Map();
-  for (const res of existingResults) {
-    resultsMap.set(String(res.studentId), res);
+  for (const resultRecord of existingResults) {
+    resultsMap.set(String(resultRecord.studentId), resultRecord);
   }
 
   const roster = studentProfiles.map((profile) => {
@@ -1211,7 +1211,7 @@ export const handleGetExamMarksEntryRoster = asyncHandler(async (request, respon
     let targetSubjectMarks = null;
     if (existingResult && subjectId) {
       targetSubjectMarks = existingResult.subjectMarks.find(
-        (sm) => String(sm.subjectId) === String(subjectId)
+        (subjectMarkRecord) => String(subjectMarkRecord.subjectId) === String(subjectId)
       ) || null;
     }
 
@@ -1339,20 +1339,20 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
     lifecycleStatus: STUDENT_STATUS.ACTIVE,
   }).lean();
 
-  const authorizedStudentUserIds = new Set(authorizedStudents.map((p) => String(p.userId)));
+  const authorizedStudentUserIds = new Set(authorizedStudents.map((profileRecord) => String(profileRecord.userId)));
   const seenStudentIds = new Set();
 
   for (const entry of entries) {
     if (!entry.studentId || !/^[0-9a-fA-F]{24}$/.test(String(entry.studentId))) {
       return sendError(response, 400, `Invalid studentId in entry: ${entry.studentId}`);
     }
-    const sIdStr = String(entry.studentId);
-    if (seenStudentIds.has(sIdStr)) {
-      return sendError(response, 400, `Duplicate studentId detected in batch entries: ${sIdStr}`);
+    const studentIdString = String(entry.studentId);
+    if (seenStudentIds.has(studentIdString)) {
+      return sendError(response, 400, `Duplicate studentId detected in batch entries: ${studentIdString}`);
     }
-    seenStudentIds.add(sIdStr);
+    seenStudentIds.add(studentIdString);
 
-    if (!authorizedStudentUserIds.has(sIdStr)) {
+    if (!authorizedStudentUserIds.has(studentIdString)) {
       return sendError(response, 403, `Access denied. Student ${entry.studentId} does not belong to this section.`);
     }
   }
@@ -1409,7 +1409,7 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
       if (subjectId && targetSubjectDoc) {
         const isDrawing = Boolean(targetSubjectDoc.name && targetSubjectDoc.name.toUpperCase().includes('DRAWING'));
         const isGradedOnly = Boolean(entry.isGradedOnly || targetSubjectDoc.isGradedOnly || isDrawing);
-        let markItemIndex = result.subjectMarks.findIndex((sm) => String(sm.subjectId) === String(subjectId));
+        let markItemIndex = result.subjectMarks.findIndex((subjectMarkItem) => String(subjectMarkItem.subjectId) === String(subjectId));
         const markItemData = {
           subjectId: targetSubjectDoc._id,
           subjectName: targetSubjectDoc.name,
@@ -1468,15 +1468,15 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
           result.subjectMarks.push(markItemData);
         }
       } else if (Array.isArray(entry.subjectMarks)) {
-        result.subjectMarks = entry.subjectMarks.map((sm) => ({
-          subjectId: sm.subjectId,
-          subjectName: sm.subjectName || '',
-          obtainedMarks: Number(sm.obtainedMarks) || 0,
-          maxMarks: Number(sm.maxMarks) || 100,
-          subComponents: sm.subComponents,
-          isGradedOnly: Boolean(sm.isGradedOnly),
-          letterGrade: sm.letterGrade,
-          isPassed: Boolean(sm.isPassed),
+        result.subjectMarks = entry.subjectMarks.map((subjectMarkItem) => ({
+          subjectId: subjectMarkItem.subjectId,
+          subjectName: subjectMarkItem.subjectName || '',
+          obtainedMarks: Number(subjectMarkItem.obtainedMarks) || 0,
+          maxMarks: Number(subjectMarkItem.maxMarks) || 100,
+          subComponents: subjectMarkItem.subComponents,
+          isGradedOnly: Boolean(subjectMarkItem.isGradedOnly),
+          letterGrade: subjectMarkItem.letterGrade,
+          isPassed: Boolean(subjectMarkItem.isPassed),
         }));
       }
 

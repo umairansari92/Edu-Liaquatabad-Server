@@ -223,7 +223,7 @@ export const validateTimetableConflicts = async ({
   // A. Validate Classes (Existence, Active, School Ownership)
   if (uniqueClassIds.length > 0) {
     const classRecords = await Class.find({ _id: { $in: uniqueClassIds } }).select('_id schoolId name status').lean();
-    const classMap = new Map(classRecords.map((cls) => [String(cls._id), cls]));
+    const classMap = new Map(classRecords.map((classRecord) => [String(classRecord._id), classRecord]));
 
     for (const classIdString of uniqueClassIds) {
       const classRecord = classMap.get(classIdString);
@@ -246,7 +246,7 @@ export const validateTimetableConflicts = async ({
   // B. Validate Sections (Existence, Active, School Ownership, Class Match)
   if (uniqueSectionIds.length > 0) {
     const sectionRecords = await Section.find({ _id: { $in: uniqueSectionIds } }).select('_id classId schoolId name status').lean();
-    const sectionMap = new Map(sectionRecords.map((sec) => [String(sec._id), sec]));
+    const sectionMap = new Map(sectionRecords.map((sectionRecord) => [String(sectionRecord._id), sectionRecord]));
 
     for (const entry of schedule) {
       if (!entry.sectionId) continue;
@@ -277,7 +277,7 @@ export const validateTimetableConflicts = async ({
   // C. Validate Subjects (Existence, Active, School Ownership)
   if (uniqueSubjectIds.length > 0) {
     const subjectRecords = await Subject.find({ _id: { $in: uniqueSubjectIds } }).select('_id schoolId name status').lean();
-    const subjectMap = new Map(subjectRecords.map((sub) => [String(sub._id), sub]));
+    const subjectMap = new Map(subjectRecords.map((subjectRecord) => [String(subjectRecord._id), subjectRecord]));
 
     for (const subjectIdString of uniqueSubjectIds) {
       const subjectRecord = subjectMap.get(subjectIdString);

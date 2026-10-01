@@ -537,7 +537,7 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
   ]);
 
   // Enrich Users with Profile Metadata
-  const userIds = users.map((u) => u._id);
+  const userIds = users.map((userRecord) => userRecord._id);
   const [teacherProfiles, studentProfiles, parentLinks] = await Promise.all([
     TeacherProfile.find({ userId: { $in: userIds } })
       .select('userId employeeId cnic joiningDate qualification specializationSubjects')
@@ -561,8 +561,8 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
       .lean(),
   ]);
 
-  const teacherMap = new Map(teacherProfiles.map((tp) => [String(tp.userId), tp]));
-  const studentMap = new Map(studentProfiles.map((sp) => [String(sp.userId), sp]));
+  const teacherMap = new Map(teacherProfiles.map((teacherProfileRecord) => [String(teacherProfileRecord.userId), teacherProfileRecord]));
+  const studentMap = new Map(studentProfiles.map((studentProfileRecord) => [String(studentProfileRecord.userId), studentProfileRecord]));
   const parentMap = new Map();
   parentLinks.forEach((link) => {
     const parentIdString = String(link.parentId);
@@ -570,8 +570,8 @@ export const handleGetUsers = asyncHandler(async (request, response) => {
     parentMap.get(parentIdString).push(link);
   });
 
-  const enrichedUsers = users.map((u) => {
-    const plainUser = u.toObject ? u.toObject() : { ...u };
+  const enrichedUsers = users.map((userRecord) => {
+    const plainUser = userRecord.toObject ? userRecord.toObject() : { ...userRecord };
     const userIdString = String(plainUser._id);
     if (teacherMap.has(userIdString)) {
       plainUser.teacherProfile = teacherMap.get(userIdString);

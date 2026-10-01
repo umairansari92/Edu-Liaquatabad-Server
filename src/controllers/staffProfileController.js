@@ -175,19 +175,19 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
           accountNumber: canRevealBank ? targetProfile.accountNumber : maskBankAccount(targetProfile.accountNumber),
           accountTitle: canRevealBank ? targetProfile.accountTitle : '****',
           correctionRemarks: targetProfile.correctionRemarks,
-          approvalHistory: (targetProfile.approvalHistory || []).map((h) => ({
-            action: h.action,
-            decision: h.decision,
-            reason: h.reason,
-            actorRole: h.actorRole,
-            actorName: h.actorName,
-            timestamp: h.timestamp,
+          approvalHistory: (targetProfile.approvalHistory || []).map((historyItem) => ({
+            action: historyItem.action,
+            decision: historyItem.decision,
+            reason: historyItem.reason,
+            actorRole: historyItem.actorRole,
+            actorName: historyItem.actorName,
+            timestamp: historyItem.timestamp,
           })),
         }
       : null,
     assignments: {
-      active: assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
-      history: assignments.filter((a) => a.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+      active: assignments.filter((assignmentItem) => assignmentItem.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+      history: assignments.filter((assignmentItem) => assignmentItem.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE),
     },
     // Privacy & PDF Access Metadata
     privacySettings: (isSelf || isPrivilegedAdmin)
@@ -426,13 +426,13 @@ export const handleGetStaffAccessHistory = asyncHandler(async (request, response
 
   return sendSuccess(response, 200, 'Access history retrieved successfully.', {
     requests,
-    downloads: downloads.map((d) => ({
-      id: d._id,
-      actorName: d.actorName,
-      actorRole: d.actorRole,
-      actorDesignation: d.actorDesignation,
-      downloadedAt: d.createdAt,
-      reason: d.reason,
+    downloads: downloads.map((downloadRecord) => ({
+      id: downloadRecord._id,
+      actorName: downloadRecord.actorName,
+      actorRole: downloadRecord.actorRole,
+      actorDesignation: downloadRecord.actorDesignation,
+      downloadedAt: downloadRecord.createdAt,
+      reason: downloadRecord.reason,
     })),
   });
 });

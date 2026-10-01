@@ -1108,10 +1108,10 @@ export const handleGetTeacherDailyAttendance = asyncHandler(async (request, resp
     };
   });
 
-  const presentCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.PRESENT).length;
-  const absentCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.ABSENT).length;
-  const leaveCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.LEAVE).length;
-  const lateCount = roster.filter((item) => item.status === ATTENDANCE_STATUS.LATE).length;
+  const presentCount = roster.filter((rosterRecord) => rosterRecord.status === ATTENDANCE_STATUS.PRESENT).length;
+  const absentCount = roster.filter((rosterRecord) => rosterRecord.status === ATTENDANCE_STATUS.ABSENT).length;
+  const leaveCount = roster.filter((rosterRecord) => rosterRecord.status === ATTENDANCE_STATUS.LEAVE).length;
+  const lateCount = roster.filter((rosterRecord) => rosterRecord.status === ATTENDANCE_STATUS.LATE).length;
 
   return sendSuccess(response, 200, 'Teacher daily attendance roster retrieved successfully.', {
     schoolId: effectiveSchoolId,
@@ -1265,10 +1265,10 @@ export const handleSaveTeacherDailyAttendance = asyncHandler(async (request, res
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
-  const presentCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.PRESENT).length;
-  const absentCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.ABSENT).length;
-  const leaveCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.LEAVE).length;
-  const lateCount = sanitizedRecords.filter((item) => item.status === ATTENDANCE_STATUS.LATE).length;
+  const presentCount = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.PRESENT).length;
+  const absentCount = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.ABSENT).length;
+  const leaveCount = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.LEAVE).length;
+  const lateCount = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.LATE).length;
 
   // Immutable Audit Log
   await AuditLog.create({

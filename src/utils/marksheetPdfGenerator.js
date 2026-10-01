@@ -228,7 +228,7 @@ export function generateStudentMarksheetPdf({
 
   // Helper to find subject marks by name
   const findMarks = (key) => {
-    return metrics.subjectMarks.find((s) => (s.subjectName || '').toLowerCase().includes(key));
+    return metrics.subjectMarks.find((subjectRecord) => (subjectRecord.subjectName || '').toLowerCase().includes(key));
   };
 
   const islamiatDoc = findMarks('islamiat');
@@ -596,7 +596,7 @@ export function generateTabulationSheetPdf({
 
     // Find subjects
     const subjects = entry.subjectMarks || [];
-    const findSubj = (name) => subjects.find((s) => (s.subjectName || '').toLowerCase().includes(name));
+    const findSubj = (name) => subjects.find((subjectRecord) => (subjectRecord.subjectName || '').toLowerCase().includes(name));
 
     const isl = findSubj('islamiat');
     const isNaz = isl?.subComponents ? isl.subComponents.nazra : Math.round((isl?.obtainedMarks || 0) * 0.2);

@@ -269,9 +269,9 @@ export const processPendingOutboxNotifications = async () => {
         await record.save();
         failed++;
       }
-    } catch (err) {
+    } catch (dispatchError) {
       record.retryCount += 1;
-      record.lastError = err.message;
+      record.lastError = dispatchError.message;
       if (record.retryCount >= record.maxRetries) {
         record.status = 'FAILED';
       }

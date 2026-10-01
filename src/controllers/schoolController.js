@@ -295,7 +295,7 @@ export const handleGetSchoolById = asyncHandler(async (request, response) => {
         targetName: schoolRecord.name || 'Unassigned School',
         schoolId: targetSchoolId,
         previousState: {
-          assignedSchools: (requestingActor.assignedSchools || []).map((s) => String(s?._id || s)),
+          assignedSchools: (requestingActor.assignedSchools || []).map((assignedSchool) => String(assignedSchool?._id || assignedSchool)),
           attemptedSchoolId: targetSchoolId,
         },
         result: 'DENIED',

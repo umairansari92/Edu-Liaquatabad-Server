@@ -594,7 +594,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
 
     if (assignment.subjectId) {
       const exists = sectionEntry.assignedSubjects.some(
-        (sub) => String(sub._id) === String(assignment.subjectId._id || assignment.subjectId)
+        (subjectEntry) => String(subjectEntry._id) === String(assignment.subjectId._id || assignment.subjectId)
       );
       if (!exists) {
         sectionEntry.assignedSubjects.push({
@@ -649,13 +649,13 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         : 'NOT_SUBMITTED';
 
       const presentCount = attendanceRecord
-        ? attendanceRecord.records.filter((rec) => rec.status === ATTENDANCE_STATUS.PRESENT).length
+        ? attendanceRecord.records.filter((attendanceRosterRecord) => attendanceRosterRecord.status === ATTENDANCE_STATUS.PRESENT).length
         : null;
       const absentCount = attendanceRecord
-        ? attendanceRecord.records.filter((rec) => rec.status === ATTENDANCE_STATUS.ABSENT).length
+        ? attendanceRecord.records.filter((attendanceRosterRecord) => attendanceRosterRecord.status === ATTENDANCE_STATUS.ABSENT).length
         : null;
       const leaveCount = attendanceRecord
-        ? attendanceRecord.records.filter((rec) => rec.status === ATTENDANCE_STATUS.LEAVE).length
+        ? attendanceRecord.records.filter((attendanceRosterRecord) => attendanceRosterRecord.status === ATTENDANCE_STATUS.LEAVE).length
         : null;
 
       return {
@@ -693,10 +693,10 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     }
   }
 
-  const totalAssignedStudents = sectionSummaries.reduce((sum, sec) => sum + sec.studentCount, 0);
-  const pendingAttendanceSections = sectionSummaries.filter((sec) => sec.isClassTeacher && !sec.todayAttendance.submitted);
-  const classTeacherSectionCount = sectionSummaries.filter((sec) => sec.isClassTeacher).length;
-  const subjectTeacherSectionCount = sectionSummaries.filter((sec) => sec.assignedSubjects.length > 0).length;
+  const totalAssignedStudents = sectionSummaries.reduce((accumulatedCount, sectionSummary) => accumulatedCount + sectionSummary.studentCount, 0);
+  const pendingAttendanceSections = sectionSummaries.filter((sectionSummary) => sectionSummary.isClassTeacher && !sectionSummary.todayAttendance.submitted);
+  const classTeacherSectionCount = sectionSummaries.filter((sectionSummary) => sectionSummary.isClassTeacher).length;
+  const subjectTeacherSectionCount = sectionSummaries.filter((sectionSummary) => sectionSummary.assignedSubjects.length > 0).length;
 
   return sendSuccess(response, 200, 'Teacher operational summary retrieved.', {
     teacherContext: {

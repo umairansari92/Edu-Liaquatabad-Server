@@ -174,16 +174,16 @@ export function computeClassTabulation(rawResultsList = []) {
 
   // Rank passed students by percentage descending (then grandTotalObtained descending)
   const passedStudents = processedResults
-    .filter((item) => item.isOverallPassed)
-    .sort((a, b) => b.percentage - a.percentage || b.totalObtainedMarks - a.totalObtainedMarks);
+    .filter((resultItem) => resultItem.isOverallPassed)
+    .sort((firstResult, secondResult) => secondResult.percentage - firstResult.percentage || secondResult.totalObtainedMarks - firstResult.totalObtainedMarks);
 
   // Assign dense/sequential ranks
   let currentRank = 1;
   for (let index = 0; index < passedStudents.length; index++) {
     if (index > 0) {
-      const prev = passedStudents[index - 1];
-      const curr = passedStudents[index];
-      if (curr.percentage < prev.percentage) {
+      const previousResult = passedStudents[index - 1];
+      const currentResult = passedStudents[index];
+      if (currentResult.percentage < previousResult.percentage) {
         currentRank = index + 1;
       }
     }
@@ -192,13 +192,13 @@ export function computeClassTabulation(rawResultsList = []) {
   }
 
   // Map ranks back to full list
-  const rankedResults = processedResults.map((item) => {
-    if (!item.isOverallPassed) {
-      return { ...item, rank: null, rankFormatted: '-' };
+  const rankedResults = processedResults.map((resultItem) => {
+    if (!resultItem.isOverallPassed) {
+      return { ...resultItem, rank: null, rankFormatted: '-' };
     }
-    const matchedPassed = passedStudents.find((p) => p.rawStudentId === item.rawStudentId);
+    const matchedPassed = passedStudents.find((passedItem) => passedItem.rawStudentId === resultItem.rawStudentId);
     return {
-      ...item,
+      ...resultItem,
       rank:          matchedPassed ? matchedPassed.rank : null,
       rankFormatted: matchedPassed ? matchedPassed.rankFormatted : '-',
     };
@@ -206,9 +206,9 @@ export function computeClassTabulation(rawResultsList = []) {
 
   // Calculate Municipal Statistics Box (matching Image 2 bottom table)
   const totalEnrolled = rankedResults.length;
-  const appearedCount = rankedResults.filter((r) => r.resultStatus !== 'ABSENT' && (r.subjectMarks || []).length > 0).length;
+  const appearedCount = rankedResults.filter((resultCandidate) => resultCandidate.resultStatus !== 'ABSENT' && (resultCandidate.subjectMarks || []).length > 0).length;
   const absenteesCount = totalEnrolled - appearedCount;
-  const passedCount = rankedResults.filter((r) => r.isOverallPassed).length;
+  const passedCount = rankedResults.filter((resultCandidate) => resultCandidate.isOverallPassed).length;
   const failedCount = appearedCount - passedCount;
   const passingPercentage = appearedCount > 0 ? Number(((passedCount / appearedCount) * 100).toFixed(1)) : 0;
 

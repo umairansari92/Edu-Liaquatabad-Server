@@ -89,7 +89,7 @@ export const loginSchema = z.object({
   email: loginIdentifierField,
   password: z.string().min(1, 'Password is required').max(128, 'Password too long'),
   captchaAnswer: process.env.NODE_ENV === 'production'
-    ? z.union([z.string(), z.number()]).refine((val) => String(val).trim().length > 0, 'CAPTCHA answer is required.')
+    ? z.union([z.string(), z.number()]).refine((captchaValue) => String(captchaValue).trim().length > 0, 'CAPTCHA answer is required.')
     : z.union([z.string(), z.number()]).optional(),
   captchaChallengeToken: process.env.NODE_ENV === 'production'
     ? z.string().trim().min(1, 'CAPTCHA challenge token is required.')
@@ -178,11 +178,9 @@ export const registerStudentSchema = z.object({
   // Legacy fields (auto-assigned by server for Flow A; kept for backwards compatibility)
   grNumber: z.union([z.string().trim().min(1).max(50), z.number()]).optional(),
   rollNumber: z.string().trim().max(50).optional(),
-}).refine(
-  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
+}).refine((formData) => !formData.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(formData.role),
   { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
-).refine(
-  (data) => !data.confirmPassword || data.password === data.confirmPassword,
+).refine((formData) => !formData.confirmPassword || formData.password === formData.confirmPassword,
   { message: 'Passwords do not match.', path: ['confirmPassword'] }
 );
 
@@ -200,11 +198,9 @@ export const studentPortalActivationSchema = z.object({
   confirmPassword: z.string().min(1, 'Please confirm your account password'),
   otpCode: otpField,
   _gotcha: z.string().max(0, 'Submission rejected.').optional(),
-}).refine(
-  (data) => Boolean(data.grNumber || data.globalStudentId),
+}).refine((formData) => Boolean(formData.grNumber || formData.globalStudentId),
   { message: 'Either GR Number or Global Student ID must be provided.', path: ['grNumber'] }
-).refine(
-  (data) => data.password === data.confirmPassword,
+).refine((formData) => formData.password === formData.confirmPassword,
   { message: 'Passwords do not match.', path: ['confirmPassword'] }
 );
 
@@ -219,7 +215,7 @@ export const registerTeacherSchema = z.object({
   // Personal Info
   fullName: nameField('Full Name'),
   fatherName: safeString(100, 2, "Father's Name is required"),
-  dateOfBirth: z.union([z.string().min(1), z.date()]).refine((val) => !isNaN(new Date(val).getTime()), {
+  dateOfBirth: z.union([z.string().min(1), z.date()]).refine((dateValue) => !isNaN(new Date(dateValue).getTime()), {
     message: 'Valid Date of Birth is required',
   }),
   cnic: cnicField,
@@ -231,7 +227,7 @@ export const registerTeacherSchema = z.object({
   // Employment Info
   employeeId: safeString(50, 3, 'Employee Number must be at least 3 characters'),
   designation: safeString(100, 2, 'Designation is required'),
-  appointmentDate: z.union([z.string().min(1), z.date()]).refine((val) => !isNaN(new Date(val).getTime()), {
+  appointmentDate: z.union([z.string().min(1), z.date()]).refine((dateValue) => !isNaN(new Date(dateValue).getTime()), {
     message: 'Valid Date of Appointment is required',
   }),
   email: emailField,
@@ -258,13 +254,11 @@ export const registerTeacherSchema = z.object({
   captchaAnswer: z.string().trim().optional(),
   captchaChallengeToken: z.string().trim().optional(),
   _gotcha: z.string().max(0, 'Submission rejected.').optional(), // Honeypot
-}).refine(
-  (data) => !data.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(data.role),
+}).refine((formData) => !formData.role || ![ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM].includes(formData.role),
   { message: 'Privileged authorities (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) cannot be self-assigned at registration.', path: ['role'] }
-).refine(
-  (data) => {
+).refine((formData) => {
     // Non-teaching staff must NOT have teaching assignments
-    if (data.isTeachingStaff === false && data.teachingAssignments && data.teachingAssignments.length > 0) {
+    if (formData.isTeachingStaff === false && formData.teachingAssignments && formData.teachingAssignments.length > 0) {
       return false;
     }
     return true;
@@ -311,13 +305,13 @@ export const mfaStepUpPasswordSchema = z
     password: z.string().min(1, 'Password confirmation is required for this operation.').max(128).optional(),
     currentPassword: z.string().min(1, 'Password confirmation is required for this operation.').max(128).optional(),
   })
-  .refine((data) => Boolean(data.password || data.currentPassword), {
+  .refine((passwordPayload) => Boolean(passwordPayload.password || passwordPayload.currentPassword), {
     message: 'Password confirmation is required for this operation.',
     path: ['password'],
   })
-  .transform((data) => ({
-    password: data.password || data.currentPassword,
-    currentPassword: data.currentPassword || data.password,
+  .transform((passwordPayload) => ({
+    password: passwordPayload.password || passwordPayload.currentPassword,
+    currentPassword: passwordPayload.currentPassword || passwordPayload.password,
   }));
 
 export const adminMfaResetSchema = z.object({

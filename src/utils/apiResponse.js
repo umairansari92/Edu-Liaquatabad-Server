@@ -1,21 +1,21 @@
 /**
  * Standard API Response Envelope Builder
  */
-export const sendSuccess = (res, statusCode = 200, message = 'Success', data = {}, meta = null) => {
-  const response = {
+export const sendSuccess = (httpResponse, statusCode = 200, message = 'Success', payloadData = {}, metadata = null) => {
+  const envelope = {
     success: true,
     statusCode,
     message,
-    data,
+    data: payloadData,
   };
-  if (meta) {
-    response.meta = meta;
+  if (metadata) {
+    envelope.meta = metadata;
   }
-  return res.status(statusCode).json(response);
+  return httpResponse.status(statusCode).json(envelope);
 };
 
-export const sendError = (res, statusCode = 500, message = 'Internal Server Error', errors = []) => {
-  return res.status(statusCode).json({
+export const sendError = (httpResponse, statusCode = 500, message = 'Internal Server Error', errors = []) => {
+  return httpResponse.status(statusCode).json({
     success: false,
     statusCode,
     message,

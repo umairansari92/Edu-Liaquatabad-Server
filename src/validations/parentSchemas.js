@@ -74,7 +74,7 @@ export const registerParentSchema = z.object({
   relationship: z.enum(Object.values(PARENT_RELATIONSHIP)).optional(),
   otpCode: otpField.optional(),
   captchaAnswer: process.env.NODE_ENV === 'production'
-    ? z.union([z.string(), z.number()]).refine((val) => String(val).trim().length > 0, 'CAPTCHA answer is required.')
+    ? z.union([z.string(), z.number()]).refine((captchaValue) => String(captchaValue).trim().length > 0, 'CAPTCHA answer is required.')
     : z.union([z.string(), z.number()]).optional(),
   captchaChallengeToken: process.env.NODE_ENV === 'production'
     ? z.string().trim().min(1, 'CAPTCHA challenge token is required.')
@@ -89,7 +89,7 @@ export const lookupWardSchema = z.object({
   admissionRegisterNumber: z.string().trim().optional(),
   globalStudentId: z.string().trim().optional(),
 }).refine(
-  (data) => data.grNumber || data.admissionRegisterNumber || data.globalStudentId,
+  (lookupPayload) => lookupPayload.grNumber || lookupPayload.admissionRegisterNumber || lookupPayload.globalStudentId,
   {
     message: 'Either GR Number, Admission Register Number, or Global Student ID is required for lookup.',
   }

@@ -444,7 +444,7 @@ export const handleGetTransfers = asyncHandler(async (request, response) => {
       queryFilter.$or = [{ fromSchoolId: actorSchoolId }, { toSchoolId: actorSchoolId }];
     }
   } else if (actor.role === ROLES.SUPERVISOR) {
-    const assignedSchoolIds = (actor.assignedSchools || []).map((s) => String(s._id || s));
+    const assignedSchoolIds = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool._id || assignedSchool));
     if (assignedSchoolIds.length === 0) {
       return sendSuccess(response, 200, 'No assigned schools found.', { transfers: [], total: 0 });
     }
@@ -515,7 +515,7 @@ export const handleGetTransferById = asyncHandler(async (request, response) => {
       return sendError(response, 403, 'Access denied. You can only view transfer records involving your assigned school.');
     }
   } else if (actor.role === ROLES.SUPERVISOR) {
-    const assignedSchoolIds = (actor.assignedSchools || []).map((s) => String(s._id || s));
+    const assignedSchoolIds = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool._id || assignedSchool));
     const fromId = String(transferRecord.fromSchoolId?._id || transferRecord.fromSchoolId);
     const toId   = String(transferRecord.toSchoolId?._id || transferRecord.toSchoolId);
 

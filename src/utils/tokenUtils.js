@@ -115,8 +115,8 @@ export const hashToken = (token) => {
   return crypto.createHash('sha256').update(token).digest('hex');
 };
 
-export const setRefreshCookie = (res, token) => {
-  res.cookie('refreshToken', token, {
+export const setRefreshCookie = (response, token) => {
+  response.cookie('refreshToken', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
@@ -125,8 +125,8 @@ export const setRefreshCookie = (res, token) => {
   });
 };
 
-export const clearRefreshCookie = (res) => {
-  res.clearCookie('refreshToken', {
+export const clearRefreshCookie = (response) => {
+  response.clearCookie('refreshToken', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
@@ -143,38 +143,38 @@ export const parseDeviceLabel = (userAgent) => {
     return 'Unknown Device';
   }
 
-  const ua = userAgent.trim();
+  const normalizedUserAgent = userAgent.trim();
 
   // Browser detection
   let browser = 'Web Browser';
-  if (ua.includes('Edg/')) {
+  if (normalizedUserAgent.includes('Edg/')) {
     browser = 'Microsoft Edge';
-  } else if (ua.includes('Chrome/') && !ua.includes('Chromium')) {
+  } else if (normalizedUserAgent.includes('Chrome/') && !normalizedUserAgent.includes('Chromium')) {
     browser = 'Google Chrome';
-  } else if (ua.includes('Firefox/')) {
+  } else if (normalizedUserAgent.includes('Firefox/')) {
     browser = 'Mozilla Firefox';
-  } else if (ua.includes('Safari/') && !ua.includes('Chrome')) {
+  } else if (normalizedUserAgent.includes('Safari/') && !normalizedUserAgent.includes('Chrome')) {
     browser = 'Apple Safari';
-  } else if (ua.includes('PostmanRuntime/')) {
+  } else if (normalizedUserAgent.includes('PostmanRuntime/')) {
     browser = 'Postman Client';
   }
 
   // Operating System detection
-  let os = 'Unknown OS';
-  if (ua.includes('Windows NT 10.0') || ua.includes('Windows NT 11.0')) {
-    os = 'Windows';
-  } else if (ua.includes('Windows')) {
-    os = 'Windows';
-  } else if (ua.includes('iPhone') || ua.includes('iPad')) {
-    os = 'iOS';
-  } else if (ua.includes('Macintosh') || ua.includes('Mac OS X')) {
-    os = 'macOS';
-  } else if (ua.includes('Android')) {
-    os = 'Android';
-  } else if (ua.includes('Linux')) {
-    os = 'Linux';
+  let operatingSystem = 'Unknown OS';
+  if (normalizedUserAgent.includes('Windows NT 10.0') || normalizedUserAgent.includes('Windows NT 11.0')) {
+    operatingSystem = 'Windows';
+  } else if (normalizedUserAgent.includes('Windows')) {
+    operatingSystem = 'Windows';
+  } else if (normalizedUserAgent.includes('iPhone') || normalizedUserAgent.includes('iPad')) {
+    operatingSystem = 'iOS';
+  } else if (normalizedUserAgent.includes('Macintosh') || normalizedUserAgent.includes('Mac OS X')) {
+    operatingSystem = 'macOS';
+  } else if (normalizedUserAgent.includes('Android')) {
+    operatingSystem = 'Android';
+  } else if (normalizedUserAgent.includes('Linux')) {
+    operatingSystem = 'Linux';
   }
 
-  return `${browser} on ${os}`;
+  return `${browser} on ${operatingSystem}`;
 };
 

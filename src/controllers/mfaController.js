@@ -504,7 +504,7 @@ export const handleMfaRecoveryLogin = asyncHandler(async (request, response) => 
     return sendError(response, 401, 'Recovery code has already been consumed.');
   }
 
-  const remainingCodes = (updatedUser.mfa.recoveryCodes || []).filter(c => !c.usedAt).length;
+  const remainingCodes = (updatedUser.mfa.recoveryCodes || []).filter((codeItem) => !codeItem.usedAt).length;
 
   // ─── High-Severity Audit Event & Notifications ───
   await AuditLog.create({
@@ -627,7 +627,7 @@ export const handleMfaStatus = asyncHandler(async (request, response) => {
 
   const isEnrolled = !!user.mfa?.enabled;
   const remainingCodes = isEnrolled && Array.isArray(user.mfa.recoveryCodes)
-    ? user.mfa.recoveryCodes.filter(c => !c.usedAt).length
+    ? user.mfa.recoveryCodes.filter((codeItem) => !codeItem.usedAt).length
     : 0;
 
   return sendSuccess(response, 200, 'MFA configuration status retrieved.', {
