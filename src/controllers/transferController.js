@@ -31,52 +31,79 @@ const ACTIVE_IN_FLIGHT_STATUSES = Object.freeze([
 
 /**
  * POST /api/v1/transfers
- * Initiates a faculty transfer directive.
- * Enforces in-flight uniqueness, jurisdictional boundaries, and atomic execution.
+ * Initiates an inter-school staff/faculty transfer directive.
+ * Enforces in-flight uniqueness, jurisdictional boundaries, target HM notification delivery, and atomic execution.
  */
 export const handleInitiateTransfer = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
-  const teacherUserId = request.body.teacherUserId || request.body.teacherId;
-  const targetSchoolId = request.body.targetSchoolId || request.body.destinationSchoolId;
+  const targetEmployeeUserId =
+    request.body.employeeUserId ||
+    request.body.employeeId ||
+    request.body.teacherUserId ||
+    request.body.teacherId ||
+    request.body.userId;
+  const targetSchoolId =
+    request.body.targetSchoolId ||
+    request.body.destinationSchoolId ||
+    request.body.toSchoolId;
   const {
-    reason,
     isEmergencyOverride,
     overrideJustification,
     officialOrderNumber,
     orderDate,
   } = request.body;
+  const transferReason = (request.body.reason || 'Official administrative transfer directive').trim();
 
   // ── Input validation ─────────────────────────────────────────────────────
-  if (!teacherUserId || !/^[0-9a-fA-F]{24}$/.test(teacherUserId)) {
-    return sendError(response, 400, 'A valid teacherUserId is required.');
+  if (!targetEmployeeUserId || !/^[0-9a-fA-F]{24}$/.test(targetEmployeeUserId)) {
+    return sendError(response, 400, 'A valid employee identifier is required.');
   }
   if (!targetSchoolId || !/^[0-9a-fA-F]{24}$/.test(targetSchoolId)) {
     return sendError(response, 400, 'A valid targetSchoolId is required.');
   }
-  if (!reason || reason.trim().length < 5) {
-    return sendError(response, 400, 'A transfer reason of at least 5 characters is required.');
+  if (!transferReason || transferReason.length < 3) {
+    return sendError(response, 400, 'A transfer reason of at least 3 characters is required.');
   }
 
   // ── Pre-transaction validation (read-only) ──────────────────────────────
-  const [targetTeacher, targetSchool, activeExistingTransfer] = await Promise.all([
-    User.findById(teacherUserId).populate('schoolId', 'name townId _id'),
+  const [targetEmployee, targetSchool, activeExistingTransfer] = await Promise.all([
+    User.findById(targetEmployeeUserId).populate('schoolId', 'name townId _id'),
     School.findById(targetSchoolId).lean(),
     TransferRequest.findOne({
-      teacherUserId,
+      $or: [
+        { teacherUserId: targetEmployeeUserId },
+        { employeeUserId: targetEmployeeUserId },
+      ],
       status: { $in: ACTIVE_IN_FLIGHT_STATUSES },
     }).lean(),
   ]);
 
-  if (!targetTeacher) {
-    return sendError(response, 404, 'Teacher not found in personnel registry.');
-  }
-  if (targetTeacher.role !== ROLES.TEACHER) {
-    return sendError(response, 400, `Only TEACHER role personnel can be transferred. Target role: ${targetTeacher.role}.`);
+  if (!targetEmployee) {
+    return sendError(response, 404, 'Employee not found in personnel registry.');
   }
 
-  const sourceSchoolId = targetTeacher.schoolId?._id;
+  // Transferable roles guard: Teachers, Peons, Supervisors, Staff
+  const NON_TRANSFERABLE_ROLES = [ROLES.STUDENT, ROLES.PARENT];
+  if (NON_TRANSFERABLE_ROLES.includes(targetEmployee.role)) {
+    return sendError(
+      response,
+      400,
+      `Personnel with role "${targetEmployee.role}" cannot be transferred via staff transfer directive.`
+    );
+  }
+
+  const NON_TRANSFERABLE_STATUSES = ['RETIRED', 'REJECTED', 'SUSPENDED'];
+  if (NON_TRANSFERABLE_STATUSES.includes(targetEmployee.status)) {
+    return sendError(
+      response,
+      400,
+      `Employee account status is "${targetEmployee.status}" and cannot be transferred.`
+    );
+  }
+
+  const sourceSchoolId = targetEmployee.schoolId?._id || targetEmployee.schoolId;
   if (!sourceSchoolId) {
-    return sendError(response, 400, 'Teacher does not have a current school assignment. Assign a school first.');
+    return sendError(response, 400, 'Employee does not have a current school assignment. Assign a school first.');
   }
   if (String(sourceSchoolId) === String(targetSchoolId)) {
     return sendError(response, 400, 'Source and target school cannot be the same.');
@@ -97,18 +124,18 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
   // ── Jurisdictional check for ADMIN actors ─────────────────────────────
   if (requestingActor.role === ROLES.ADMIN) {
     const targetTownId = String(targetSchool.townId);
-    const sourceTownId = String(targetTeacher.schoolId.townId);
+    const sourceTownId = String(targetEmployee.schoolId?.townId || '');
     const actorTownId  = String(requestingActor.townId);
 
-    if (targetTownId !== actorTownId || sourceTownId !== actorTownId) {
+    if (targetTownId !== actorTownId || (sourceTownId && sourceTownId !== actorTownId)) {
       await AuditLog.create({
         actorId:    requestingActor._id || requestingActor.userId,
         actorRole:  requestingActor.role,
         actorName:  requestingActor.fullName || '',
         action:     'ADMIN_CROSS_TOWN_TRANSFER_BLOCKED',
         targetModel: 'TransferRequest',
-        targetId:   targetTeacher._id,
-        targetName: targetTeacher.fullName,
+        targetId:   targetEmployee._id,
+        targetName: targetEmployee.fullName,
         townId:     requestingActor.townId,
         previousState: { sourceTownId, targetTownId },
         result:     'DENIED',
@@ -121,6 +148,13 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
     }
   }
 
+  // ── Look up active Head Master of Target School ─────────────────────────
+  const targetHM = await User.findOne({
+    schoolId: targetSchoolId,
+    role: ROLES.HM,
+    status: 'ACTIVE',
+  }).lean();
+
   // ═══════════════════════════════════════════════════════════════════════
   // ATOMIC TRANSACTION
   // ═══════════════════════════════════════════════════════════════════════
@@ -130,24 +164,24 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
   try {
     const effectiveOrderDate = orderDate ? new Date(orderDate) : new Date();
 
-    let initialStatus = TRANSFER_STATUS.APPROVED;
+    let initialStatus = TRANSFER_STATUS.PENDING_TARGET_HM_APPROVAL;
     if (isEmergencyOverride) {
       initialStatus = TRANSFER_STATUS.OVERRIDDEN_AND_TRANSFERRED;
-    } else if (!officialOrderNumber) {
-      initialStatus = TRANSFER_STATUS.TRANSFER_REQUESTED;
     }
 
-    // 1. Create TransferRequest record
+    // 1. Create persistent TransferRequest record
     const [transferRecord] = await TransferRequest.create(
       [{
-        teacherUserId,
+        teacherUserId:        targetEmployeeUserId,
+        employeeUserId:       targetEmployeeUserId,
+        employeeDesignation:  targetEmployee.designation || targetEmployee.role,
         fromSchoolId:         sourceSchoolId,
         toSchoolId:           targetSchoolId,
         initiatedBy:          requestingActor._id || requestingActor.userId,
         initiatorRole:        requestingActor.role,
         isEmergencyOverride:  Boolean(isEmergencyOverride),
         overrideJustification: overrideJustification || '',
-        reason:               reason.trim(),
+        reason:               transferReason,
         officialOrderNumber:  officialOrderNumber?.trim() || '',
         orderDate:            effectiveOrderDate,
         status:               initialStatus,
@@ -160,17 +194,17 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
 
     // If emergency override, execute atomic reassignment immediately
     if (isEmergencyOverride) {
-      // 2. Update teacher's schoolId
+      // 2. Update employee's schoolId
       await User.findByIdAndUpdate(
-        teacherUserId,
+        targetEmployeeUserId,
         { $set: { schoolId: targetSchoolId } },
         { session }
       );
 
-      // 3. Expire ALL ACTIVE teaching assignments at the old school → TRANSFERRED
+      // 3. Expire ALL ACTIVE teaching assignments at old school → TRANSFERRED
       const expiredAssignmentsResult = await TeachingAssignment.updateMany(
         {
-          teacherId: teacherUserId,
+          teacherId: targetEmployeeUserId,
           schoolId:  sourceSchoolId,
           status:    TEACHING_ASSIGNMENT_STATUS.ACTIVE,
         },
@@ -189,7 +223,7 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
       const clearedSectionsResult = await Section.updateMany(
         {
           schoolId:       sourceSchoolId,
-          classTeacherId: teacherUserId,
+          classTeacherId: targetEmployeeUserId,
         },
         {
           $set: { classTeacherId: null },
@@ -199,23 +233,25 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
       clearedSectionsCount = clearedSectionsResult.modifiedCount;
 
       // 5. Sync TeacherProfile: update currentSchoolId + append transferHistory
-      await TeacherProfile.findOneAndUpdate(
-        { userId: teacherUserId },
-        {
-          $set: { currentSchoolId: targetSchoolId },
-          $push: {
-            transferHistory: {
-              fromSchoolId:         sourceSchoolId,
-              toSchoolId:           targetSchoolId,
-              transferRequestId:    transferRecord._id,
-              relievedDate:         effectiveOrderDate,
-              joiningDate:          effectiveOrderDate,
-              orderReferenceNumber: officialOrderNumber || '',
+      if (targetEmployee.role === ROLES.TEACHER) {
+        await TeacherProfile.findOneAndUpdate(
+          { userId: targetEmployeeUserId },
+          {
+            $set: { currentSchoolId: targetSchoolId },
+            $push: {
+              transferHistory: {
+                fromSchoolId:         sourceSchoolId,
+                toSchoolId:           targetSchoolId,
+                transferRequestId:    transferRecord._id,
+                relievedDate:         effectiveOrderDate,
+                joiningDate:          effectiveOrderDate,
+                orderReferenceNumber: officialOrderNumber || '',
+              },
             },
           },
-        },
-        { session }
-      );
+          { session }
+        );
+      }
     }
 
     // 6. Write immutable audit log
@@ -225,15 +261,15 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
         actorRole:        requestingActor.role,
         actorDesignation: requestingActor.designation || '',
         actorName:        requestingActor.fullName || '',
-        action:           isEmergencyOverride ? 'TEACHER_TRANSFER_EMERGENCY_OVERRIDDEN' : 'TEACHER_TRANSFER_INITIATED',
+        action:           isEmergencyOverride ? 'TRANSFER_EMERGENCY_OVERRIDDEN' : 'TRANSFER_INITIATED',
         targetModel:      'User',
-        targetId:         targetTeacher._id,
-        targetName:       targetTeacher.fullName,
+        targetId:         targetEmployee._id,
+        targetName:       targetEmployee.fullName,
         townId:           requestingActor.townId || null,
         schoolId:         targetSchoolId,
         previousState: {
           schoolId:   String(sourceSchoolId),
-          schoolName: targetTeacher.schoolId?.name || 'Previous School',
+          schoolName: targetEmployee.schoolId?.name || 'Previous School',
         },
         newState: {
           schoolId:              targetSchoolId,
@@ -244,7 +280,7 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
           clearedClassTeacherSections: clearedSectionsCount,
         },
         result:    'SUCCESS',
-        reason:    reason.trim(),
+        reason:    transferReason,
         ipAddress: request.ip || '',
         userAgent: request.headers?.['user-agent'] || '',
         requestId: request.headers?.['x-request-id'] || '',
@@ -255,37 +291,68 @@ export const handleInitiateTransfer = asyncHandler(async (request, response) => 
     await session.commitTransaction();
     session.endSession();
 
-    // Dispatch notification
+    // ── Dispatch notifications outside transaction ─────────────────────────
+    // 1. Dispatch persistent notification to Target School Head Master
+    if (targetHM) {
+      await dispatchNotificationEvent({
+        eventType: 'TRANSFER',
+        category: 'GOVERNANCE',
+        title: 'Transfer Approval Required',
+        message: `Transfer approval required: ${targetEmployee.fullName} (${targetEmployee.designation || targetEmployee.role}) requested to transfer from ${targetEmployee.schoolId?.name || 'Current School'} to ${targetSchool.name}. Initiated by ${requestingActor.fullName || requestingActor.role}.`,
+        actionLink: '/transfers',
+        rawMetadata: {
+          transferRequestId: String(transferRecord._id),
+          employeeId: String(targetEmployeeUserId),
+          employeeName: targetEmployee.fullName,
+          employeeDesignation: targetEmployee.designation || targetEmployee.role,
+          fromSchool: targetEmployee.schoolId?.name || String(sourceSchoolId),
+          fromSchoolId: String(sourceSchoolId),
+          toSchool: targetSchool.name,
+          toSchoolId: String(targetSchoolId),
+          initiatedBy: String(requestingActor._id || requestingActor.userId),
+          initiatedByName: requestingActor.fullName || requestingActor.role,
+          reason: transferReason,
+          orderNumber: officialOrderNumber || '',
+          status: initialStatus,
+        },
+        recipientUserIds: [String(targetHM._id)],
+      });
+    }
+
+    // 2. Dispatch notification to the employee
     await dispatchNotificationEvent({
       eventType: 'TRANSFER_STATUS',
       category: 'GOVERNANCE',
-      title: isEmergencyOverride ? 'Emergency Faculty Transfer Executed' : 'Faculty Transfer Directive Promulgated',
+      title: isEmergencyOverride ? 'Emergency Faculty Transfer Executed' : 'Transfer Request Initiated',
       message: isEmergencyOverride
         ? `You have been immediately transferred to ${targetSchool.name} under administrative emergency override.`
-        : `A transfer directive to ${targetSchool.name} has been issued. Status: ${initialStatus}. Awaiting Source HM formal relieving.`,
+        : `A transfer request to ${targetSchool.name} has been initiated and sent to the Target School Head Master for approval.`,
       actionLink: '/transfers',
       rawMetadata: {
         transferRequestId: String(transferRecord._id),
-        teacherName: targetTeacher.fullName,
-        fromSchool: targetTeacher.schoolId?.name || String(sourceSchoolId),
+        teacherName: targetEmployee.fullName,
+        employeeName: targetEmployee.fullName,
+        fromSchool: targetEmployee.schoolId?.name || String(sourceSchoolId),
         toSchool: targetSchool.name,
         orderNumber: officialOrderNumber || '',
+        status: initialStatus,
       },
-      recipientUserIds: [String(teacherUserId)],
+      recipientUserIds: [String(targetEmployeeUserId)],
     });
 
     return sendSuccess(
       response,
       201,
       isEmergencyOverride
-        ? `Teacher "${targetTeacher.fullName}" transferred immediately to "${targetSchool.name}". ${expiredAssignmentsCount} assignment(s) archived.`
-        : `Transfer directive for "${targetTeacher.fullName}" issued successfully. Status: ${initialStatus}.`,
+        ? `Employee "${targetEmployee.fullName}" transferred immediately to "${targetSchool.name}". ${expiredAssignmentsCount} assignment(s) archived.`
+        : `Transfer request sent to "${targetSchool.name}" Head Master for approval. Status: ${initialStatus}.`,
       {
         transferRequest: {
           _id:                  transferRecord._id,
           status:               transferRecord.status,
-          teacherName:          targetTeacher.fullName,
-          fromSchool:           targetTeacher.schoolId?.name || String(sourceSchoolId),
+          teacherName:          targetEmployee.fullName,
+          employeeName:         targetEmployee.fullName,
+          fromSchool:           targetEmployee.schoolId?.name || String(sourceSchoolId),
           toSchool:             targetSchool.name,
           reason:               transferRecord.reason,
           officialOrderNumber:  transferRecord.officialOrderNumber,
@@ -392,7 +459,8 @@ export const handleGetTransfers = asyncHandler(async (request, response) => {
   }
 
   const transfers = await TransferRequest.find(queryFilter)
-    .populate('teacherUserId', 'fullName email designation')
+    .populate('teacherUserId', 'fullName email designation schoolId role')
+    .populate('employeeUserId', 'fullName email designation schoolId role')
     .populate('fromSchoolId',  'name schoolCode code')
     .populate('toSchoolId',    'name schoolCode code')
     .populate('initiatedBy',   'fullName role')
@@ -424,7 +492,8 @@ export const handleGetTransferById = asyncHandler(async (request, response) => {
   }
 
   const transferRecord = await TransferRequest.findById(id)
-    .populate('teacherUserId', 'fullName email designation cnic phone')
+    .populate('teacherUserId', 'fullName email designation cnic phone role schoolId')
+    .populate('employeeUserId', 'fullName email designation cnic phone role schoolId')
     .populate('fromSchoolId',  'name schoolCode code address')
     .populate('toSchoolId',    'name schoolCode code address')
     .populate('initiatedBy',   'fullName role designation')
@@ -654,9 +723,10 @@ export const handleRelieveTeacher = asyncHandler(async (request, response) => {
 });
 
 /**
- * PATCH /api/v1/transfers/:id/approve-joining
- * Destination Head Master (HM) certifies physical arrival and approves faculty joining.
- * Exact State Machine Check: only transfers in RELIEVED or AWAITING_DESTINATION_HM can be approved.
+ * PATCH /api/v1/transfers/:id/approve-joining (also aliased to /api/v1/transfers/:id/approve)
+ * Target School Head Master (HM) explicitly reviews and approves incoming transfer.
+ * Only the Head Master assigned to targetSchoolId can approve.
+ * Atomically reassigns employee schoolId to destination school, revokes old duties, logs audit, and notifies initiator and employee.
  */
 export const handleApproveJoining = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
@@ -670,27 +740,44 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
   const transferRecord = await TransferRequest.findById(id)
     .populate('fromSchoolId', 'name schoolCode code')
     .populate('toSchoolId', 'name schoolCode code')
-    .populate('teacherUserId', 'fullName email schoolId role');
+    .populate('teacherUserId', 'fullName email schoolId role designation status');
 
   if (!transferRecord) {
     return sendError(response, 404, 'Transfer request not found.');
   }
 
-  // Exact State Machine Check
+  // ── Terminal state race condition guard (409 Conflict) ─────────────────
+  const TERMINAL_RESOLVED_STATUSES = [
+    TRANSFER_STATUS.JOINED,
+    TRANSFER_STATUS.JOINING_APPROVED,
+    TRANSFER_STATUS.REJECTED,
+    TRANSFER_STATUS.CANCELLED,
+  ];
+  if (
+    TERMINAL_RESOLVED_STATUSES.includes(transferRecord.status) ||
+    (transferRecord.status === TRANSFER_STATUS.APPROVED && transferRecord.approvedBy)
+  ) {
+    return sendError(response, 409, 'Transfer request has already been resolved.');
+  }
+
+  // If status is APPROVED from Town directive without HM approvedBy, relieving is required first
+  if (transferRecord.status === TRANSFER_STATUS.APPROVED) {
+    return sendError(
+      response,
+      400,
+      `Transfer cannot be approved for joining. Faculty member must be formally relieved by the Source School Head Master first (AWAITING_DESTINATION_HM / RELIEVED). Current status is "${transferRecord.status}".`
+    );
+  }
+
+  // Permissible pre-approval statuses
   const validJoiningPreStatuses = [
+    TRANSFER_STATUS.PENDING_TARGET_HM_APPROVAL,
+    TRANSFER_STATUS.TRANSFER_REQUESTED,
     TRANSFER_STATUS.RELIEVED,
     TRANSFER_STATUS.AWAITING_DESTINATION_HM,
   ];
 
   if (!validJoiningPreStatuses.includes(transferRecord.status)) {
-    // If premature attempt prior to relieving
-    if ([TRANSFER_STATUS.INITIATED, TRANSFER_STATUS.TRANSFER_REQUESTED, TRANSFER_STATUS.APPROVED].includes(transferRecord.status)) {
-      return sendError(
-        response,
-        400,
-        `Transfer cannot be approved for joining. Faculty member must be formally relieved by the Source School Head Master first (AWAITING_DESTINATION_HM / RELIEVED). Current status is "${transferRecord.status}".`
-      );
-    }
     return sendError(
       response,
       400,
@@ -698,11 +785,25 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
     );
   }
 
-  // Destination HM Boundary Check
+  // ── Target HM School Jurisdiction Guard (Anti-BOLA) ────────────────────
   const destinationSchoolId = String(transferRecord.toSchoolId?._id || transferRecord.toSchoolId);
   if (requestingActor.role === ROLES.HM) {
     const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
     if (!actorSchoolId || actorSchoolId !== destinationSchoolId) {
+      await AuditLog.create({
+        actorId:    requestingActor._id || requestingActor.userId,
+        actorRole:  requestingActor.role,
+        actorName:  requestingActor.fullName || '',
+        action:     'CROSS_SCHOOL_TRANSFER_APPROVAL_BLOCKED',
+        targetModel: 'TransferRequest',
+        targetId:   transferRecord._id,
+        schoolId:   destinationSchoolId,
+        result:     'DENIED',
+        reason:     `HM from school ${actorSchoolId} attempted to approve transfer for target school ${destinationSchoolId}`,
+        ipAddress:  request.ip || '',
+        userAgent:  request.headers?.['user-agent'] || '',
+        requestId:  request.headers?.['x-request-id'] || '',
+      }).catch(() => {});
       return sendError(
         response,
         403,
@@ -711,13 +812,58 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
     }
   }
 
+  // Verify employee still exists and is transferable
+  const targetEmployeeUserId =
+    transferRecord.employeeUserId?._id ||
+    transferRecord.employeeUserId ||
+    transferRecord.teacherUserId?._id ||
+    transferRecord.teacherUserId;
+
+  let targetEmployee = null;
+  if (
+    transferRecord.employeeUserId &&
+    typeof transferRecord.employeeUserId === 'object' &&
+    (transferRecord.employeeUserId.fullName || transferRecord.employeeUserId.role)
+  ) {
+    targetEmployee = transferRecord.employeeUserId;
+  } else if (
+    transferRecord.teacherUserId &&
+    typeof transferRecord.teacherUserId === 'object' &&
+    (transferRecord.teacherUserId.fullName || transferRecord.teacherUserId.role)
+  ) {
+    targetEmployee = transferRecord.teacherUserId;
+  } else {
+    try {
+      targetEmployee = await User.findById(targetEmployeeUserId);
+    } catch (_castError) {
+      targetEmployee = null;
+    }
+  }
+  if (!targetEmployee) {
+    return sendError(response, 404, 'Transferred employee account not found in personnel registry.');
+  }
+  const NON_TRANSFERABLE_STATUSES = ['RETIRED', 'REJECTED', 'SUSPENDED'];
+  if (NON_TRANSFERABLE_STATUSES.includes(targetEmployee.status)) {
+    return sendError(
+      response,
+      400,
+      `Employee account status is "${targetEmployee.status}" and cannot be transferred.`
+    );
+  }
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const effectiveJoiningDate = joiningDate ? new Date(joiningDate) : new Date();
 
-    // 1. Atomically transition transfer record status to JOINED (or JOINING_APPROVED)
+    // Determine target state based on lifecycle position
+    let targetApprovedStatus = TRANSFER_STATUS.APPROVED;
+    if ([TRANSFER_STATUS.RELIEVED, TRANSFER_STATUS.AWAITING_DESTINATION_HM].includes(transferRecord.status)) {
+      targetApprovedStatus = TRANSFER_STATUS.JOINED;
+    }
+
+    // 1. Atomically transition transfer record status
     const updatedTransfer = await TransferRequest.findOneAndUpdate(
       {
         _id: transferRecord._id,
@@ -725,7 +871,9 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
       },
       {
         $set: {
-          status: TRANSFER_STATUS.JOINED,
+          status:     targetApprovedStatus,
+          approvedBy: requestingActor._id || requestingActor.userId,
+          approvedAt: new Date(),
           destinationHMReview: {
             reviewedBy:           requestingActor._id || requestingActor.userId,
             reviewedAt:           new Date(),
@@ -747,24 +895,23 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
       );
     }
 
-    const targetTeacherUserId = transferRecord.teacherUserId?._id || transferRecord.teacherUserId;
     const sourceSchoolId = transferRecord.fromSchoolId?._id || transferRecord.fromSchoolId;
     const targetSchoolId = transferRecord.toSchoolId?._id || transferRecord.toSchoolId;
     const sourceSchoolName = transferRecord.fromSchoolId?.name || 'Previous School';
     const targetSchoolName = transferRecord.toSchoolId?.name || 'New School';
-    const targetTeacherName = transferRecord.teacherUserId?.fullName || 'Faculty Member';
+    const targetTeacherName = targetEmployee.fullName || 'Employee';
 
     // 2. Update User.schoolId to destination school
     await User.findByIdAndUpdate(
-      targetTeacherUserId,
+      targetEmployeeUserId,
       { $set: { schoolId: targetSchoolId } },
       { session }
     );
 
-    // 3. Expire all remaining active teaching assignments at the old school (safety guarantee)
+    // 3. Expire all remaining active teaching assignments at the old school
     const expiredAssignmentsResult = await TeachingAssignment.updateMany(
       {
-        teacherId: targetTeacherUserId,
+        teacherId: targetEmployeeUserId,
         schoolId:  sourceSchoolId,
         status:    TEACHING_ASSIGNMENT_STATUS.ACTIVE,
       },
@@ -782,7 +929,7 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
     await Section.updateMany(
       {
         schoolId:       sourceSchoolId,
-        classTeacherId: targetTeacherUserId,
+        classTeacherId: targetEmployeeUserId,
       },
       {
         $set: { classTeacherId: null },
@@ -790,24 +937,26 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
       { session }
     );
 
-    // 5. Sync TeacherProfile: update currentSchoolId + append transferHistory
-    await TeacherProfile.findOneAndUpdate(
-      { userId: targetTeacherUserId },
-      {
-        $set: { currentSchoolId: targetSchoolId },
-        $push: {
-          transferHistory: {
-            fromSchoolId:         sourceSchoolId,
-            toSchoolId:           targetSchoolId,
-            transferRequestId:    transferRecord._id,
-            relievedDate:         transferRecord.relievingDetails?.relievedAt || transferRecord.createdAt,
-            joiningDate:          effectiveJoiningDate,
-            orderReferenceNumber: transferRecord.officialOrderNumber || transferRecord.relievingDetails?.relievingOrderNumber || '',
+    // 5. Sync TeacherProfile if faculty member
+    if (targetEmployee.role === ROLES.TEACHER) {
+      await TeacherProfile.findOneAndUpdate(
+        { userId: targetEmployeeUserId },
+        {
+          $set: { currentSchoolId: targetSchoolId },
+          $push: {
+            transferHistory: {
+              fromSchoolId:         sourceSchoolId,
+              toSchoolId:           targetSchoolId,
+              transferRequestId:    transferRecord._id,
+              relievedDate:         transferRecord.relievingDetails?.relievedAt || transferRecord.createdAt,
+              joiningDate:          effectiveJoiningDate,
+              orderReferenceNumber: transferRecord.officialOrderNumber || transferRecord.relievingDetails?.relievingOrderNumber || '',
+            },
           },
         },
-      },
-      { session }
-    );
+        { session }
+      );
+    }
 
     // 6. Immutable Audit Log
     await AuditLog.create(
@@ -816,7 +965,7 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
         actorRole:        requestingActor.role,
         actorDesignation: requestingActor.designation || '',
         actorName:        requestingActor.fullName || '',
-        action:           'TEACHER_JOINING_CONFIRMED',
+        action:           'TRANSFER_APPROVED',
         targetModel:      'TransferRequest',
         targetId:         transferRecord._id,
         targetName:       targetTeacherName,
@@ -827,14 +976,16 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
           schoolName: sourceSchoolName,
         },
         newState: {
-          status:             TRANSFER_STATUS.JOINED,
+          status:             targetApprovedStatus,
           schoolId:           String(targetSchoolId),
           schoolName:         targetSchoolName,
           joiningDate:        effectiveJoiningDate,
+          approvedBy:         String(requestingActor._id || requestingActor.userId),
+          approvedAt:         new Date(),
           expiredAssignments: expiredAssignmentsResult.modifiedCount,
         },
         result:    'SUCCESS',
-        reason:    remarks.trim() || `Joining confirmed by Destination ${requestingActor.role}`,
+        reason:    remarks.trim() || `Transfer joining approved by Target School Head Master (${requestingActor.fullName || requestingActor.role})`,
         ipAddress: request.ip || '',
         userAgent: request.headers?.['user-agent'] || '',
         requestId: request.headers?.['x-request-id'] || '',
@@ -845,18 +996,43 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 7. Notify teacher
+    // 7. Dispatch notification to initiating official
+    if (transferRecord.initiatedBy) {
+      await dispatchNotificationEvent({
+        eventType: 'TRANSFER_STATUS',
+        category: 'GOVERNANCE',
+        title: 'Transfer Approved',
+        message: `Transfer approved. ${targetTeacherName} has been transferred from ${sourceSchoolName} to ${targetSchoolName}.`,
+        actionLink: '/transfers',
+        rawMetadata: {
+          transferRequestId: String(transferRecord._id),
+          teacherName: targetTeacherName,
+          employeeName: targetTeacherName,
+          fromSchool: sourceSchoolName,
+          toSchool: targetSchoolName,
+          status: targetApprovedStatus,
+        },
+        recipientUserIds: [String(transferRecord.initiatedBy._id || transferRecord.initiatedBy)],
+      });
+    }
+
+    // 8. Dispatch notification to the employee
     await dispatchNotificationEvent({
       eventType: 'TRANSFER_STATUS',
       category: 'GOVERNANCE',
-      title: 'Faculty Joining Approved',
-      message: `Your physical arrival at ${targetSchoolName} has been verified and approved by the Head Master.`,
+      title: 'Transfer Approved',
+      message: `Transfer approved. You have been transferred from ${sourceSchoolName} to ${targetSchoolName}.`,
       actionLink: '/transfers',
       rawMetadata: {
         transferRequestId: String(transferRecord._id),
+        teacherName: targetTeacherName,
+        employeeName: targetTeacherName,
+        fromSchool: sourceSchoolName,
+        toSchool: targetSchoolName,
         joiningDate: effectiveJoiningDate.toISOString(),
+        status: targetApprovedStatus,
       },
-      recipientUserIds: [String(targetTeacherUserId)],
+      recipientUserIds: [String(targetEmployeeUserId)],
     });
 
     return sendSuccess(response, 200, 'Faculty joining approved and records activated successfully.', {
@@ -874,7 +1050,7 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
 /**
  * PATCH /api/v1/transfers/:id/reject
  * Destination Head Master (HM) rejects physical joining due to document/identity discrepancy.
- * Transitions status to REJECTED_BY_HM and places transfer under ADMIN_REVIEW_REQUIRED.
+ * Transitions status to REJECTED (or REJECTED_BY_HM) with mandatory rejection reason and audit trail.
  */
 export const handleRejectJoining = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
@@ -884,8 +1060,8 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
   if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
     return sendError(response, 400, 'Invalid transfer request ID format.');
   }
-  if (!rejectionReason || rejectionReason.trim().length < 10) {
-    return sendError(response, 400, 'A detailed rejection reason of at least 10 characters is required.');
+  if (!rejectionReason || rejectionReason.trim().length < 5) {
+    return sendError(response, 400, 'A detailed rejection reason of at least 5 characters is required.');
   }
 
   const transferRecord = await TransferRequest.findById(id)
@@ -897,8 +1073,24 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
     return sendError(response, 404, 'Transfer request not found.');
   }
 
-  // Pre-status check: must be awaiting joining
+  // ── Terminal state race condition guard (409 Conflict) ─────────────────
+  const TERMINAL_RESOLVED_STATUSES = [
+    TRANSFER_STATUS.JOINED,
+    TRANSFER_STATUS.JOINING_APPROVED,
+    TRANSFER_STATUS.REJECTED,
+    TRANSFER_STATUS.REJECTED_BY_HM,
+    TRANSFER_STATUS.CANCELLED,
+  ];
+  if (TERMINAL_RESOLVED_STATUSES.includes(transferRecord.status)) {
+    return sendError(response, 409, 'Transfer request has already been resolved.');
+  }
+
+  // Pre-status check: must be awaiting joining or initial review
   const validRejectStatuses = [
+    TRANSFER_STATUS.PENDING_TARGET_HM_APPROVAL,
+    TRANSFER_STATUS.TRANSFER_REQUESTED,
+    TRANSFER_STATUS.APPROVED,
+    TRANSFER_STATUS.INITIATED,
     TRANSFER_STATUS.RELIEVED,
     TRANSFER_STATUS.AWAITING_DESTINATION_HM,
   ];
@@ -906,7 +1098,7 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
     return sendError(
       response,
       400,
-      `Transfer cannot be rejected. Current status is "${transferRecord.status}". Only transfers awaiting joining can be rejected.`
+      `Transfer cannot be rejected. Current status is "${transferRecord.status}".`
     );
   }
 
@@ -915,6 +1107,20 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
   if (requestingActor.role === ROLES.HM) {
     const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
     if (!actorSchoolId || actorSchoolId !== destinationSchoolId) {
+      await AuditLog.create({
+        actorId:    requestingActor._id || requestingActor.userId,
+        actorRole:  requestingActor.role,
+        actorName:  requestingActor.fullName || '',
+        action:     'CROSS_SCHOOL_TRANSFER_REJECTION_BLOCKED',
+        targetModel: 'TransferRequest',
+        targetId:   transferRecord._id,
+        schoolId:   destinationSchoolId,
+        result:     'DENIED',
+        reason:     `HM from school ${actorSchoolId} attempted to reject transfer for target school ${destinationSchoolId}`,
+        ipAddress:  request.ip || '',
+        userAgent:  request.headers?.['user-agent'] || '',
+        requestId:  request.headers?.['x-request-id'] || '',
+      }).catch(() => {});
       return sendError(
         response,
         403,
@@ -927,6 +1133,11 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
   session.startTransaction();
 
   try {
+    let targetRejectStatus = TRANSFER_STATUS.REJECTED;
+    if ([TRANSFER_STATUS.RELIEVED, TRANSFER_STATUS.AWAITING_DESTINATION_HM].includes(transferRecord.status)) {
+      targetRejectStatus = TRANSFER_STATUS.REJECTED_BY_HM;
+    }
+
     const updatedTransfer = await TransferRequest.findOneAndUpdate(
       {
         _id: transferRecord._id,
@@ -934,7 +1145,10 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
       },
       {
         $set: {
-          status: TRANSFER_STATUS.REJECTED_BY_HM,
+          status:          targetRejectStatus,
+          rejectedBy:      requestingActor._id || requestingActor.userId,
+          rejectedAt:      new Date(),
+          rejectionReason: rejectionReason.trim(),
           rejectionDetails: {
             rejectedBy:      requestingActor._id || requestingActor.userId,
             rejectedAt:      new Date(),
@@ -955,22 +1169,29 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
       );
     }
 
+    const employeeName =
+      transferRecord.teacherUserId?.fullName ||
+      transferRecord.employeeUserId?.fullName ||
+      'Employee';
+
     // Write audit log
     await AuditLog.create(
       [{
         actorId:          requestingActor._id || requestingActor.userId,
         actorRole:        requestingActor.role,
         actorName:        requestingActor.fullName || '',
-        action:           'TEACHER_TRANSFER_REJECTED_BY_HM',
+        action:           'TRANSFER_REJECTED',
         targetModel:      'TransferRequest',
         targetId:         transferRecord._id,
-        targetName:       transferRecord.teacherUserId?.fullName || 'Faculty Member',
+        targetName:       employeeName,
         schoolId:         destinationSchoolId,
         previousState: {
           status: transferRecord.status,
         },
         newState: {
-          status:          TRANSFER_STATUS.REJECTED_BY_HM,
+          status:          targetRejectStatus,
+          rejectedBy:      String(requestingActor._id || requestingActor.userId),
+          rejectedAt:      new Date(),
           rejectionReason: rejectionReason.trim(),
         },
         result:    'SUCCESS',
@@ -985,7 +1206,27 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
     await session.commitTransaction();
     session.endSession();
 
-    return sendSuccess(response, 200, 'Faculty joining rejected. Transfer record referred for Town Administration review.', {
+    // Notify initiating official
+    if (transferRecord.initiatedBy) {
+      await dispatchNotificationEvent({
+        eventType: 'TRANSFER_STATUS',
+        category: 'GOVERNANCE',
+        title: 'Transfer Request Rejected',
+        message: `Transfer rejected: The transfer of ${employeeName} to ${transferRecord.toSchoolId?.name || 'Target School'} was rejected by the Target School Head Master. Reason: ${rejectionReason.trim()}`,
+        actionLink: '/transfers',
+        rawMetadata: {
+          transferRequestId: String(transferRecord._id),
+          teacherName: employeeName,
+          employeeName,
+          fromSchool: transferRecord.fromSchoolId?.name || '',
+          toSchool: transferRecord.toSchoolId?.name || '',
+          status: targetRejectStatus,
+        },
+        recipientUserIds: [String(transferRecord.initiatedBy._id || transferRecord.initiatedBy)],
+      });
+    }
+
+    return sendSuccess(response, 200, 'Faculty joining rejected. Transfer record updated.', {
       transferRequest: updatedTransfer,
     });
 

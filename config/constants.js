@@ -160,12 +160,14 @@ export const ATTENDANCE_STATUS = Object.freeze({
 
 export const TRANSFER_STATUS = Object.freeze({
   // Canonical Municipal Lifecycle
+  PENDING_TARGET_HM_APPROVAL: 'PENDING_TARGET_HM_APPROVAL',
   TRANSFER_REQUESTED:         'TRANSFER_REQUESTED',
   APPROVED:                   'APPROVED',
   RELIEVED:                   'RELIEVED',
   JOINED:                     'JOINED',
 
   // Exception / Governance Paths
+  REJECTED:                   'REJECTED',
   REJECTED_BY_HM:             'REJECTED_BY_HM',
   ADMIN_REVIEW_REQUIRED:      'ADMIN_REVIEW_REQUIRED',
   CANCELLED:                  'CANCELLED',

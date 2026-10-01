@@ -13,18 +13,24 @@ const safeString = (max = 200, min = 0, minMsg = '') => {
 export const initiateTransferSchema = z.object({
   teacherUserId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid teacherUserId format.').optional(),
   teacherId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid teacherId format.').optional(),
+  employeeUserId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid employeeUserId format.').optional(),
+  employeeId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid employeeId format.').optional(),
+  userId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid userId format.').optional(),
   targetSchoolId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid targetSchoolId format.').optional(),
   destinationSchoolId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid destinationSchoolId format.').optional(),
-  reason: safeString(1000, 5, 'Transfer reason must be at least 5 characters.'),
+  toSchoolId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid toSchoolId format.').optional(),
+  sourceSchoolId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid sourceSchoolId format.').optional(),
+  fromSchoolId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid fromSchoolId format.').optional(),
+  reason: safeString(1000, 3, 'Transfer reason must be at least 3 characters.').optional(),
   officialOrderNumber: safeString(100).optional(),
   orderDate: z.string().optional(),
   isEmergencyOverride: z.boolean().optional(),
   overrideJustification: safeString(1000).optional(),
 }).refine(
-  (data) => Boolean(data.teacherUserId || data.teacherId),
-  { message: 'A valid teacherUserId is required.', path: ['teacherUserId'] }
+  (data) => Boolean(data.teacherUserId || data.teacherId || data.employeeUserId || data.employeeId || data.userId),
+  { message: 'A valid employee identifier is required.', path: ['teacherUserId'] }
 ).refine(
-  (data) => Boolean(data.targetSchoolId || data.destinationSchoolId),
+  (data) => Boolean(data.targetSchoolId || data.destinationSchoolId || data.toSchoolId),
   { message: 'A valid targetSchoolId is required.', path: ['targetSchoolId'] }
 ).refine(
   (data) => !data.isEmergencyOverride || (data.overrideJustification && data.overrideJustification.trim().length >= 10),
@@ -48,7 +54,7 @@ export const approveJoiningSchema = z.object({
 });
 
 export const rejectJoiningSchema = z.object({
-  rejectionReason: safeString(1000, 10, 'Rejection reason must be at least 10 characters.'),
+  rejectionReason: safeString(1000, 5, 'Rejection reason must be at least 5 characters.'),
 });
 
 export const adminReviewSchema = z.object({

@@ -62,6 +62,14 @@ router.patch(
 
 // ─── Destination HM Approves Joining ───────────────────────────────────────────
 router.patch(
+  '/:id/approve',
+  authorizeRoles(ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
+  authorizePermissions(PERMISSIONS.TRANSFERS_APPROVE_JOINING),
+  validate(approveJoiningSchema),
+  handleApproveJoining
+);
+
+router.patch(
   '/:id/approve-joining',
   authorizeRoles(ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
   authorizePermissions(PERMISSIONS.TRANSFERS_APPROVE_JOINING),

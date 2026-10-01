@@ -27,6 +27,7 @@ const NotificationSchema = new mongoose.Schema({
     enum: [
       'ONBOARDING',
       'TRANSFER',
+      'TRANSFER_STATUS',
       'ATTENDANCE',
       'EXAM_RESULT',
       'CIRCULAR',

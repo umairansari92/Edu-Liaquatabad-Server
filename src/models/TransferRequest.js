@@ -3,6 +3,8 @@ import { TRANSFER_STATUS, ROLES } from '../../config/constants.js';
 
 const TransferRequestSchema = new mongoose.Schema({
   teacherUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  employeeUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+  employeeDesignation: { type: String, default: '' },
   fromSchoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true, index: true },
   toSchoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true, index: true },
 
@@ -23,9 +25,15 @@ const TransferRequestSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: Object.values(TRANSFER_STATUS),
-    default: TRANSFER_STATUS.INITIATED,
+    default: TRANSFER_STATUS.PENDING_TARGET_HM_APPROVAL,
     index: true,
   },
+
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  approvedAt: { type: Date },
+  rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  rejectedAt: { type: Date },
+  rejectionReason: { type: String, default: '' },
 
   relievingDetails: {
     relievedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -63,9 +71,39 @@ const TransferRequestSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+// Synchronize teacherUserId and employeeUserId for multi-role staff support
+TransferRequestSchema.pre('validate', function (next) {
+  if (this.teacherUserId && !this.employeeUserId) {
+    this.employeeUserId = this.teacherUserId;
+  } else if (this.employeeUserId && !this.teacherUserId) {
+    this.teacherUserId = this.employeeUserId;
+  }
+  if (this.rejectionDetails?.rejectionReason && !this.rejectionReason) {
+    this.rejectionReason = this.rejectionDetails.rejectionReason;
+  }
+  if (this.rejectionReason && (!this.rejectionDetails || !this.rejectionDetails.rejectionReason)) {
+    this.rejectionDetails = this.rejectionDetails || {};
+    this.rejectionDetails.rejectionReason = this.rejectionReason;
+  }
+  next();
+});
+
+TransferRequestSchema.virtual('sourceSchoolId').get(function () {
+  return this.fromSchoolId;
+});
+
+TransferRequestSchema.virtual('targetSchoolId').get(function () {
+  return this.toSchoolId;
+});
+
+TransferRequestSchema.virtual('employeeId').get(function () {
+  return this.employeeUserId || this.teacherUserId;
+});
+
 TransferRequestSchema.index({ fromSchoolId: 1, status: 1, createdAt: -1 });
 TransferRequestSchema.index({ toSchoolId: 1, status: 1, createdAt: -1 });
 TransferRequestSchema.index({ teacherUserId: 1, status: 1 });
+TransferRequestSchema.index({ employeeUserId: 1, status: 1 });
 TransferRequestSchema.index({ officialOrderNumber: 1 }, { sparse: true });
 
 export default mongoose.models.TransferRequest || mongoose.model('TransferRequest', TransferRequestSchema);
