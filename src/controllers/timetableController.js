@@ -90,14 +90,14 @@ export const handleGetSchoolTimetable = asyncHandler(async (request, response) =
       const freeSlotNumbers = teachingSlots
         .filter((slot) => !assignedPeriods.has(slot.periodNumber))
         .map((slot) => slot.periodNumber)
-        .sort((a, b) => a - b);
+        .sort((firstPeriodNumber, secondPeriodNumber) => firstPeriodNumber - secondPeriodNumber);
 
       return {
         teacherId: teacher._id,
         teacherName: teacher.fullName,
         designation: teacher.designation || 'Teacher',
         freePeriods: freeSlotNumbers,
-        formatted: freeSlotNumbers.map((num) => String(num).padStart(2, '0')).join(', '),
+        formatted: freeSlotNumbers.map((periodDigit) => String(periodDigit).padStart(2, '0')).join(', '),
         totalAssigned: assignedPeriods.size,
         totalFree: freeSlotNumbers.length,
       };
@@ -158,13 +158,13 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
     const missingSectionEntries = schedule.filter((entry) => !entry.sectionId);
     if (mongoose.connection?.readyState === 1 && missingSectionEntries.length > 0 && typeof Section.find === 'function') {
       const classIds = [...new Set(missingSectionEntries.map((entry) => String(entry.classId)).filter(Boolean))];
-      const secQuery = Section.find({ classId: { $in: classIds }, schoolId });
-      const sections = secQuery && typeof secQuery.lean === 'function' ? await secQuery.lean() : await secQuery;
+      const sectionQuery = Section.find({ classId: { $in: classIds }, schoolId });
+      const sections = sectionQuery && typeof sectionQuery.lean === 'function' ? await sectionQuery.lean() : await sectionQuery;
       const sectionByClass = new Map();
       if (Array.isArray(sections)) {
-        for (const sec of sections) {
-          if (!sectionByClass.has(String(sec.classId))) {
-            sectionByClass.set(String(sec.classId), sec);
+        for (const sectionItem of sections) {
+          if (!sectionByClass.has(String(sectionItem.classId))) {
+            sectionByClass.set(String(sectionItem.classId), sectionItem);
           }
         }
       }
@@ -450,7 +450,7 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
     const myFreePeriodsToday = teachingSlots
       .filter((slot) => !assignedPeriodNumbers.has(slot.periodNumber))
       .map((slot) => slot.periodNumber)
-      .sort((a, b) => a - b);
+      .sort((firstPeriodNumber, secondPeriodNumber) => firstPeriodNumber - secondPeriodNumber);
 
     return sendSuccess(response, 200, 'Teacher personal schedule retrieved.', {
       schoolId: teacherSchoolId,

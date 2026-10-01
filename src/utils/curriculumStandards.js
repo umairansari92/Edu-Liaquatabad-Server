@@ -158,7 +158,9 @@ export const STANDARD_CURRICULUM_SUBJECTS = [
  */
 export const getSubjectsForGrade = (numericGrade) => {
   const grade = Number(numericGrade);
-  return STANDARD_CURRICULUM_SUBJECTS.filter((sub) => sub.gradeLevels.includes(grade));
+  return STANDARD_CURRICULUM_SUBJECTS.filter(
+    (subjectDefinition) => subjectDefinition.gradeLevels.includes(grade)
+  );
 };
 
 /**
@@ -202,33 +204,35 @@ export const provisionSchoolClassesAndCurriculum = async (schoolId, lowestGrade 
 
   // 2. Provision Standard Subjects with Grade Levels matching this school's range
   const schoolGrades = [];
-  for (let g = minGrade; g <= maxGrade; g++) schoolGrades.push(g);
+  for (let gradeLevel = minGrade; gradeLevel <= maxGrade; gradeLevel++) {
+    schoolGrades.push(gradeLevel);
+  }
 
-  const relevantSubjects = STANDARD_CURRICULUM_SUBJECTS.filter((sub) =>
-    sub.gradeLevels.some((grade) => schoolGrades.includes(grade))
+  const relevantSubjects = STANDARD_CURRICULUM_SUBJECTS.filter((subjectDefinition) =>
+    subjectDefinition.gradeLevels.some((targetGrade) => schoolGrades.includes(targetGrade))
   );
 
   const createdSubjects = [];
-  for (const subjectDef of relevantSubjects) {
+  for (const subjectDefinition of relevantSubjects) {
     // Subject code is clean standard code e.g. 'ENG', 'MATH', 'GK'
-    let subjectDoc = await Subject.findOne({ schoolId, name: subjectDef.name });
+    let subjectDoc = await Subject.findOne({ schoolId, name: subjectDefinition.name });
     if (!subjectDoc) {
       subjectDoc = await Subject.create({
         schoolId,
-        name: subjectDef.name,
-        code: subjectDef.code,
-        gradeLevels: subjectDef.gradeLevels,
-        totalMarks: subjectDef.totalMarks,
-        passingMarks: subjectDef.passingMarks,
-        isElective: subjectDef.isElective,
+        name: subjectDefinition.name,
+        code: subjectDefinition.code,
+        gradeLevels: subjectDefinition.gradeLevels,
+        totalMarks: subjectDefinition.totalMarks,
+        passingMarks: subjectDefinition.passingMarks,
+        isElective: subjectDefinition.isElective,
         status: 'ACTIVE',
       });
       createdSubjects.push(subjectDoc);
     } else {
       // Update gradeLevels and clean code if missing
-      subjectDoc.gradeLevels = subjectDef.gradeLevels;
+      subjectDoc.gradeLevels = subjectDefinition.gradeLevels;
       if (!subjectDoc.code || subjectDoc.code.includes('-')) {
-        subjectDoc.code = subjectDef.code;
+        subjectDoc.code = subjectDefinition.code;
       }
       await subjectDoc.save();
       createdSubjects.push(subjectDoc);
