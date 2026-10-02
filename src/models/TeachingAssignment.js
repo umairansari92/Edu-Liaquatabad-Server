@@ -20,6 +20,7 @@ const TeachingAssignmentSchema = new mongoose.Schema({
     required: true,
     index: true,
   },
+  // Legacy compatibility field. New institutional workflows do not create or require sections.
   sectionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Section',

@@ -5,6 +5,7 @@ const StudentProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true },
   schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true, index: true },
   classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', index: true },
+  // Legacy compatibility field. New institutional workflows do not create or require sections.
   sectionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Section', index: true },
 
   // ─── Dual Student Numbering & Admission Register Identification ──────────────

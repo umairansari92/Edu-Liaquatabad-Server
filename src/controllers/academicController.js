@@ -84,7 +84,7 @@ export const handleGetClasses = asyncHandler(async (request, response) => {
 export const handleCreateClass = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
   const { schoolId, name, code } = request.body;
-  const numericGrade = request.body.numericGrade ?? request.body.gradeLevel;
+  const numericGrade = Number(request.body.numericGrade ?? request.body.gradeLevel);
 
   const schoolRecord = await School.findById(schoolId).lean();
   if (!schoolRecord) {
@@ -97,6 +97,18 @@ export const handleCreateClass = asyncHandler(async (request, response) => {
     if (!actorSchoolId || actorSchoolId !== String(schoolId)) {
       return sendError(response, 403, 'Access denied. You can only create classes within your assigned school.');
     }
+  }
+
+  // Mandatory Server-Side School Grade Range Enforcement Guard
+  const lowestAllowedGrade = Number(schoolRecord.gradeRange?.lowestGrade) || (schoolRecord.schoolType === 'SECONDARY' ? 6 : 1);
+  const highestAllowedGrade = Number(schoolRecord.gradeRange?.highestGrade) || (schoolRecord.schoolType === 'PRIMARY' ? 5 : schoolRecord.schoolType === 'ELEMENTARY' ? 8 : 10);
+
+  if (Number.isNaN(numericGrade) || numericGrade < lowestAllowedGrade || numericGrade > highestAllowedGrade) {
+    return sendError(
+      response,
+      400,
+      `Grade ${numericGrade} is outside the allowed grade range for ${schoolRecord.name} (Class ${lowestAllowedGrade} to Class ${highestAllowedGrade}).`
+    );
   }
 
   // Prevent duplicate class (same grade in same school)
@@ -143,7 +155,9 @@ export const handleUpdateClass = asyncHandler(async (request, response) => {
   if (!/^[0-9a-fA-F]{24}$/.test(id)) return sendError(response, 400, 'Invalid class ID format.');
 
   const { name, code, status, reason } = request.body;
-  const numericGrade = request.body.numericGrade ?? request.body.gradeLevel;
+  const numericGrade = (request.body.numericGrade !== undefined || request.body.gradeLevel !== undefined)
+    ? Number(request.body.numericGrade ?? request.body.gradeLevel)
+    : undefined;
 
   const classRecord = await Class.findById(id);
   if (!classRecord) return sendError(response, 404, 'Class not found.');
@@ -153,6 +167,23 @@ export const handleUpdateClass = asyncHandler(async (request, response) => {
     const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
     if (!actorSchoolId || actorSchoolId !== String(classRecord.schoolId)) {
       return sendError(response, 403, 'Access denied. You can only modify classes within your assigned school.');
+    }
+  }
+
+  // Mandatory Server-Side School Grade Range Enforcement Guard on Update
+  if (numericGrade !== undefined) {
+    const schoolRecord = await School.findById(classRecord.schoolId).lean();
+    if (schoolRecord) {
+      const lowestAllowedGrade = Number(schoolRecord.gradeRange?.lowestGrade) || (schoolRecord.schoolType === 'SECONDARY' ? 6 : 1);
+      const highestAllowedGrade = Number(schoolRecord.gradeRange?.highestGrade) || (schoolRecord.schoolType === 'PRIMARY' ? 5 : schoolRecord.schoolType === 'ELEMENTARY' ? 8 : 10);
+
+      if (Number.isNaN(numericGrade) || numericGrade < lowestAllowedGrade || numericGrade > highestAllowedGrade) {
+        return sendError(
+          response,
+          400,
+          `Grade ${numericGrade} is outside the allowed grade range for ${schoolRecord.name} (Class ${lowestAllowedGrade} to Class ${highestAllowedGrade}).`
+        );
+      }
     }
   }
 
@@ -744,7 +775,7 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
     return sendError(response, 403, 'Your HM account has no school assignment. Contact platform administrators.');
   }
 
-  const school = await School.findById(actorSchoolId).select('name code dmcRegion schoolType status address phone email timings').lean();
+  const school = await School.findById(actorSchoolId).select('name code schoolCode dmcRegion schoolType status address phone email timings gradeRange').lean();
   if (!school) {
     return sendError(response, 404, 'Assigned school entity not found in municipal registry.');
   }
@@ -810,6 +841,7 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
       code: school.code,
       dmcRegion: school.dmcRegion,
       schoolType: school.schoolType,
+      gradeRange: school.gradeRange,
       timings: school.timings,
     },
     metrics: {

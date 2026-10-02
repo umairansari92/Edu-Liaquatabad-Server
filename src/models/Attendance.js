@@ -12,6 +12,7 @@ const AttendanceSchema = new mongoose.Schema({
   date: { type: Date, required: true, index: true },
 
   classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', index: true },
+  // Legacy compatibility field. New institutional workflows do not create or require sections.
   sectionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Section', index: true },
 
   records: [{
