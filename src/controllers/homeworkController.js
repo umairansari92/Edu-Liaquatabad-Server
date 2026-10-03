@@ -9,6 +9,7 @@ import Subject from '../models/Subject.js';
 import AuditLog from '../models/AuditLog.js';
 import { ROLES, TEACHING_ASSIGNMENT_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
+import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUploader.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECURITY INVARIANTS (enforced on every write operation):
@@ -104,38 +105,130 @@ export const handleCreateHomework = asyncHandler(async (request, response) => {
     return sendError(response, 400, 'Integrity violation: The specified subject does not belong to your school.');
   }
 
-  // ── Sanitize attachments ───────────────────────────────────────────────────
+  // ── Authoritative 7-Day Attachment Lifecycle Calculation ────────────────────
+  // Server unconditionally enforces 7-day retention: uploadedAt = now, expiresAt = now + 7d.
+  // The client NEVER supplies or overrides expiration dates.
+  const uploadTimestamp = new Date();
+  const RETENTION_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
+  const attachmentExpiresAt = new Date(uploadTimestamp.getTime() + RETENTION_PERIOD_MS);
+
   const sanitizedAttachments = [];
-  if (Array.isArray(attachments)) {
-    for (const att of attachments) {
+  const newlyUploadedCloudinaryAssets = [];
+
+  // 1. Process uploaded files from multipart/form-data
+  const uploadedFilesList = [];
+  if (request.file) uploadedFilesList.push(request.file);
+  if (request.files) {
+    if (Array.isArray(request.files)) uploadedFilesList.push(...request.files);
+    else if (typeof request.files === 'object') uploadedFilesList.push(...Object.values(request.files).flat());
+  }
+
+  if (uploadedFilesList.length > 0) {
+    for (const uploadedFile of uploadedFilesList) {
+      const isPdf = uploadedFile.mimetype === 'application/pdf';
+      const targetResourceType = isPdf ? 'auto' : 'image';
+
+      try {
+        const uploadResult = await uploadBufferToCloudinary(uploadedFile.buffer, {
+          folder: 'liaquatabad_sms/homework',
+          resourceType: targetResourceType,
+        });
+
+        const registeredAsset = {
+          publicId: uploadResult.publicId,
+          resourceType: uploadResult.resourceType || (isPdf ? 'raw' : 'image'),
+        };
+        newlyUploadedCloudinaryAssets.push(registeredAsset);
+
+        sanitizedAttachments.push({
+          fileName: uploadedFile.sanitizedFilename || uploadedFile.originalname || 'attachment',
+          fileUrl: uploadResult.secureUrl,
+          fileType: isPdf ? 'PDF' : 'IMAGE',
+          publicId: uploadResult.publicId,
+          resourceType: registeredAsset.resourceType,
+          mimeType: uploadedFile.mimetype,
+          sizeBytes: uploadedFile.size || uploadedFile.buffer?.length || 0,
+          width: uploadResult.width || null,
+          height: uploadResult.height || null,
+          uploadedAt: uploadTimestamp,
+          expiresAt: attachmentExpiresAt,
+        });
+      } catch (uploadError) {
+        // Compensating rollback for already uploaded assets in this request batch
+        if (newlyUploadedCloudinaryAssets.length > 0) {
+          await Promise.allSettled(
+            newlyUploadedCloudinaryAssets.map((asset) => deleteFromCloudinary(asset.publicId, asset.resourceType))
+          );
+        }
+        return sendError(response, 502, `Attachment upload failed: ${uploadError.message}`);
+      }
+    }
+  }
+
+  // 2. Backward compatibility: handle existing attachments JSON payload if provided
+  let bodyAttachments = attachments;
+  if (typeof bodyAttachments === 'string') {
+    try {
+      bodyAttachments = JSON.parse(bodyAttachments);
+    } catch {
+      bodyAttachments = [];
+    }
+  }
+
+  if (Array.isArray(bodyAttachments)) {
+    for (const att of bodyAttachments) {
       if (!att.fileUrl || typeof att.fileUrl !== 'string') continue;
       sanitizedAttachments.push({
         fileName: att.fileName ? String(att.fileName).slice(0, 200) : 'attachment',
-        fileUrl:  att.fileUrl.trim().slice(0, 1000),
+        fileUrl: att.fileUrl.trim().slice(0, 1000),
         fileType: ['PDF', 'IMAGE'].includes(att.fileType) ? att.fileType : 'IMAGE',
         publicId: att.publicId ? String(att.publicId).slice(0, 200) : '',
+        resourceType: att.resourceType || (att.fileType === 'PDF' ? 'raw' : 'image'),
+        mimeType: att.mimeType ? String(att.mimeType).slice(0, 100) : (att.fileType === 'PDF' ? 'application/pdf' : 'image/jpeg'),
+        sizeBytes: Number(att.sizeBytes) || 0,
+        width: Number(att.width) || null,
+        height: Number(att.height) || null,
+        uploadedAt: uploadTimestamp,
+        expiresAt: attachmentExpiresAt, // Enforce server 7-day expiry
       });
     }
   }
 
-  // ── Create homework record ─────────────────────────────────────────────────
-  // All boundary fields (schoolId, classId, etc.) are set from server-verified sources
-  const homework = await Homework.create({
-    schoolId:  actorSchoolId,
-    classId,
-    sectionId,
-    subjectId,
-    teacherId: actorId,
-    teachingAssignmentId: verifiedAssignment?._id || null, // null for HM (HM role verified by school boundary)
+  if (sanitizedAttachments.length > 10) {
+    if (newlyUploadedCloudinaryAssets.length > 0) {
+      await Promise.allSettled(
+        newlyUploadedCloudinaryAssets.map((asset) => deleteFromCloudinary(asset.publicId, asset.resourceType))
+      );
+    }
+    return sendError(response, 400, 'Maximum 10 attachments allowed per homework assignment.');
+  }
 
-    title:             title.trim().slice(0, 200),
-    description:       description ? String(description).trim().slice(0, 2000) : '',
-    dueDate:           new Date(dueDate),
-    attachments:       sanitizedAttachments,
-    status:            'ACTIVE',
-    visibleToStudents: visibleToStudents !== false, // default true
-    remarks:           remarks ? String(remarks).slice(0, 500) : '',
-  });
+  // ── Create homework record with compensating rollback ──────────────────────
+  let homework;
+  try {
+    homework = await Homework.create({
+      schoolId: actorSchoolId,
+      classId,
+      sectionId,
+      subjectId,
+      teacherId: actorId,
+      teachingAssignmentId: verifiedAssignment?._id || null, // null for HM
+      title: title.trim().slice(0, 200),
+      description: description ? String(description).trim().slice(0, 2000) : '',
+      dueDate: new Date(dueDate),
+      attachments: sanitizedAttachments,
+      status: 'ACTIVE',
+      visibleToStudents: visibleToStudents !== false, // default true
+      remarks: remarks ? String(remarks).slice(0, 500) : '',
+    });
+  } catch (creationError) {
+    if (newlyUploadedCloudinaryAssets.length > 0) {
+      await Promise.allSettled(
+        newlyUploadedCloudinaryAssets.map((asset) => deleteFromCloudinary(asset.publicId, asset.resourceType))
+      );
+    }
+    throw creationError;
+  }
 
   await AuditLog.create({
     actorId:          actorId,
@@ -156,8 +249,8 @@ export const handleCreateHomework = asyncHandler(async (request, response) => {
     },
     result:    'SUCCESS',
     ipAddress: request.ip || '',
-    userAgent: request.headers['user-agent'] || '',
-    requestId: request.headers['x-request-id'] || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
   });
 
   // ── Central Notification Dispatch (Students & Parents) ──────────────────────
@@ -258,8 +351,17 @@ export const handleGetStudentHomework = asyncHandler(async (request, response) =
     .sort({ dueDate: 1 })
     .lean();
 
+  // Active attachment lifecycle enforcement: filter out expired attachments past 7 days
+  const currentEvaluationTime = new Date();
+  const sanitizedHomework = homework.map((homeworkRecord) => ({
+    ...homeworkRecord,
+    attachments: (homeworkRecord.attachments || []).filter(
+      (attachmentItem) => !attachmentItem.expiresAt || new Date(attachmentItem.expiresAt) > currentEvaluationTime
+    ),
+  }));
+
   return sendSuccess(response, 200, 'Your homework retrieved.', {
-    homework,
+    homework: sanitizedHomework,
     studentClass:   studentProfile.classId,
     studentSection: studentProfile.sectionId,
   });
@@ -346,15 +448,93 @@ export const handleUpdateHomework = asyncHandler(async (request, response) => {
   if (visibleToStudents !== undefined) homework.visibleToStudents = Boolean(visibleToStudents);
   if (remarks           !== undefined) homework.remarks           = String(remarks).slice(0, 500);
 
-  if (Array.isArray(attachments)) {
-    homework.attachments = attachments.map((att) => ({
+  // Handle existing attachments JSON if provided
+  let updatedAttachments = [];
+  let parsedAttachments = attachments;
+  if (typeof parsedAttachments === 'string') {
+    try {
+      parsedAttachments = JSON.parse(parsedAttachments);
+    } catch {
+      parsedAttachments = null;
+    }
+  }
+
+  if (Array.isArray(parsedAttachments)) {
+    updatedAttachments = parsedAttachments.map((att) => ({
       fileName: att.fileName ? String(att.fileName).slice(0, 200) : 'attachment',
       fileUrl:  att.fileUrl  ? String(att.fileUrl).trim().slice(0, 1000) : '',
       fileType: ['PDF', 'IMAGE'].includes(att.fileType) ? att.fileType : 'IMAGE',
       publicId: att.publicId ? String(att.publicId).slice(0, 200) : '',
+      resourceType: att.resourceType || (att.fileType === 'PDF' ? 'raw' : 'image'),
+      mimeType: att.mimeType ? String(att.mimeType).slice(0, 100) : (att.fileType === 'PDF' ? 'application/pdf' : 'image/jpeg'),
+      sizeBytes: Number(att.sizeBytes) || 0,
+      width: Number(att.width) || null,
+      height: Number(att.height) || null,
+      uploadedAt: att.uploadedAt ? new Date(att.uploadedAt) : new Date(),
+      expiresAt: att.expiresAt ? new Date(att.expiresAt) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     })).filter((att) => att.fileUrl);
+  } else if (attachments === undefined) {
+    // Preserve current attachments if not explicitly replaced
+    updatedAttachments = [...homework.attachments];
   }
 
+  // Process newly uploaded files in PATCH request
+  const newlyUploadedFiles = [];
+  if (request.file) newlyUploadedFiles.push(request.file);
+  if (request.files) {
+    if (Array.isArray(request.files)) newlyUploadedFiles.push(...request.files);
+    else if (typeof request.files === 'object') newlyUploadedFiles.push(...Object.values(request.files).flat());
+  }
+
+  if (newlyUploadedFiles.length > 0) {
+    const uploadTimestamp = new Date();
+    const attachmentExpiresAt = new Date(uploadTimestamp.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const uploadedAssetRollbackList = [];
+
+    for (const fileItem of newlyUploadedFiles) {
+      const isPdf = fileItem.mimetype === 'application/pdf';
+      const targetResourceType = isPdf ? 'auto' : 'image';
+
+      try {
+        const uploadResult = await uploadBufferToCloudinary(fileItem.buffer, {
+          folder: 'liaquatabad_sms/homework',
+          resourceType: targetResourceType,
+        });
+
+        uploadedAssetRollbackList.push({
+          publicId: uploadResult.publicId,
+          resourceType: uploadResult.resourceType || (isPdf ? 'raw' : 'image'),
+        });
+
+        updatedAttachments.push({
+          fileName: fileItem.sanitizedFilename || fileItem.originalname || 'attachment',
+          fileUrl: uploadResult.secureUrl,
+          fileType: isPdf ? 'PDF' : 'IMAGE',
+          publicId: uploadResult.publicId,
+          resourceType: uploadResult.resourceType || (isPdf ? 'raw' : 'image'),
+          mimeType: fileItem.mimetype,
+          sizeBytes: fileItem.size || fileItem.buffer?.length || 0,
+          width: uploadResult.width || null,
+          height: uploadResult.height || null,
+          uploadedAt: uploadTimestamp,
+          expiresAt: attachmentExpiresAt,
+        });
+      } catch (uploadError) {
+        if (uploadedAssetRollbackList.length > 0) {
+          await Promise.allSettled(
+            uploadedAssetRollbackList.map((asset) => deleteFromCloudinary(asset.publicId, asset.resourceType))
+          );
+        }
+        return sendError(response, 502, `Attachment upload failed: ${uploadError.message}`);
+      }
+    }
+  }
+
+  if (updatedAttachments.length > 10) {
+    return sendError(response, 400, 'Maximum 10 attachments allowed per homework assignment.');
+  }
+
+  homework.attachments = updatedAttachments;
   await homework.save();
 
   return sendSuccess(response, 200, 'Homework updated successfully.', homework);
@@ -408,8 +588,8 @@ export const handleCancelHomework = asyncHandler(async (request, response) => {
     newState:    { status: 'CANCELLED' },
     result:      'SUCCESS',
     ipAddress:   request.ip || '',
-    userAgent:   request.headers['user-agent'] || '',
-    requestId:   request.headers['x-request-id'] || '',
+    userAgent:   request.headers?.['user-agent'] || '',
+    requestId:   request.headers?.['x-request-id'] || '',
   });
 
   return sendSuccess(response, 200, 'Homework cancelled successfully. Record preserved for historical audit.', {

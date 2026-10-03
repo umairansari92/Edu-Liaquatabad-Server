@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import logger from './logger.js';
 import SecurityLockout from '../src/models/SecurityLockout.js';
+import { cleanupExpiredHomeworkAttachments } from '../src/services/homeworkCleanupService.js';
 
 /**
  * Scheduled Background Jobs
@@ -28,6 +29,20 @@ export const startScheduledJobs = () => {
   // Runs every day at 00:01 AM PKT — logs platform health summary
   cron.schedule('1 0 * * *', async () => {
     logger.info('[Cron] Daily platform health digest — DMC Liaquatabad Education System operational.');
+  }, {
+    timezone: 'Asia/Karachi',
+  });
+
+  // ─── Job 3: Daily Homework Attachment Lifecycle Cleanup (7-Day Expiry) ─────
+  // Runs every day at 02:00 AM PKT — prunes expired Cloudinary assets & DB references
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      logger.info('[Cron] Starting daily homework attachment lifecycle cleanup...');
+      const metrics = await cleanupExpiredHomeworkAttachments();
+      logger.info(`[Cron] Homework attachment cleanup complete: ${metrics.removedReferencesCount} attachments purged.`);
+    } catch (cronError) {
+      logger.error(`[Cron] Homework attachment cleanup encountered an unhandled error: ${cronError.message}`);
+    }
   }, {
     timezone: 'Asia/Karachi',
   });

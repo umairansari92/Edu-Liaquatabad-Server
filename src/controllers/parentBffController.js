@@ -262,24 +262,30 @@ export const handleGetWardHomework = asyncHandler(async (request, response) => {
     .sort({ dueDate: 1 })
     .lean();
 
-  const formattedHomework = homeworkList.map((homeworkRecord) => ({
-    id: homeworkRecord._id,
-    title: homeworkRecord.title,
-    description: homeworkRecord.description,
-    subject: {
-      id: homeworkRecord.subjectId?._id,
-      name: homeworkRecord.subjectId?.name || 'General',
-      code: homeworkRecord.subjectId?.code || '',
-    },
-    teacher: {
-      id: homeworkRecord.teacherId?._id,
-      fullName: homeworkRecord.teacherId?.fullName || 'Teacher',
-      designation: homeworkRecord.teacherId?.designation || '',
-    },
-    dueDate: homeworkRecord.dueDate,
-    attachments: homeworkRecord.attachments || [],
-    createdAt: homeworkRecord.createdAt,
-  }));
+  const currentEvaluationTime = new Date();
+  const formattedHomework = homeworkList.map((homeworkRecord) => {
+    const activeAttachments = (homeworkRecord.attachments || []).filter(
+      (attachmentItem) => !attachmentItem.expiresAt || new Date(attachmentItem.expiresAt) > currentEvaluationTime
+    );
+    return {
+      id: homeworkRecord._id,
+      title: homeworkRecord.title,
+      description: homeworkRecord.description,
+      subject: {
+        id: homeworkRecord.subjectId?._id,
+        name: homeworkRecord.subjectId?.name || 'General',
+        code: homeworkRecord.subjectId?.code || '',
+      },
+      teacher: {
+        id: homeworkRecord.teacherId?._id,
+        fullName: homeworkRecord.teacherId?.fullName || 'Teacher',
+        designation: homeworkRecord.teacherId?.designation || '',
+      },
+      dueDate: homeworkRecord.dueDate,
+      attachments: activeAttachments,
+      createdAt: homeworkRecord.createdAt,
+    };
+  });
 
   return sendSuccess(response, 200, 'Ward homework assignments retrieved.', {
     count: formattedHomework.length,

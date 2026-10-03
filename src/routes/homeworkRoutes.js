@@ -10,6 +10,11 @@ import {
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { PERMISSIONS } from '../config/permissions.js';
+import {
+  uploadHomeworkAttachments,
+  validateFileMagicBytes,
+  validateHomeworkUploadLimits,
+} from '../middlewares/fileUpload.js';
 
 const router = express.Router();
 
@@ -20,6 +25,9 @@ router.use(authenticate);
 router.post(
   '/',
   authorizePermissions(PERMISSIONS.HOMEWORK_CREATE),
+  uploadHomeworkAttachments.array('attachments', 10),
+  validateHomeworkUploadLimits,
+  validateFileMagicBytes,
   handleCreateHomework
 );
 
@@ -48,6 +56,9 @@ router.get(
 router.patch(
   '/:id',
   authorizePermissions(PERMISSIONS.HOMEWORK_CREATE),
+  uploadHomeworkAttachments.array('attachments', 10),
+  validateHomeworkUploadLimits,
+  validateFileMagicBytes,
   handleUpdateHomework
 );
 

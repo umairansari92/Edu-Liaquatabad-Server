@@ -35,6 +35,8 @@ export const uploadBufferToCloudinary = (fileBuffer, options = {}) => {
           format: result.format,
           bytes: result.bytes,
           resourceType: result.resource_type,
+          width: result.width || null,
+          height: result.height || null,
         });
       }
     );
@@ -45,12 +47,14 @@ export const uploadBufferToCloudinary = (fileBuffer, options = {}) => {
 
 /**
  * Deletes a file from Cloudinary by its public ID
+ * Idempotent: treats 'not found' as safe success
  *
  * @param {string} publicId
  * @param {string} resourceType - 'image' | 'raw' | 'video'
  * @returns {Promise<Object>}
  */
 export const deleteFromCloudinary = async (publicId, resourceType = 'image') => {
+  if (!publicId) return { result: 'noop' };
   try {
     const result = await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
     return result;

@@ -41,10 +41,17 @@ const homeworkSchema = new Schema(
     // ── Optional file attachments (Cloudinary) ─────────────────────────────
     attachments: [
       {
-        fileName: { type: String, trim: true },
-        fileUrl:  { type: String, trim: true },        // Cloudinary secure URL
-        fileType: { type: String, enum: ['PDF', 'IMAGE'], default: 'IMAGE' },
-        publicId: { type: String, trim: true },         // Cloudinary publicId for deletion
+        fileName:     { type: String, trim: true },
+        fileUrl:      { type: String, trim: true },        // Cloudinary secure URL
+        fileType:     { type: String, enum: ['PDF', 'IMAGE'], default: 'IMAGE' },
+        publicId:     { type: String, trim: true },        // Cloudinary publicId for deletion
+        resourceType: { type: String, trim: true, default: 'image' }, // Cloudinary resource_type ('image' | 'raw')
+        mimeType:     { type: String, trim: true },
+        sizeBytes:    { type: Number, default: 0 },
+        width:        { type: Number, default: null },
+        height:       { type: Number, default: null },
+        uploadedAt:   { type: Date, default: Date.now },
+        expiresAt:    { type: Date, required: true },
       },
     ],
 
@@ -83,6 +90,9 @@ homeworkSchema.index({ schoolId: 1, status: 1, dueDate: -1 });
 
 // Due date index for auto-expiry cron job
 homeworkSchema.index({ dueDate: 1, status: 1 });
+
+// Attachment lifecycle expiry index for 7-day cleanup cron job
+homeworkSchema.index({ 'attachments.expiresAt': 1 });
 
 const Homework = mongoose.model('Homework', homeworkSchema);
 export default Homework;
