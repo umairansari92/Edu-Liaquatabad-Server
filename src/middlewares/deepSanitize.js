@@ -8,11 +8,17 @@ const PROTOTYPE_POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype
 
 const DANGEROUS_PATTERNS = [
   /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+  /<script\b[^>]*>/gi,               // Standalone opening script tag
+  /<\/script\b[^>]*>/gi,              // Standalone closing script tag
   /<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi,
+  /<iframe\b[^>]*>/gi,
+  /<\/iframe\b[^>]*>/gi,
   /<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi,
   /<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi,
-  /on\w+\s*=\s*(['"]).*?\1/gi,       // e.g. onload=, onclick=, onerror=
-  /javascript\s*:/gi,                // javascript: pseudo-protocol
+  /<svg\b[^>]*\bon\w+\s*=[^>]*>/gi,  // SVG with inline event handlers
+  /<img\b[^>]*\bon\w+\s*=[^>]*>/gi,  // IMG with inline event handlers
+  /on\w+\s*=\s*(?:['"][^'"]*['"]|[^\s>]+)/gi, // Event handlers: onclick=..., onerror=alert(1), etc.
+  /java\s*script\s*:/gi,             // javascript: pseudo-protocol (including whitespace obfuscation)
   /vbscript\s*:/gi,
   /data\s*:\s*text\/html/gi,
   /\.\.\/|\.\.\\|%2e%2e%2f|%252e%252e/i, // Path traversal
@@ -26,7 +32,7 @@ const DANGEROUS_PATTERNS = [
  * @param {string} inputString 
  * @returns {string}
  */
-const sanitizeString = (inputString) => {
+export const sanitizeString = (inputString) => {
   if (typeof inputString !== 'string') return inputString;
 
   let cleanedString = inputString;
@@ -45,7 +51,7 @@ const sanitizeString = (inputString) => {
  * @param {any} targetPayload 
  * @returns {any}
  */
-const deepClean = (targetPayload) => {
+export const deepClean = (targetPayload) => {
   if (targetPayload === null || targetPayload === undefined) return targetPayload;
 
   if (typeof targetPayload === 'string') {

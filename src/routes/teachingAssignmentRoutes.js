@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import {
   handleGetTeacherAssignments,
   handleGetMyAssignments,
@@ -11,6 +12,7 @@ import {
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // Current teacher view own assignments
 router.get('/my', handleGetMyAssignments);

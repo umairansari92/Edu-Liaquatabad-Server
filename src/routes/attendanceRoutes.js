@@ -19,13 +19,15 @@ import {
   handleGetTownAttendanceOverview,
 } from "../controllers/attendanceAnalyticsController.js";
 import { authenticate } from "../middlewares/authenticate.js";
+import { idempotencyGuard } from "../middlewares/idempotency.js";
 import { authorizePermissions } from "../middlewares/authorizePermissions.js";
 import { PERMISSIONS } from "../config/permissions.js";
 
 const router = express.Router();
 
-// All attendance routes require authentication
+// All attendance routes require authentication and idempotency protection
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // ─── GET / POST Daily Teacher Attendance (Head Master / Supervisor / Admin) ─────
 router.get(

@@ -1,8 +1,9 @@
-import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
 import { authLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { validate, validateQuery } from '../middlewares/validate.js';
+import express from 'express';
 import {
   enrollStudentSchema,
   checkGrSchema,
@@ -23,10 +24,11 @@ const router = express.Router();
 
 /**
  * Student Enrollment & Management Routes
- * All routes require authentication and jurisdictional scope verification.
+ * All routes require authentication, jurisdictional scope verification, and idempotency protection.
  */
 router.use(authenticate);
 router.use(authorizeScope);
+router.use(idempotencyGuard);
 
 // Dedicated Student Workspace Self-Profile endpoint
 router.get('/my-profile', handleGetMyStudentProfile);

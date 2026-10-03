@@ -8,6 +8,7 @@ import {
   handleDeleteDocument,
 } from '../controllers/documentController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { uploadInMemory, validateFileMagicBytes } from '../middlewares/fileUpload.js';
@@ -17,6 +18,7 @@ import { PERMISSIONS } from '../config/permissions.js';
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // View documents and circulars (scoped by role/school/town)
 router.get(

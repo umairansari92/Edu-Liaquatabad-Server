@@ -10,6 +10,7 @@ import {
   handleAssignEmployeeSchool,
 } from '../controllers/userManagementController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeHierarchy } from '../middlewares/authorizeHierarchy.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
@@ -25,10 +26,13 @@ import { PERMISSIONS } from '../config/permissions.js';
 
 const router = express.Router();
 
+// All user management routes require authentication and idempotency protection
+router.use(authenticate);
+router.use(idempotencyGuard);
+
 // ─── Scoped User Listing ──────────────────────────────────────────────────────
 router.get(
   '/',
-  authenticate,
   authorizePermissions(PERMISSIONS.USERS_VIEW),
   handleGetUsers
 );

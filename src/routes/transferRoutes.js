@@ -10,6 +10,7 @@ import {
   handleCancelTransfer,
 } from '../controllers/transferController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { validate } from '../middlewares/validate.js';
@@ -27,6 +28,7 @@ import {
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // ─── List Transfer Records ─────────────────────────────────────────────────────
 router.get(

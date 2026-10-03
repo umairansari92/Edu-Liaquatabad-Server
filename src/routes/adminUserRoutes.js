@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { authorizeHierarchy } from '../middlewares/authorizeHierarchy.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
@@ -9,6 +10,9 @@ import { grantAuthoritySchema } from '../validations/userSchemas.js';
 import { handleGrantUserAuthority } from '../controllers/userManagementController.js';
 
 const router = express.Router();
+
+router.use(authenticate);
+router.use(idempotencyGuard);
 
 /**
  * POST /api/v1/admin/users/:userId/authority

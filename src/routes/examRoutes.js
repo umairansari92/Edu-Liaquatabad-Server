@@ -15,6 +15,7 @@ import {
   handleGetMyExamResults,
 } from '../controllers/examController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { ROLES } from '../../config/constants.js';
@@ -23,6 +24,7 @@ import { PERMISSIONS } from '../config/permissions.js';
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // List exams for school
 router.get(

@@ -8,6 +8,7 @@ import {
   handleCancelHomework,
 } from '../controllers/homeworkController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { PERMISSIONS } from '../config/permissions.js';
 import {
@@ -18,8 +19,9 @@ import {
 
 const router = express.Router();
 
-// All routes require authentication
+// All routes require authentication and idempotency protection
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // ─── Create homework (Teacher/HM) ─────────────────────────────────────────────
 router.post(
