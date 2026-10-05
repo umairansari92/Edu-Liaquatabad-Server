@@ -819,6 +819,7 @@ export const handleGetSchoolFaculty = asyncHandler(async (request, response) => 
     const memberAssignments = assignmentMap.get(memberIdString) || [];
 
     return {
+      _id: facultyMember._id,
       userId: facultyMember._id,
       fullName: facultyMember.fullName,
       email: facultyMember.email,
