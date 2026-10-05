@@ -7,6 +7,7 @@ import {
   handleUpdateSchoolTimings,
 } from '../controllers/schoolController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
@@ -17,8 +18,9 @@ import { PERMISSIONS } from '../config/permissions.js';
 
 const router = express.Router();
 
-// All school routes require valid JWT session
+// All school routes require valid JWT session and idempotency protection
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // ─── List Schools (Scoped by User Authority) ──────────────────────────────────
 router.get('/', authorizePermissions(PERMISSIONS.SCHOOLS_VIEW), handleGetSchools);

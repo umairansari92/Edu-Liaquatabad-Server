@@ -715,10 +715,10 @@ export const handleRelieveTeacher = asyncHandler(async (request, response) => {
       clearedClassTeacherSections: clearedSectionsResult.modifiedCount,
     });
 
-  } catch (error) {
+  } catch (relievingError) {
     await session.abortTransaction();
     session.endSession();
-    return sendError(response, 500, `Relieving operation failed: ${error.message}`);
+    return sendError(response, 500, `Relieving operation failed: ${relievingError.message}`);
   }
 });
 
@@ -1040,10 +1040,10 @@ export const handleApproveJoining = asyncHandler(async (request, response) => {
       expiredAssignments: expiredAssignmentsResult.modifiedCount,
     });
 
-  } catch (error) {
+  } catch (joiningApprovalError) {
     await session.abortTransaction();
     session.endSession();
-    return sendError(response, 500, `Joining approval failed: ${error.message}`);
+    return sendError(response, 500, `Joining approval failed: ${joiningApprovalError.message}`);
   }
 });
 
@@ -1230,10 +1230,10 @@ export const handleRejectJoining = asyncHandler(async (request, response) => {
       transferRequest: updatedTransfer,
     });
 
-  } catch (error) {
+  } catch (joiningRejectionError) {
     await session.abortTransaction();
     session.endSession();
-    return sendError(response, 500, `Rejection processing failed: ${error.message}`);
+    return sendError(response, 500, `Rejection processing failed: ${joiningRejectionError.message}`);
   }
 });
 
@@ -1339,10 +1339,10 @@ export const handleAdminReview = asyncHandler(async (request, response) => {
       { transferRequest: updatedTransfer }
     );
 
-  } catch (error) {
+  } catch (adminReviewError) {
     await session.abortTransaction();
     session.endSession();
-    return sendError(response, 500, `Admin review failed: ${error.message}`);
+    return sendError(response, 500, `Admin review failed: ${adminReviewError.message}`);
   }
 });
 
@@ -1441,9 +1441,9 @@ export const handleCancelTransfer = asyncHandler(async (request, response) => {
       transferRequest: updatedTransfer,
     });
 
-  } catch (error) {
+  } catch (cancellationError) {
     await session.abortTransaction();
     session.endSession();
-    return sendError(response, 500, `Cancellation failed: ${error.message}`);
+    return sendError(response, 500, `Cancellation failed: ${cancellationError.message}`);
   }
 });

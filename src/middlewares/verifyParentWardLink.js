@@ -104,7 +104,7 @@ export const verifyParentWardLink = async (request, response, nextFunction) => {
     request.wardProfile = wardProfile;
 
     return nextFunction();
-  } catch (error) {
-    return nextFunction(error);
+  } catch (linkVerificationError) {
+    return nextFunction(linkVerificationError);
   }
 };

@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { validate } from '../middlewares/validate.js';
 import { authLimiter, otpLimiter, parentLookupLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { ROLES } from '../../config/constants.js';
@@ -45,6 +46,7 @@ router.post(
 router.post(
   '/initiate-claim',
   authLimiter,
+  idempotencyGuard,
   validate(initiateClaimSchema),
   handleInitiateClaim
 );
@@ -53,6 +55,7 @@ router.post(
 router.post(
   '/verify-claim-otp',
   otpLimiter,
+  idempotencyGuard,
   validate(verifyClaimOtpSchema),
   handleVerifyClaimOtp
 );

@@ -7,10 +7,12 @@ import {
   handleGetWeeklyOffPatterns,
 } from '../controllers/holidayController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // Holidays & Emergency Closures
 router.post('/holidays', handleCreateHoliday);

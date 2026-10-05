@@ -6,6 +6,7 @@ import {
   handleArchiveAnnouncement,
 } from '../controllers/announcementController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 
 const router = express.Router();
 
@@ -14,7 +15,7 @@ router.get('/active', handleGetActiveAnnouncement);
 
 // Protected routes (Requires Authenticated Session: ROOT_ADMIN, SUPER_ADMIN, ADMIN)
 router.get('/history', authenticate, handleGetAnnouncementHistory);
-router.post('/', authenticate, handleCreateAnnouncement);
-router.patch('/:id/archive', authenticate, handleArchiveAnnouncement);
+router.post('/', authenticate, idempotencyGuard, handleCreateAnnouncement);
+router.patch('/:id/archive', authenticate, idempotencyGuard, handleArchiveAnnouncement);
 
 export default router;

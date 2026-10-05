@@ -13,6 +13,7 @@ import {
   handleGetHmSchoolSummary,
 } from '../controllers/academicController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { validate } from '../middlewares/validate.js';
@@ -28,6 +29,7 @@ const router = express.Router();
 
 // All academic routes require authentication
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // ─── Classes ──────────────────────────────────────────────────────────────────
 router.get('/classes', authorizePermissions(PERMISSIONS.SCHOOLS_VIEW), handleGetClasses);

@@ -285,8 +285,8 @@ export const handleVerifyClaimOtp = asyncHandler(async (request, response) => {
   // Verify OTP
   try {
     await verifyOtp(officialPhone, otpCode, 'PARENT_WARD_CLAIM');
-  } catch (error) {
-    return sendError(response, 400, error.message);
+  } catch (otpVerificationError) {
+    return sendError(response, 400, otpVerificationError.message);
   }
 
   // Transition state to PENDING_HM_APPROVAL

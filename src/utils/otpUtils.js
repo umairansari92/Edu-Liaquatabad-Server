@@ -33,7 +33,7 @@ export const verifyOtpHash = (plainOtp, hashedOtp) => {
   const computed = hashOtp(plainOtp);
   try {
     return crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(hashedOtp, 'hex'));
-  } catch (error) {
+  } catch (cryptoTimingError) {
     return false;
   }
 };
@@ -115,8 +115,8 @@ export const sendOtpEmail = async (email, plainOtp, purpose = 'REGISTRATION') =>
     });
     console.log(`✅ [Nodemailer Success] Email delivered to ${email} (Message ID: ${info?.messageId})`);
     return true;
-  } catch (error) {
-    console.error('❌ [Nodemailer OTP Error]:', error.message);
+  } catch (emailDeliveryError) {
+    console.error('❌ [Nodemailer OTP Error]:', emailDeliveryError.message);
     if (process.env.NODE_ENV !== 'production') {
       console.log(`💡 [DEV OTP FALLBACK] -> To: ${email} | Code: ${plainOtp}`);
     }

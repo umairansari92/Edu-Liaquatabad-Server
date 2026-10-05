@@ -13,6 +13,7 @@ import {
   handleCloseInspection,
 } from '../controllers/schoolInspectionController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { validate } from '../middlewares/validate.js';
 import { ROLES } from '../../config/constants.js';
@@ -25,6 +26,7 @@ import {
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // List inspections (Supervisors see assigned cluster; HMs see own school; Admins see town)
 router.get(

@@ -175,7 +175,12 @@ export const idempotencyGuard = async (request, response, nextFunction) => {
     return nextFunction();
   } catch (dbError) {
     // If a duplicate key error occurs due to concurrent race condition (code 11000)
-    if (dbError.code === 11000) {
+    const isDuplicateKey =
+      dbError.code === 11000 ||
+      dbError.errorResponse?.code === 11000 ||
+      (typeof dbError.message === 'string' && dbError.message.includes('E11000'));
+
+    if (isDuplicateKey) {
       return response.status(409).json({
         success: false,
         statusCode: 409,

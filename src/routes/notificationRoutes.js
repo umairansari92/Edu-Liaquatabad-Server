@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import {
   handleGetNotifications,
   handleMarkNotificationRead,
@@ -17,6 +18,7 @@ router.patch('/mark-all-read', handleMarkAllNotificationsRead);
 router.patch('/:id/read', handleMarkNotificationRead);
 
 // ─── Profile PDF Consent Action Response (Allow / Deny) ──────────────────────
-router.post('/access-requests/:id/respond', handleRespondToAccessRequest);
+// idempotencyGuard: a consent decision (Allow/Deny) must not be double-executed on network retry
+router.post('/access-requests/:id/respond', idempotencyGuard, handleRespondToAccessRequest);
 
 export default router;

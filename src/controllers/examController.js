@@ -1531,10 +1531,10 @@ export const handleBulkSubmitStudentMarks = asyncHandler(async (request, respons
       subjectId: subjectId || null,
       processedCount: processedResults.length,
     });
-  } catch (error) {
+  } catch (marksSubmissionError) {
     await session.abortTransaction();
     session.endSession();
-    throw error;
+    throw marksSubmissionError;
   }
 });
 

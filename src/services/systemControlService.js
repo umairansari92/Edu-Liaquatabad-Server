@@ -29,8 +29,8 @@ export const initSystemControl = async () => {
     console.log(
       `[SystemControl] Initialized. Status: ${isSuspendedCache ? '🔴 SUSPENDED (OUTAGE ACTIVE)' : '🟢 OPERATIONAL'}`
     );
-  } catch (error) {
-    console.error('[SystemControl] Initialization failed:', error.message);
+  } catch (systemInitError) {
+    console.error('[SystemControl] Initialization failed:', systemInitError.message);
   }
 };
 

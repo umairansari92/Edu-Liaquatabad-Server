@@ -201,8 +201,8 @@ export const dispatchNotificationEvent = async ({
 
     logger.info(`[NotificationDispatcher] Dispatched ${notificationsToInsert.length} notifications for event: ${eventType}`);
     return { success: true, count: notificationsToInsert.length };
-  } catch (error) {
-    logger.error(`[NotificationDispatcher Error] Primary dispatch failed for ${eventType}: ${error.message}. Routing to Outbox.`);
+  } catch (notificationDispatchError) {
+    logger.error(`[NotificationDispatcher Error] Primary dispatch failed for ${eventType}: ${notificationDispatchError.message}. Routing to Outbox.`);
 
     // ── Reliable Outbox Fallback (Zero Silent Notification Loss) ──────────────
     try {

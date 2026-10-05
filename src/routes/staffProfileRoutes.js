@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import {
   handleGetStaffProfile,
   handleUpdatePrivacySettings,
@@ -12,6 +13,7 @@ import {
 const router = express.Router();
 
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // Scoped school faculty directory (HM, Supervisor, Admin+)
 router.get('/school', handleGetSchoolFaculty);

@@ -58,9 +58,9 @@ export const deleteFromCloudinary = async (publicId, resourceType = 'image') => 
   try {
     const result = await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
     return result;
-  } catch (error) {
-    console.error('[Cloudinary Delete Error]', error.message);
-    throw new Error(`Failed to delete resource from Cloudinary: ${error.message}`);
+  } catch (cloudinaryDestroyError) {
+    console.error('[Cloudinary Delete Error]', cloudinaryDestroyError.message);
+    throw new Error(`Failed to delete resource from Cloudinary: ${cloudinaryDestroyError.message}`);
   }
 };
 

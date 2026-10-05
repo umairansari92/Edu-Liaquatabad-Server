@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { validate } from '../middlewares/validate.js';
 import { authLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { ROLES } from '../../config/constants.js';
@@ -21,6 +22,7 @@ const router = express.Router();
 // All HM parent-link routes require authenticated session with HM or Administrative oversight
 router.use(authenticate);
 router.use(authorizeRoles(ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN));
+router.use(idempotencyGuard);
 
 // ─── 1. HM Pending Parent Claims Queue ──────────────────────────────────────
 router.get('/', authLimiter, handleGetHmParentLinks);

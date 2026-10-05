@@ -61,7 +61,7 @@ router.get('/schools/:schoolId/structure', publicStatsLimiter, async (incomingRe
       statusCode: 200,
       data: { classes, sections, subjects },
     });
-  } catch (error) {
+  } catch (structureFetchError) {
     return outgoingResponse.status(500).json({
       success: false,
       statusCode: 500,

@@ -49,12 +49,12 @@ export const authenticateMfaPending = async (request, response, nextFunction) =>
     request.mfaUser = user;
     request.mfaTokenPayload = decoded;
     nextFunction();
-  } catch (error) {
-    const isExpired = error.name === 'TokenExpiredError' || error.message?.includes('expired');
+  } catch (mfaVerificationError) {
+    const isExpired = mfaVerificationError.name === 'TokenExpiredError' || mfaVerificationError.message?.includes('expired');
     const userFriendlyMessage = isExpired
       ? 'Sign-in session timed out. Please click "Back to Sign In" to re-enter your password.'
       : 'MFA authentication ticket expired or invalid. Please sign in again.';
-    return sendError(response, 401, userFriendlyMessage, [{ message: error.message }]);
+    return sendError(response, 401, userFriendlyMessage, [{ message: mfaVerificationError.message }]);
   }
 };
 

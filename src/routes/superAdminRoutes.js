@@ -13,6 +13,7 @@ import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { blockRootAdminCreation } from '../middlewares/blockRootAdminCreation.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { validate } from '../middlewares/validate.js';
 import { flushLockoutsSchema } from '../validations/userSchemas.js';
 import {
@@ -34,6 +35,7 @@ const router = express.Router();
 // All routes in this file require authentication and minimum SUPER_ADMIN authority
 router.use(authenticate);
 router.use(authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN));
+router.use(idempotencyGuard);
 
 /**
  * GET /api/v1/admin/super-admins/overview

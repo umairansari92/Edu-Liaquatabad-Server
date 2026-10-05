@@ -6,6 +6,7 @@ import {
   handleGetMySchedule,
 } from '../controllers/timetableController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeRoles, enforceSchoolScope } from '../middlewares/authorize.js';
 import { validate } from '../middlewares/validate.js';
 import { manageTimetableSchema } from '../validations/timetableSchemas.js';
@@ -13,8 +14,9 @@ import { ROLES } from '../../config/constants.js';
 
 const router = express.Router();
 
-// All timetable operations require valid authentication
+// All timetable operations require valid authentication and idempotency protection
 router.use(authenticate);
+router.use(idempotencyGuard);
 
 // ─── 1. School Timetable & Live Period Status ────────────────────────────────
 router.get(

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { initSystemControl } from '../src/services/systemControlService.js';
+import IdempotencyRecord from '../src/models/IdempotencyRecord.js';
 
 let isConnecting = false;
 
@@ -35,6 +36,9 @@ export const connectDatabase = async () => {
     });
     console.log(`[MongoDB] Connected successfully to host: ${conn.connection.host}`);
     await initSystemControl();
+    await IdempotencyRecord.init().catch((idxErr) => {
+      console.warn('[IdempotencyRecord] Index initialization notice:', idxErr.message);
+    });
   } catch (error) {
     console.error(`[MongoDB] Connection error: ${error.message}`);
     if (process.env.NODE_ENV === 'production') {

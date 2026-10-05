@@ -21,9 +21,9 @@ export const handleGetActiveAnnouncement = async (request, response, nextFunctio
       success: true,
       data: activeAnnouncement || null,
     });
-  } catch (error) {
-    logger.error(`[Announcement] Failed to fetch active announcement: ${error.message}`);
-    return nextFunction(error);
+  } catch (announcementFetchError) {
+    logger.error(`[Announcement] Failed to fetch active announcement: ${announcementFetchError.message}`);
+    return nextFunction(announcementFetchError);
   }
 };
 
@@ -69,9 +69,9 @@ export const handleGetAnnouncementHistory = async (request, response, nextFuncti
         },
       },
     });
-  } catch (error) {
-    logger.error(`[Announcement] Failed to fetch history: ${error.message}`);
-    return nextFunction(error);
+  } catch (historyFetchError) {
+    logger.error(`[Announcement] Failed to fetch history: ${historyFetchError.message}`);
+    return nextFunction(historyFetchError);
   }
 };
 
@@ -229,12 +229,12 @@ export const handleCreateAnnouncement = async (request, response, nextFunction) 
       message: 'Executive announcement published successfully.',
       data: createdAnnouncement,
     });
-  } catch (error) {
+  } catch (announcementCreateError) {
     if (useTransaction && session) {
       await session.abortTransaction().catch(() => {});
     }
-    logger.error(`[Announcement] Failed to create announcement: ${error.message}`);
-    return nextFunction(error);
+    logger.error(`[Announcement] Failed to create announcement: ${announcementCreateError.message}`);
+    return nextFunction(announcementCreateError);
   } finally {
     if (session) {
       session.endSession().catch(() => {});
@@ -304,8 +304,8 @@ export const handleArchiveAnnouncement = async (request, response, nextFunction)
       message: 'Announcement archived successfully.',
       data: announcement,
     });
-  } catch (error) {
-    logger.error(`[Announcement] Failed to archive announcement: ${error.message}`);
-    return nextFunction(error);
+  } catch (announcementArchiveError) {
+    logger.error(`[Announcement] Failed to archive announcement: ${announcementArchiveError.message}`);
+    return nextFunction(announcementArchiveError);
   }
 };

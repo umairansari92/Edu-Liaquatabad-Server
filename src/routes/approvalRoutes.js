@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorizePermissions } from '../middlewares/authorizePermissions.js';
+import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { PERMISSIONS } from '../config/permissions.js';
 import {
   handleGetPendingApprovals,
@@ -10,9 +11,10 @@ import {
 
 const router = express.Router();
 
-// All approval routes require valid JWT session and USERS_APPROVE capability
+// All approval routes require valid JWT session, USERS_APPROVE capability, and idempotency protection
 router.use(authenticate);
 router.use(authorizePermissions(PERMISSIONS.USERS_APPROVE));
+router.use(idempotencyGuard);
 
 // List pending registrations (masked sensitive fields)
 router.get('/pending', handleGetPendingApprovals);

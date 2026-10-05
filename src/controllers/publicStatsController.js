@@ -144,8 +144,8 @@ export const getPublicTownStats = async (request, response, nextFunction) => {
       success: true,
       data: cachedStats,
     });
-  } catch (error) {
-    logger.error(`[PublicStats] Failed to compute live stats: ${error.message}`);
+  } catch (statsComputationError) {
+    logger.error(`[PublicStats] Failed to compute live stats: ${statsComputationError.message}`);
     return response.status(200).json({
       success: true,
       data: {
