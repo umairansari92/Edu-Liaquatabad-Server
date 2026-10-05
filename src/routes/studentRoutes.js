@@ -1,7 +1,7 @@
 import { authenticate } from '../middlewares/authenticate.js';
 import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
-import { authorizeRoles } from '../middlewares/authorizeRoles.js';
+import { authorizeRoles } from '../middlewares/authorize.js';
 import { authLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { validate, validateQuery } from '../middlewares/validate.js';
 import express from 'express';

@@ -12,6 +12,7 @@ import StudentProfile from '../models/StudentProfile.js';
 import AuditLog from '../models/AuditLog.js';
 import TeachingAssignment from '../models/TeachingAssignment.js';
 import Homework from '../models/Homework.js';
+import TeacherProfile from '../models/TeacherProfile.js';
 import {
   ROLES,
   SCOPES,
@@ -357,6 +358,89 @@ export const handleUpdateSection = asyncHandler(async (request, response) => {
   });
 
   return sendSuccess(response, 200, 'Section updated successfully.', { section: sectionRecord });
+});
+
+/**
+ * PATCH /api/v1/academic/sections/:id/class-teacher
+ * Designate or update the primary Class Teacher for a class section.
+ * Accessible by: HM (strictly within assigned school), Admin, Super Admin, Root Admin.
+ * Strictly verifies teacher belongs to the school, has role TEACHER, and is teaching staff.
+ */
+export const handleAssignClassTeacher = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id } = request.params;
+  const { classTeacherId } = request.body;
+
+  const sectionRecord = await Section.findById(id).populate('schoolId', 'name');
+  if (!sectionRecord) {
+    return sendError(response, 404, 'Section not found.');
+  }
+
+  const sectionSchoolId = String(sectionRecord.schoolId?._id || sectionRecord.schoolId);
+
+  // Server-Enforced HM School Jurisdiction Guard (Anti-BOLA)
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!actorSchoolId || actorSchoolId !== sectionSchoolId) {
+      return sendError(response, 403, 'Access denied. You can only designate Class Teachers for sections within your assigned school.');
+    }
+  }
+
+  let teacherUser = null;
+  if (classTeacherId) {
+    teacherUser = await User.findById(classTeacherId);
+    if (!teacherUser) {
+      return sendError(response, 404, 'Teacher not found.');
+    }
+
+    const teacherSchoolId = String(teacherUser.schoolId?._id || teacherUser.schoolId || '');
+    if (teacherSchoolId !== sectionSchoolId) {
+      return sendError(response, 400, 'Selected teacher does not belong to this school.');
+    }
+
+    if (teacherUser.role !== ROLES.TEACHER) {
+      return sendError(response, 400, 'Designated Class Teacher must possess the TEACHER role.');
+    }
+
+    const profile = await TeacherProfile.findOne({ userId: classTeacherId });
+    if (profile && profile.isTeachingStaff === false) {
+      return sendError(response, 400, 'Non-teaching staff cannot be designated as Class Teacher.');
+    }
+  }
+
+  const previousClassTeacherId = sectionRecord.classTeacherId;
+  sectionRecord.classTeacherId = classTeacherId || null;
+  await sectionRecord.save();
+
+  await writeAcademicAudit({
+    actorId: requestingActor._id || requestingActor.userId,
+    actorRole: requestingActor.role,
+    actorName: requestingActor.fullName,
+    action: 'SECTION_CLASS_TEACHER_DESIGNATED',
+    targetModel: 'Section',
+    targetId: sectionRecord._id,
+    targetName: sectionRecord.name,
+    schoolId: sectionRecord.schoolId?._id || sectionRecord.schoolId,
+    previousState: { classTeacherId: previousClassTeacherId ? String(previousClassTeacherId) : null },
+    newState: {
+      classTeacherId: classTeacherId ? String(classTeacherId) : null,
+      teacherName: teacherUser?.fullName || null,
+    },
+    result: 'SUCCESS',
+    reason: classTeacherId
+      ? `Class Teacher designated: ${teacherUser?.fullName}`
+      : 'Class Teacher designation cleared',
+    ipAddress: request.ip,
+    userAgent: request.headers['user-agent'],
+  });
+
+  const updatedSection = await Section.findById(id).populate('classTeacherId', 'fullName designation email');
+  return sendSuccess(
+    response,
+    200,
+    classTeacherId ? 'Class Teacher designated successfully.' : 'Class Teacher designation cleared successfully.',
+    { section: updatedSection }
+  );
 });
 
 // ═══════════════════════════════════════════════════════════

@@ -54,6 +54,10 @@ export const updateSectionSchema = z.object({
   reason: safeString(500, 3).optional(),
 }).strict();
 
+export const assignClassTeacherSchema = z.object({
+  classTeacherId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid classTeacherId format.').nullable().optional(),
+}).strict();
+
 // ─── Subject Schemas ──────────────────────────────────────────────────────────
 
 export const createSubjectSchema = z.object({

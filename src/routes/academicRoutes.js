@@ -6,6 +6,7 @@ import {
   handleGetSections,
   handleCreateSection,
   handleUpdateSection,
+  handleAssignClassTeacher,
   handleGetSubjects,
   handleCreateSubject,
   handleUpdateSubject,
@@ -19,7 +20,7 @@ import { authorizePermissions } from '../middlewares/authorizePermissions.js';
 import { validate } from '../middlewares/validate.js';
 import {
   createClassSchema, updateClassSchema,
-  createSectionSchema, updateSectionSchema,
+  createSectionSchema, updateSectionSchema, assignClassTeacherSchema,
   createSubjectSchema, updateSubjectSchema,
 } from '../validations/academicSchemas.js';
 import { ROLES } from '../../config/constants.js';
@@ -59,6 +60,11 @@ router.patch('/sections/:id',
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(updateSectionSchema),
   handleUpdateSection
+);
+router.patch('/sections/:id/class-teacher',
+  authorizeRoles(ROLES.HM, ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
+  validate(assignClassTeacherSchema),
+  handleAssignClassTeacher
 );
 
 // ─── Subjects ─────────────────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ router.get(
 // ─── Initiate Teacher Transfer ─────────────────────────────────────────────────
 router.post(
   '/',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR),
   authorizePermissions(PERMISSIONS.TRANSFERS_INITIATE),
   validate(initiateTransferSchema),
   handleInitiateTransfer
