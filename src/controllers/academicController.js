@@ -805,7 +805,14 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
     User.countDocuments({ claimedSchoolId: actorSchoolId, status: USER_STATUS.PENDING_APPROVAL, role: ROLES.STUDENT }),
     TransferRequest.countDocuments({
       toSchoolId: actorSchoolId,
-      status: { $in: [TRANSFER_STATUS.RELIEVED, TRANSFER_STATUS.AWAITING_DESTINATION_HM] },
+      status: {
+        $in: [
+          TRANSFER_STATUS.PENDING_TARGET_HM_APPROVAL,
+          TRANSFER_STATUS.TRANSFER_REQUESTED,
+          TRANSFER_STATUS.RELIEVED,
+          TRANSFER_STATUS.AWAITING_DESTINATION_HM,
+        ],
+      },
     }),
     Attendance.find({ schoolId: actorSchoolId, attendanceType: 'STUDENT', date: { $gte: dayStart, $lte: dayEnd } }).select('verificationStatus records sectionId').lean(),
   ]);

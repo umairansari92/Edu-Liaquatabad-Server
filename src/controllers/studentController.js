@@ -196,6 +196,7 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     organizationId: request.user?.organizationId,
     townId: request.user?.townId,
     schoolId: effectiveSchoolId,
+    claimedSchoolId: effectiveSchoolId,
     fullName: fullName.trim(),
     email: studentEmail,
     passwordHash: temporaryPasswordHash,
@@ -204,7 +205,7 @@ export const handleEnrollStudent = asyncHandler(async (request, response) => {
     baseRole: BASE_ROLES.STUDENT,
     role: ROLES.STUDENT,
     scope: SCOPES.SELF,
-    status: USER_STATUS.PENDING_APPROVAL,
+    status: USER_STATUS.ACTIVE,
   });
 
   // ── Step 4: Create StudentProfile with dual numbers ─────────────────────────
