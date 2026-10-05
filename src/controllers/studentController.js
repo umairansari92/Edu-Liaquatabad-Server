@@ -16,8 +16,17 @@ import Class from '../models/Class.js';
 import Section from '../models/Section.js';
 import AuditLog from '../models/AuditLog.js';
 import TeachingAssignment from '../models/TeachingAssignment.js';
-import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS } from '../../config/constants.js';
+import ParentStudentLink from '../models/ParentStudentLink.js';
+import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, STUDENT_STATUS, PARENT_STUDENT_LINK_STATUS } from '../../config/constants.js';
 import { hashPassword } from '../utils/passwordUtils.js';
+
+// Roles authorized to strike off students
+const STRIKE_OFF_ALLOWED_ROLES = new Set([
+  ROLES.ROOT_ADMIN,
+  ROLES.SUPER_ADMIN,
+  ROLES.ADMIN,
+  ROLES.HM,
+]);
 
 // Roles authorized to enroll students
 const ENROLLMENT_ALLOWED_ROLES = new Set([
@@ -662,4 +671,121 @@ export const handleGetSchoolStudents = asyncHandler(async (request, response) =>
     },
   });
 });
+
+/**
+ * PATCH /api/v1/students/:id/strike-off
+ * Operational authority for Head Master (and Administrative authorities)
+ * to strike off a student record with mandatory justification (minimum 10 characters).
+ * Zero hard deletion: updates lifecycleStatus to STRUCK_OFF, preserves academic history and GR No.
+ * Revokes all active ParentStudentLink relationships and invalidates student sessions.
+ */
+export const handleStrikeOffStudent = asyncHandler(async (request, response) => {
+  const { id } = request.params;
+  const { reason } = request.body;
+  const actorRole = request.user?.role;
+
+  if (!STRIKE_OFF_ALLOWED_ROLES.has(actorRole)) {
+    return sendError(response, 403, 'Access denied. You are not authorized to strike off students.');
+  }
+
+  // Find StudentProfile by either profile _id or linked userId
+  let studentProfile = await StudentProfile.findById(id);
+  if (!studentProfile) {
+    studentProfile = await StudentProfile.findOne({ userId: id });
+  }
+
+  if (!studentProfile) {
+    return sendError(response, 404, 'Student profile not found.');
+  }
+
+  // School jurisdictional isolation guard: HM can only strike off students from their own school
+  if (actorRole === ROLES.HM) {
+    if (!request.user.schoolId) {
+      return sendError(response, 400, 'Your Head Master account is not linked to an authorized school.');
+    }
+    if (String(studentProfile.schoolId) !== String(request.user.schoolId)) {
+      return sendError(response, 403, 'Access denied. You can only strike off students from your assigned school.');
+    }
+  }
+
+  // Guard against duplicate strike-off
+  if (studentProfile.lifecycleStatus === STUDENT_STATUS.STRUCK_OFF) {
+    return sendError(response, 400, 'Student is already marked as struck off.');
+  }
+
+  const previousLifecycleStatus = studentProfile.lifecycleStatus;
+
+  // 1. Update Student Profile Lifecycle Status and Remarks
+  studentProfile.lifecycleStatus = STUDENT_STATUS.STRUCK_OFF;
+  const timestampString = new Date().toISOString();
+  const actorName = request.user.fullName || request.user.email || 'Authority';
+  const strikeOffNote = `[STRUCK OFF ${timestampString} by ${actorName} (${actorRole})]: ${reason}`;
+  studentProfile.admissionRemarks = studentProfile.admissionRemarks
+    ? `${studentProfile.admissionRemarks} | ${strikeOffNote}`
+    : strikeOffNote;
+  await studentProfile.save();
+
+  // 2. Invalidate Linked User Account (if registered)
+  if (studentProfile.userId) {
+    await User.findByIdAndUpdate(studentProfile.userId, {
+      $set: {
+        status: USER_STATUS.STRUCK_OFF,
+        'approvalDetails.rejectionReason': reason,
+        'approvalDetails.reviewedBy': request.user._id,
+        'approvalDetails.reviewedAt': new Date(),
+      },
+      $inc: { tokenVersion: 1 },
+    });
+  }
+
+  // 3. Atomically Revoke all active Parent-Student claims
+  await ParentStudentLink.updateMany(
+    {
+      studentProfileId: studentProfile._id,
+      verificationStatus: {
+        $in: [
+          PARENT_STUDENT_LINK_STATUS.PENDING_OTP,
+          PARENT_STUDENT_LINK_STATUS.PENDING_HM_APPROVAL,
+          PARENT_STUDENT_LINK_STATUS.VERIFIED,
+        ],
+      },
+    },
+    {
+      $set: {
+        verificationStatus: PARENT_STUDENT_LINK_STATUS.REVOKED,
+        revokedBy: request.user._id,
+        revokedAt: new Date(),
+        revocationReason: `Student struck off from school records: ${reason}`,
+      },
+    }
+  );
+
+  // 4. Create Immutable Audit Log
+  await AuditLog.create({
+    actorId: request.user._id,
+    actorRole,
+    action: 'STUDENT_STRUCK_OFF',
+    targetModel: 'StudentProfile',
+    targetId: studentProfile._id,
+    townId: request.user?.townId,
+    schoolId: studentProfile.schoolId,
+    previousState: {
+      lifecycleStatus: previousLifecycleStatus,
+    },
+    newState: {
+      lifecycleStatus: STUDENT_STATUS.STRUCK_OFF,
+      reason,
+    },
+    ipAddress: request.ip || '',
+    userAgent: request.headers?.['user-agent'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Student has been successfully struck off from the school record.', {
+    studentId: studentProfile._id,
+    grNumber: studentProfile.grNumber,
+    lifecycleStatus: STUDENT_STATUS.STRUCK_OFF,
+    reason,
+  });
+});
+
 

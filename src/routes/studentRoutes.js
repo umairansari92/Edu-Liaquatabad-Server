@@ -1,14 +1,17 @@
 import { authenticate } from '../middlewares/authenticate.js';
 import { idempotencyGuard } from '../middlewares/idempotency.js';
 import { authorizeScope } from '../middlewares/authorizeScope.js';
+import { authorizeRoles } from '../middlewares/authorizeRoles.js';
 import { authLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { validate, validateQuery } from '../middlewares/validate.js';
 import express from 'express';
+import { ROLES } from '../../config/constants.js';
 import {
   enrollStudentSchema,
   checkGrSchema,
   setSchoolCodeSchema,
   getSchoolStudentsQuerySchema,
+  strikeOffStudentSchema,
 } from '../validations/studentSchemas.js';
 import {
   handleEnrollStudent,
@@ -18,6 +21,7 @@ import {
   handleGetSectionStudents,
   handleGetSchoolStudents,
   handleGetMyStudentProfile,
+  handleStrikeOffStudent,
 } from '../controllers/studentController.js';
 
 const router = express.Router();
@@ -54,5 +58,14 @@ router.get('/section/:sectionId', handleGetSectionStudents);
 
 // Authoritative School Student Directory (HM / School Staff)
 router.get('/school', validateQuery(getSchoolStudentsQuerySchema), handleGetSchoolStudents);
+
+// Operational Student Strike-Off (HM or Admin+)
+router.patch(
+  '/:id/strike-off',
+  authLimiter,
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  validate(strikeOffStudentSchema),
+  handleStrikeOffStudent
+);
 
 export default router;

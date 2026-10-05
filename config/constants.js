@@ -116,6 +116,7 @@ export const USER_STATUS = Object.freeze({
   REJECTED:            'REJECTED',
   SUSPENDED:           'SUSPENDED',
   TRANSFERRED:         'TRANSFERRED',
+  STRUCK_OFF:          'STRUCK_OFF',
   RETIRED:             'RETIRED',
   INACTIVE:            'INACTIVE',
 });
@@ -128,6 +129,7 @@ export const STUDENT_STATUS = Object.freeze({
   TRANSFERRED:         'TRANSFERRED',
   GRADUATED:           'GRADUATED',
   DROPPED_OUT:         'DROPPED_OUT',
+  STRUCK_OFF:          'STRUCK_OFF',
   INACTIVE:            'INACTIVE',
 });
 

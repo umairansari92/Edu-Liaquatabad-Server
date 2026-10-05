@@ -122,7 +122,19 @@ export const getSchoolStudentsQuerySchema = z.object({
   classId: mongoId.optional(),
   sectionId: mongoId.optional(),
   gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
-  lifecycleStatus: z.enum(['PENDING_APPROVAL', 'ACTIVE', 'INACTIVE', 'SUSPENDED', 'TRANSFERRED', 'GRADUATED', 'WITHDRAWN']).optional(),
+  lifecycleStatus: z.enum(['PENDING_APPROVAL', 'ACTIVE', 'INACTIVE', 'SUSPENDED', 'TRANSFERRED', 'GRADUATED', 'WITHDRAWN', 'STRUCK_OFF']).optional(),
   sortBy: z.enum(['grNumber', 'createdAt', 'fullName']).default('grNumber'),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
+});
+
+// ─── Strike Off Student Schema ────────────────────────────────────────────────
+export const strikeOffStudentSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(10, 'Mandatory strike-off justification must be at least 10 characters.')
+    .max(500, 'Reason must not exceed 500 characters.')
+    .refine((inputValue) => !SCRIPT_INJECTION_REGEX.test(inputValue), {
+      message: 'Input contains disallowed characters.',
+    }),
 });

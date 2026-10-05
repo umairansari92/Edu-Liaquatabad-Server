@@ -1037,6 +1037,10 @@ export const handleLogin = asyncHandler(async (request, response) => {
     return sendError(response, 403, `Your registration was rejected${reason}. Please contact your school administrator.`);
   }
 
+  if (user.status === USER_STATUS.STRUCK_OFF) {
+    return sendError(response, 403, 'Your student account is currently marked as struck off by your school. Please contact your Head Master for assistance.');
+  }
+
   if (user.status === USER_STATUS.RETIRED || user.status === USER_STATUS.INACTIVE) {
     return sendError(response, 403, 'This account is inactive.');
   }

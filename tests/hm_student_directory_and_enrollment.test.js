@@ -26,7 +26,9 @@ import {
 import {
   handleEnrollStudent,
   handleGetSchoolStudents,
+  handleStrikeOffStudent,
 } from '../src/controllers/studentController.js';
+import { handleLogin } from '../src/controllers/authController.js';
 
 // Domain models
 import User from '../src/models/User.js';
@@ -35,6 +37,9 @@ import School from '../src/models/School.js';
 import Class from '../src/models/Class.js';
 import Section from '../src/models/Section.js';
 import AuditLog from '../src/models/AuditLog.js';
+import ParentStudentLink from '../src/models/ParentStudentLink.js';
+import SecurityLockout from '../src/models/SecurityLockout.js';
+import { hashPassword } from '../src/utils/passwordUtils.js';
 
 // Services
 import * as grNumberService from '../src/services/grNumberService.js';
@@ -689,6 +694,220 @@ await runAsyncTest('handleEnrollStudent rejects duplicate manual GR number with 
   }
 });
 
+// ─── 6. HM Student Strike-Off Authority & Controlled Administrative Flow ──────
+console.log('\n--- 6. HM Student Strike-Off Authority & Controlled Administrative Flow ---');
+
+await runAsyncTest('handleStrikeOffStudent blocks non-authorized role with 403', async () => {
+  const req = {
+    user: { _id: 'teacher_user_id', role: ROLES.TEACHER, schoolId: schoolA_Id },
+    params: { id: 'some_student_id' },
+    body: { reason: 'Prolonged absence exceeding 30 consecutive days' },
+  };
+  const res = createMockRes();
+
+  await handleStrikeOffStudent(req, res);
+  assert.equal(res.statusCode, 403);
+  assert.match(res.body.message, /not authorized to strike off/i);
+});
+
+await runAsyncTest('handleStrikeOffStudent strictly rejects HM striking off student of School B with 403', async () => {
+  const origStudentFindById = StudentProfile.findById;
+  StudentProfile.findById = async () => ({
+    _id: 'student_school_b',
+    schoolId: schoolB_Id, // Student belongs to School B
+    lifecycleStatus: STUDENT_STATUS.ACTIVE,
+  });
+
+  const req = {
+    user: hmA_User, // HM belongs to School A
+    params: { id: 'student_school_b' },
+    body: { reason: 'Disciplinary strike-off after inquiry' },
+  };
+  const res = createMockRes();
+
+  try {
+    await handleStrikeOffStudent(req, res);
+    assert.equal(res.statusCode, 403);
+    assert.match(res.body.message, /only strike off students from your assigned school/i);
+  } finally {
+    StudentProfile.findById = origStudentFindById;
+  }
+});
+
+await runAsyncTest('handleStrikeOffStudent returns 404 for non-existent student', async () => {
+  const origStudentFindById = StudentProfile.findById;
+  const origStudentFindOne = StudentProfile.findOne;
+  StudentProfile.findById = async () => null;
+  StudentProfile.findOne = async () => null;
+
+  const req = {
+    user: hmA_User,
+    params: { id: 'non_existent_student_id' },
+    body: { reason: 'Student cannot be located anywhere' },
+  };
+  const res = createMockRes();
+
+  try {
+    await handleStrikeOffStudent(req, res);
+    assert.equal(res.statusCode, 404);
+    assert.match(res.body.message, /student profile not found/i);
+  } finally {
+    StudentProfile.findById = origStudentFindById;
+    StudentProfile.findOne = origStudentFindOne;
+  }
+});
+
+await runAsyncTest('handleStrikeOffStudent returns 400 when student is already struck off', async () => {
+  const origStudentFindById = StudentProfile.findById;
+  StudentProfile.findById = async () => ({
+    _id: 'already_struck_off_student',
+    schoolId: schoolA_Id,
+    lifecycleStatus: STUDENT_STATUS.STRUCK_OFF,
+  });
+
+  const req = {
+    user: hmA_User,
+    params: { id: 'already_struck_off_student' },
+    body: { reason: 'Duplicate strike-off attempt reason' },
+  };
+  const res = createMockRes();
+
+  try {
+    await handleStrikeOffStudent(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.message, /already marked as struck off/i);
+  } finally {
+    StudentProfile.findById = origStudentFindById;
+  }
+});
+
+await runAsyncTest('handleStrikeOffStudent atomically updates profile, invalidates user, revokes parent links, and creates audit log', async () => {
+  const origStudentFindById = StudentProfile.findById;
+  const origUserFindByIdAndUpdate = User.findByIdAndUpdate;
+  const origParentLinkUpdateMany = ParentStudentLink.updateMany;
+  const origAuditCreate = AuditLog.create;
+
+  let savedProfile = null;
+  let userUpdated = null;
+  let parentLinksRevoked = null;
+  let auditCreated = null;
+
+  const mockProfile = {
+    _id: 'target_student_profile_id',
+    schoolId: schoolA_Id,
+    userId: 'student_user_account_id',
+    grNumber: 1042,
+    lifecycleStatus: STUDENT_STATUS.ACTIVE,
+    admissionRemarks: 'Enrolled in 2024',
+    save: async function () {
+      savedProfile = this;
+      return this;
+    },
+  };
+
+  StudentProfile.findById = async () => mockProfile;
+  User.findByIdAndUpdate = async (userId, updateQuery) => {
+    userUpdated = { userId, updateQuery };
+    return { _id: userId };
+  };
+  ParentStudentLink.updateMany = async (filter, update) => {
+    parentLinksRevoked = { filter, update };
+    return { modifiedCount: 1 };
+  };
+  AuditLog.create = async (auditPayload) => {
+    auditCreated = auditPayload;
+    return auditPayload;
+  };
+
+  const req = {
+    user: hmA_User,
+    params: { id: 'target_student_profile_id' },
+    body: { reason: 'Prolonged absence exceeding 30 consecutive school days without excuse' },
+    ip: '127.0.0.1',
+    headers: { 'user-agent': 'HM-Browser' },
+  };
+  const res = createMockRes();
+
+  try {
+    await handleStrikeOffStudent(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.data.lifecycleStatus, STUDENT_STATUS.STRUCK_OFF);
+
+    // Verify StudentProfile was updated with remarks and STRUCK_OFF status
+    assert.equal(savedProfile.lifecycleStatus, STUDENT_STATUS.STRUCK_OFF);
+    assert.match(savedProfile.admissionRemarks, /STRUCK OFF/);
+    assert.match(savedProfile.admissionRemarks, /Prolonged absence exceeding 30 consecutive/);
+
+    // Verify User account status was set to STRUCK_OFF and tokenVersion incremented
+    assert.equal(userUpdated.userId, 'student_user_account_id');
+    assert.equal(userUpdated.updateQuery.$set.status, USER_STATUS.STRUCK_OFF);
+    assert.equal(userUpdated.updateQuery.$inc.tokenVersion, 1);
+
+    // Verify ParentStudentLink records were auto-revoked
+    assert.equal(parentLinksRevoked.update.$set.verificationStatus, 'REVOKED');
+    assert.match(parentLinksRevoked.update.$set.revocationReason, /struck off from school records/i);
+
+    // Verify AuditLog was created
+    assert.equal(auditCreated.action, 'STUDENT_STRUCK_OFF');
+    assert.equal(auditCreated.targetModel, 'StudentProfile');
+    assert.equal(auditCreated.actorId, hmA_User._id);
+    assert.equal(auditCreated.newState.lifecycleStatus, STUDENT_STATUS.STRUCK_OFF);
+  } finally {
+    StudentProfile.findById = origStudentFindById;
+    User.findByIdAndUpdate = origUserFindByIdAndUpdate;
+    ParentStudentLink.updateMany = origParentLinkUpdateMany;
+    AuditLog.create = origAuditCreate;
+  }
+});
+
+await runAsyncTest('handleLogin rejects struck-off student account with institutional guidance message', async () => {
+  const origUserFindOne = User.findOne;
+  const origLockoutFindOne = SecurityLockout.findOne;
+  const origLockoutDeleteOne = SecurityLockout.deleteOne;
+
+  SecurityLockout.findOne = async () => null;
+  SecurityLockout.deleteOne = async () => ({ acknowledged: true });
+
+  const validHash = await hashPassword('StudentPassword123!');
+
+  // Simulate user with status STRUCK_OFF and genuine Argon2id hash
+  User.findOne = () => ({
+    select: () => ({
+      _id: 'struck_off_user_id',
+      email: 'student.1042@school.edu.pk',
+      passwordHash: validHash,
+      status: USER_STATUS.STRUCK_OFF,
+      activeSessions: [],
+      tokenVersion: 2,
+    }),
+  });
+
+  const req = {
+    body: {
+      email: 'student.1042@school.edu.pk',
+      password: 'StudentPassword123!',
+    },
+    ip: '127.0.0.1',
+    headers: {},
+  };
+  const res = createMockRes();
+
+  try {
+    await handleLogin(req, res);
+    assert.equal(res.statusCode, 403);
+    assert.equal(
+      res.body.message,
+      'Your student account is currently marked as struck off by your school. Please contact your Head Master for assistance.'
+    );
+  } finally {
+    User.findOne = origUserFindOne;
+    SecurityLockout.findOne = origLockoutFindOne;
+    SecurityLockout.deleteOne = origLockoutDeleteOne;
+  }
+});
+
 console.log('\n======================================================================');
 console.log(`🏆 ALL ${passedTests}/${totalTests} HM STUDENT MANAGEMENT & DIRECTORY TESTS PASSED!`);
 console.log('======================================================================\n');
+

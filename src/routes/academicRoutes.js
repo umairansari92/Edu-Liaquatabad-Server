@@ -34,13 +34,13 @@ router.use(idempotencyGuard);
 // ─── Classes ──────────────────────────────────────────────────────────────────
 router.get('/classes', authorizePermissions(PERMISSIONS.SCHOOLS_VIEW), handleGetClasses);
 router.post('/classes',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(createClassSchema),
   handleCreateClass
 );
 router.patch('/classes/:id',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(updateClassSchema),
   handleUpdateClass
@@ -49,13 +49,13 @@ router.patch('/classes/:id',
 // ─── Sections ─────────────────────────────────────────────────────────────────
 router.get('/sections', authorizePermissions(PERMISSIONS.SCHOOLS_VIEW), handleGetSections);
 router.post('/sections',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(createSectionSchema),
   handleCreateSection
 );
 router.patch('/sections/:id',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(updateSectionSchema),
   handleUpdateSection
@@ -64,13 +64,13 @@ router.patch('/sections/:id',
 // ─── Subjects ─────────────────────────────────────────────────────────────────
 router.get('/subjects', authorizePermissions(PERMISSIONS.SCHOOLS_VIEW), handleGetSubjects);
 router.post('/subjects',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(createSubjectSchema),
   handleCreateSubject
 );
 router.patch('/subjects/:id',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
   authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
   validate(updateSubjectSchema),
   handleUpdateSubject
