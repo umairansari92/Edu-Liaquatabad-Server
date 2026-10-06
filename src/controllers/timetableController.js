@@ -195,6 +195,16 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
         }
       }
     }
+
+    // 1.6. Institutional Rule: The teacher assigned to Period 1 automatically becomes the primary Class Teacher
+    if (mongoose.connection?.readyState === 1 && typeof Section.findByIdAndUpdate === 'function') {
+      const periodOneEntries = schedule.filter((entry) => Number(entry.periodNumber) === 1 && entry.sectionId && entry.teacherId);
+      for (const p1Entry of periodOneEntries) {
+        await Section.findByIdAndUpdate(p1Entry.sectionId, {
+          $set: { classTeacherId: p1Entry.teacherId },
+        });
+      }
+    }
   }
 
   // 2. Server-Authoritative Conflict Engine

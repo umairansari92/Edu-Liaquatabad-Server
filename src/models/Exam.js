@@ -9,6 +9,12 @@ const ExamSchema = new mongoose.Schema({
     enum: ['MID_TERM', 'FINAL_TERM', 'MONTHLY_TEST', 'ASSESSMENT'],
     required: true,
   },
+  examScope: {
+    type: String,
+    enum: ['SCHOOL', 'CENTRALIZED'],
+    default: 'SCHOOL',
+    index: true,
+  },
   startDate: { type: Date, required: true },
   endDate: { type: Date, required: true },
   status: {

@@ -135,7 +135,11 @@ export const handleGetExams = asyncHandler(async (request, response) => {
  */
 export const handleCreateExam = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
-  const { schoolId, academicYear, title, examType, startDate, endDate } = request.body;
+  const { schoolId, academicYear, title, examType, examScope = 'SCHOOL', startDate, endDate } = request.body;
+
+  if (requestingActor.role === ROLES.HM && examScope === 'CENTRALIZED') {
+    return sendError(response, 403, 'Head Masters can only schedule school-level examinations. Centralized examinations are issued by Town Administration.');
+  }
 
   let targetSchoolId;
   try {
@@ -173,6 +177,7 @@ export const handleCreateExam = asyncHandler(async (request, response) => {
     academicYear: String(academicYear).trim(),
     title: String(title).trim(),
     examType,
+    examScope: examScope === 'CENTRALIZED' ? 'CENTRALIZED' : 'SCHOOL',
     startDate: parsedStartDate,
     endDate: parsedEndDate,
     status: 'UPCOMING',
@@ -691,6 +696,14 @@ export const handlePublishExamResults = asyncHandler(async (request, response) =
 
   if (String(exam.schoolId) !== String(effectiveSchoolId)) {
     return sendError(response, 403, 'Access denied. You can only publish exam results for your assigned school.');
+  }
+
+  if (exam.examScope === 'CENTRALIZED' && requestingActor.role === ROLES.HM) {
+    return sendError(
+      response,
+      403,
+      'Centralized examinations are controlled by Town Education Administration and cannot be published independently by a school Head Master.'
+    );
   }
 
   if (exam.status === 'PUBLISHED') {
