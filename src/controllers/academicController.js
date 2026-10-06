@@ -13,6 +13,8 @@ import AuditLog from '../models/AuditLog.js';
 import TeachingAssignment from '../models/TeachingAssignment.js';
 import Homework from '../models/Homework.js';
 import TeacherProfile from '../models/TeacherProfile.js';
+import Timetable from '../models/Timetable.js';
+import ParentStudentLink from '../models/ParentStudentLink.js';
 import {
   ROLES,
   SCOPES,
@@ -925,6 +927,289 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
     ? Number(((todayPresent / todayMarkedStudents) * 100).toFixed(1))
     : null;
 
+  // ── 1. Attendance Trend (Last 14 Days) ───────────────────────────────────────
+  const isDbConnected = mongoose.connection.readyState === 1;
+  let attendanceTrend = [];
+  try {
+    const fourteenDaysAgo = new Date(dayStart);
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13);
+
+    const pastRecords = await Attendance.find({
+      schoolId: actorSchoolId,
+      attendanceType: 'STUDENT',
+      date: { $gte: fourteenDaysAgo, $lte: dayEnd },
+    }).select('date records').lean();
+
+    const dateMap = new Map();
+    for (let i = 13; i >= 0; i--) {
+      const dayDate = new Date(dayStart);
+      dayDate.setDate(dayDate.getDate() - i);
+      const key = dayDate.toISOString().split('T')[0];
+      const label = dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      dateMap.set(key, { date: key, label, present: 0, absent: 0, leave: 0, total: 0, percentage: null });
+    }
+
+    if (Array.isArray(pastRecords)) {
+      for (const rec of pastRecords) {
+        if (!rec?.date) continue;
+        const recDate = new Date(rec.date).toISOString().split('T')[0];
+        if (dateMap.has(recDate)) {
+          const entry = dateMap.get(recDate);
+          for (const item of (rec.records || [])) {
+            if (item.status === ATTENDANCE_STATUS.PRESENT) entry.present++;
+            else if (item.status === ATTENDANCE_STATUS.ABSENT) entry.absent++;
+            else if (item.status === ATTENDANCE_STATUS.LEAVE) entry.leave++;
+            entry.total++;
+          }
+        }
+      }
+    }
+
+    attendanceTrend = Array.from(dateMap.values()).map((item) => ({
+      ...item,
+      percentage: item.total > 0 ? Number(((item.present / item.total) * 100).toFixed(1)) : null,
+    }));
+  } catch (_trendError) {
+    attendanceTrend = [];
+  }
+
+  // ── 2. Student Distribution Across Classes ─────────────────────────────────
+  let studentDistribution = [];
+  if (isDbConnected) {
+    try {
+      const classes = await Class.find({ schoolId: actorSchoolId, status: { $ne: 'ARCHIVED' } })
+        .sort({ numericGrade: 1, name: 1 })
+        .select('_id name numericGrade code')
+        .lean();
+
+      if (Array.isArray(classes) && classes.length > 0 && typeof StudentProfile.aggregate === 'function') {
+        const classCounts = await StudentProfile.aggregate([
+          { $match: { schoolId: new mongoose.Types.ObjectId(actorSchoolId), lifecycleStatus: STUDENT_STATUS.ACTIVE } },
+          { $group: { _id: '$classId', count: { $sum: 1 } } },
+        ]);
+        const countMap = new Map((classCounts || []).map((c) => [String(c._id), c.count]));
+
+        studentDistribution = classes.map((cls) => ({
+          classId: String(cls._id),
+          className: cls.name,
+          numericGrade: cls.numericGrade,
+          studentCount: countMap.get(String(cls._id)) || 0,
+        }));
+      }
+    } catch (_distError) {
+      studentDistribution = [];
+    }
+  }
+
+  // ── 3. Teaching Staff & Class Teacher Coverage ─────────────────────────────
+  let teachingCoverage = {
+    totalSections,
+    sectionsWithClassTeacher: 0,
+    unassignedSections: totalSections,
+    activeAssignmentsCount: 0,
+    coveragePercentage: null,
+  };
+  if (isDbConnected) {
+    try {
+      const [sectionsWithCt, activeAssignments] = await Promise.all([
+        Section.countDocuments({
+          schoolId: actorSchoolId,
+          status: { $ne: 'ARCHIVED' },
+          classTeacherId: { $ne: null },
+        }),
+        TeachingAssignment.countDocuments({
+          schoolId: actorSchoolId,
+          status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+        }),
+      ]);
+
+      const assignedCt = Number(sectionsWithCt || 0);
+      teachingCoverage = {
+        totalSections,
+        sectionsWithClassTeacher: assignedCt,
+        unassignedSections: Math.max(0, totalSections - assignedCt),
+        activeAssignmentsCount: Number(activeAssignments || 0),
+        coveragePercentage: totalSections > 0 ? Number(((assignedCt / totalSections) * 100).toFixed(1)) : null,
+      };
+    } catch (_coverageError) {
+      teachingCoverage = {
+        totalSections,
+        sectionsWithClassTeacher: 0,
+        unassignedSections: totalSections,
+        activeAssignmentsCount: 0,
+        coveragePercentage: null,
+      };
+    }
+  }
+
+  // ── 4. Today's Timetable / Schedule ─────────────────────────────────────────
+  let todaySchedule = [];
+  if (isDbConnected) {
+    try {
+      const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+      const currentDayName = dayNames[today.getDay()];
+
+      const activeTimetable = await Timetable.findOne({
+        schoolId: actorSchoolId,
+        status: 'ACTIVE',
+      })
+        .populate('schedule.classId', 'name numericGrade')
+        .populate('schedule.subjectId', 'name code')
+        .populate('schedule.teacherId', 'fullName')
+        .lean();
+
+      if (activeTimetable && Array.isArray(activeTimetable.periodSlots)) {
+        const todayEntries = (activeTimetable.schedule || []).filter(
+          (entry) => entry.dayOfWeek === currentDayName
+        );
+
+        todaySchedule = activeTimetable.periodSlots
+          .sort((a, b) => a.periodNumber - b.periodNumber)
+          .map((slot) => {
+            const match = todayEntries.find((entry) => entry.periodNumber === slot.periodNumber);
+            return {
+              periodNumber: slot.periodNumber,
+              slotType: slot.slotType,
+              label: slot.label,
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+              className: match?.classId?.name || null,
+              subjectName: match?.subjectId?.name || null,
+              teacherName: match?.teacherId?.fullName || null,
+              roomNumber: match?.roomNumber || '',
+            };
+          });
+      }
+    } catch (_scheduleError) {
+      todaySchedule = [];
+    }
+  }
+
+  // ── 5. School Audit Activity ───────────────────────────────────────────────
+  let recentActivity = [];
+  if (isDbConnected) {
+    try {
+      const logs = await AuditLog.find({ schoolId: actorSchoolId })
+        .sort({ createdAt: -1 })
+        .limit(8)
+        .select('actorName actorRole action targetModel targetName result reason createdAt')
+        .lean();
+
+      recentActivity = (logs || []).map((log) => ({
+        _id: log._id,
+        actorName: log.actorName || 'System',
+        actorRole: log.actorRole || '',
+        action: log.action,
+        targetModel: log.targetModel,
+        targetName: log.targetName || '',
+        result: log.result,
+        createdAt: log.createdAt,
+      }));
+    } catch (_activityError) {
+      recentActivity = [];
+    }
+  }
+
+  // ── 6. Needs Attention (Prioritized Action Queue) ───────────────────────────
+  let pendingParentClaims = 0;
+  if (isDbConnected) {
+    try {
+      pendingParentClaims = await ParentStudentLink.countDocuments({
+        schoolId: actorSchoolId,
+        status: 'PENDING_HM_APPROVAL',
+      });
+    } catch (_parentError) {
+      pendingParentClaims = 0;
+    }
+  }
+
+  const needsAttention = [];
+  const unsubmittedCount = Math.max(0, totalSections - todaySubmittedRecords);
+
+  if (unsubmittedCount > 0) {
+    needsAttention.push({
+      id: 'daily-attendance-pending',
+      type: 'ATTENDANCE',
+      priority: 'HIGH',
+      title: 'Daily Attendance Pending',
+      description: `${unsubmittedCount} of ${totalSections} sections have not submitted student attendance today.`,
+      actionTab: 'attendance',
+      actionLabel: 'Record Attendance',
+    });
+  }
+
+  if (teachingCoverage.unassignedSections > 0) {
+    needsAttention.push({
+      id: 'unassigned-class-teachers',
+      type: 'CLASS_TEACHER',
+      priority: 'MEDIUM',
+      title: 'Unassigned Class Teachers',
+      description: `${teachingCoverage.unassignedSections} section${teachingCoverage.unassignedSections > 1 ? 's do' : ' does'} not have a designated Class Teacher.`,
+      actionTab: 'assignments',
+      actionLabel: 'Assign Class Teacher',
+    });
+  }
+
+  if (pendingIncomingTransfers > 0) {
+    needsAttention.push({
+      id: 'incoming-transfers',
+      type: 'TRANSFER',
+      priority: 'HIGH',
+      title: 'Incoming Staff Joining',
+      description: `${pendingIncomingTransfers} teacher transfer order${pendingIncomingTransfers > 1 ? 's' : ''} awaiting physical joining approval.`,
+      actionTab: 'transfers',
+      actionLabel: 'Review Joining',
+    });
+  }
+
+  if (pendingParentClaims > 0) {
+    needsAttention.push({
+      id: 'parent-claims',
+      type: 'PARENT_CLAIM',
+      priority: 'MEDIUM',
+      title: 'Guardian Verification Claims',
+      description: `${pendingParentClaims} parent-student linkage claim${pendingParentClaims > 1 ? 's' : ''} awaiting document verification.`,
+      actionTab: 'approvals',
+      actionLabel: 'Verify Claims',
+    });
+  }
+
+  if (pendingStaffApprovals > 0) {
+    needsAttention.push({
+      id: 'staff-approvals',
+      type: 'APPROVAL',
+      priority: 'MEDIUM',
+      title: 'Staff Registration Approvals',
+      description: `${pendingStaffApprovals} staff registration${pendingStaffApprovals > 1 ? 's' : ''} awaiting verification.`,
+      actionTab: 'approvals',
+      actionLabel: 'Review Staff',
+    });
+  }
+
+  if (pendingStudentAdmissions > 0) {
+    needsAttention.push({
+      id: 'student-admissions',
+      type: 'APPROVAL',
+      priority: 'LOW',
+      title: 'Student Admissions Pending',
+      description: `${pendingStudentAdmissions} student admission application${pendingStudentAdmissions > 1 ? 's' : ''} awaiting decision.`,
+      actionTab: 'approvals',
+      actionLabel: 'Review Admissions',
+    });
+  }
+
+  if (unverifiedAttendanceCount > 0) {
+    needsAttention.push({
+      id: 'unverified-attendance',
+      type: 'ATTENDANCE_VERIFICATION',
+      priority: 'MEDIUM',
+      title: 'Attendance Verification Required',
+      description: `${unverifiedAttendanceCount} attendance register${unverifiedAttendanceCount > 1 ? 's require' : ' requires'} Head Master verification stamp.`,
+      actionTab: 'attendance',
+      actionLabel: 'Verify Records',
+    });
+  }
+
   return sendSuccess(response, 200, 'Head Master school command center summary retrieved.', {
     school: {
       _id: school._id,
@@ -943,7 +1228,7 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
       totalClasses,
       totalSections,
       todaySubmittedSections: todaySubmittedRecords,
-      unsubmittedSections: Math.max(0, totalSections - todaySubmittedRecords),
+      unsubmittedSections: unsubmittedCount,
       todayAttendance: {
         present: todayPresent,
         absent: todayAbsent,
@@ -955,9 +1240,16 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
         staffApprovals: pendingStaffApprovals,
         studentAdmissions: pendingStudentAdmissions,
         incomingTransfers: pendingIncomingTransfers,
+        parentClaims: pendingParentClaims,
         unverifiedAttendance: unverifiedAttendanceCount,
-        totalPendingActions: pendingStaffApprovals + pendingStudentAdmissions + pendingIncomingTransfers + unverifiedAttendanceCount,
+        totalPendingActions: pendingStaffApprovals + pendingStudentAdmissions + pendingIncomingTransfers + pendingParentClaims + unverifiedAttendanceCount,
       },
     },
+    attendanceTrend,
+    studentDistribution,
+    teachingCoverage,
+    todaySchedule,
+    recentActivity,
+    needsAttention,
   });
 });
