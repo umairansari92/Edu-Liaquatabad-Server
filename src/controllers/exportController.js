@@ -165,9 +165,33 @@ export const handleExportStaffCsv = asyncHandler(async (request, response) => {
     role:     { $ne: 'ROOT_ADMIN' },
     baseRole: { $nin: [BASE_ROLES.STUDENT, BASE_ROLES.PARENT] },
   };
-  if (role) userFilter.role = role;
-  if (status) userFilter.status = status;
-  if (schoolId) userFilter.schoolId = schoolId;
+  // ── Jurisdictional Scoping Guard ───────────────────────────────────────────
+  if (actor.role === ROLES.HM) {
+    const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
+    if (!actorSchoolId) {
+      return sendError(response, 400, 'Your Head Master account is not linked to an authorized school.');
+    }
+    if (schoolId && String(schoolId) !== actorSchoolId) {
+      return sendError(response, 403, 'Access denied. You can only export staff belonging to your assigned school.');
+    }
+    userFilter.schoolId = actorSchoolId;
+  } else if (actor.role === ROLES.SUPERVISOR) {
+    const assignedSchoolIds = (actor.assignedSchools || []).map((assignedSchool) => String(assignedSchool?._id || assignedSchool));
+    if (assignedSchoolIds.length === 0) {
+      return sendError(response, 403, 'Access denied. No municipal schools assigned to your supervisory cluster.');
+    }
+    if (schoolId) {
+      if (!assignedSchoolIds.includes(String(schoolId))) {
+        return sendError(response, 403, 'Access denied. You cannot export staff from a school outside your supervisory cluster.');
+      }
+      userFilter.schoolId = schoolId;
+    } else {
+      userFilter.schoolId = { $in: assignedSchoolIds };
+    }
+  } else if (schoolId) {
+    userFilter.schoolId = schoolId;
+  }
+
   if (search) {
     userFilter.$or = [
       { fullName: { $regex: search, $options: 'i' } },

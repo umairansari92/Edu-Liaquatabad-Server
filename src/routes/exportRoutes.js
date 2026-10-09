@@ -24,8 +24,8 @@ router.get('/users.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN), ha
 
 // ─── Export Staff Directory CSV ────────────────────────────────────────────────
 // User + TeacherProfile join — excludes students/parents
-router.get('/staff',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN), handleExportStaffCsv);
-router.get('/staff.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN), handleExportStaffCsv);
+router.get('/staff',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM), handleExportStaffCsv);
+router.get('/staff.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM), handleExportStaffCsv);
 
 // ─── Export Students Directory CSV ────────────────────────────────────────────
 // StudentProfile + User + School + Class + Section join
