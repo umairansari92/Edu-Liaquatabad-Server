@@ -18,7 +18,6 @@ import { PERMISSIONS } from '../config/permissions.js';
 const router = express.Router();
 
 router.use(authenticate);
-router.use(idempotencyGuard);
 
 // View documents and circulars (scoped by role/school/town)
 router.get(
@@ -42,12 +41,14 @@ router.get(
 );
 
 // Publish document or notice (HM, Supervisor, Admin, Super Admin, Root Admin)
+// File upload & magic bytes validation run before idempotencyGuard so request body & file are fully populated
 router.post(
   '/',
   authorizeRoles(ROLES.HM, ROLES.SUPERVISOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
   authorizePermissions(PERMISSIONS.DOCUMENTS_PUBLISH),
   uploadInMemory.single('file'),
   validateFileMagicBytes,
+  idempotencyGuard,
   handleCreateDocument
 );
 
@@ -56,6 +57,7 @@ router.patch(
   '/:id/archive',
   authorizeRoles(ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
   authorizePermissions(PERMISSIONS.DOCUMENTS_PUBLISH),
+  idempotencyGuard,
   handleArchiveDocument
 );
 
@@ -64,6 +66,7 @@ router.delete(
   '/:id',
   authorizeRoles(ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN),
   authorizePermissions(PERMISSIONS.DOCUMENTS_DELETE),
+  idempotencyGuard,
   handleDeleteDocument
 );
 

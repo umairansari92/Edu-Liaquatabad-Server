@@ -359,6 +359,161 @@ const runAllTests = async () => {
       // The invariant is that the server controller relies strictly on req.user.role, never req.body.role
     });
 
+    await runTest('19. In-Flight Lease Recovery: Expired PENDING record (>60s) reclaims lease and executes retry', async () => {
+      const leaseRecoveryKey = '01JLEASE_RECOVERY_KEY_0001';
+      const requestPayload = { sectionId: 'SEC-RECOVER', date: '2026-10-10' };
+      const matchingFingerprint = computeRequestFingerprint({ body: requestPayload });
+
+      // Seed an abandoned PENDING record that timed out 2 minutes ago
+      await IdempotencyRecord.create({
+        userId: teacherUserId,
+        idempotencyKey: leaseRecoveryKey,
+        requestFingerprint: matchingFingerprint,
+        endpoint: 'POST /api/v1/attendance/submit',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 86400000),
+        createdAt: new Date(Date.now() - 120000),
+        updatedAt: new Date(Date.now() - 120000),
+      });
+
+      const req = {
+        headers: { 'idempotency-key': leaseRecoveryKey },
+        method: 'POST',
+        originalUrl: '/api/v1/attendance/submit',
+        user: { _id: teacherUserId, role: 'TEACHER', schoolId: testSchoolId, townId: testTownId },
+        body: requestPayload,
+      };
+
+      let nextCalled = false;
+      const res = {
+        statusCode: 200,
+        headers: {},
+        setHeader(name, val) { this.headers[name] = val; },
+        status(code) { this.statusCode = code; return this; },
+        json(data) { this.data = data; return this; },
+      };
+
+      await idempotencyGuard(req, res, () => { nextCalled = true; });
+      assert.strictEqual(nextCalled, true, 'Controller must be executed when expired lease is reclaimed');
+
+      // Complete simulation
+      res.json({ success: true, message: 'Recovered submission completed' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const updatedRecord = await IdempotencyRecord.findOne({ userId: teacherUserId, idempotencyKey: leaseRecoveryKey });
+      assert.strictEqual(updatedRecord.status, 'RESOLVED');
+      assert.strictEqual(updatedRecord.responseStatusCode, 200);
+    });
+
+    await runTest('20. In-Flight Lease Attack Protection: Expired PENDING record with tampered payload rejected', async () => {
+      const tamperedKey = '01JLEASE_TAMPER_KEY_000002';
+
+      // Seed an abandoned PENDING record with original fingerprint
+      await IdempotencyRecord.create({
+        userId: teacherUserId,
+        idempotencyKey: tamperedKey,
+        requestFingerprint: 'original_fingerprint_hash',
+        endpoint: 'POST /api/v1/attendance/submit',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 86400000),
+        createdAt: new Date(Date.now() - 120000),
+        updatedAt: new Date(Date.now() - 120000),
+      });
+
+      const req = {
+        headers: { 'idempotency-key': tamperedKey },
+        method: 'POST',
+        originalUrl: '/api/v1/attendance/submit',
+        user: { _id: teacherUserId, role: 'TEACHER', schoolId: testSchoolId, townId: testTownId },
+        body: { malicious: 'different_payload' },
+      };
+
+      let nextCalled = false;
+      let statusCode = 200;
+      let errorResponse = null;
+      const res = {
+        status(code) { statusCode = code; return this; },
+        json(data) { errorResponse = data; return this; },
+      };
+
+      await idempotencyGuard(req, res, () => { nextCalled = true; });
+      assert.strictEqual(nextCalled, false, 'Controller must not be called on tampered payload');
+      assert.strictEqual(statusCode, 409);
+      assert.strictEqual(errorResponse.errorCode, 'IDEMPOTENCY_KEY_REUSE');
+    });
+
+    await runTest('21. Non-Caching of Transient Collisions: 409 response is marked FAILED, enabling retry', async () => {
+      const transientKey = '01JTRANSIENT_TEST_KEY_0003';
+      const req = {
+        headers: { 'idempotency-key': transientKey },
+        method: 'POST',
+        originalUrl: '/api/v1/attendance/submit',
+        user: { _id: teacherUserId, role: 'TEACHER', schoolId: testSchoolId, townId: testTownId },
+        body: { sectionId: 'SEC-409' },
+      };
+
+      let nextCalled = false;
+      const res = {
+        statusCode: 409,
+        status(code) { this.statusCode = code; return this; },
+        json(data) { this.data = data; return this; },
+      };
+
+      await idempotencyGuard(req, res, () => { nextCalled = true; });
+      assert.strictEqual(nextCalled, true);
+
+      // Simulate downstream middleware/controller yielding 409
+      res.status(409).json({ success: false, statusCode: 409, errorCode: 'CONCURRENT_COLLISION' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const record = await IdempotencyRecord.findOne({ userId: teacherUserId, idempotencyKey: transientKey });
+      assert.strictEqual(record.status, 'FAILED', '409 response must be marked FAILED rather than permanently RESOLVED');
+      assert.strictEqual(record.responseBody, null, 'Transient collision body must not be permanently cached');
+    });
+
+    await runTest('22. Self-Healing: Legacy corrupted RESOLVED record with 409 allows legitimate retry', async () => {
+      const legacyKey = '01JLEGACY_CORRUPTED_KEY_04';
+      const requestPayload = { sectionId: 'SEC-LEGACY', count: 1 };
+      const matchingFingerprint = computeRequestFingerprint({ body: requestPayload });
+
+      // Seed a corrupted record where status is RESOLVED with responseStatusCode 409
+      await IdempotencyRecord.create({
+        userId: teacherUserId,
+        idempotencyKey: legacyKey,
+        requestFingerprint: matchingFingerprint,
+        endpoint: 'POST /api/v1/attendance/submit',
+        status: 'RESOLVED',
+        responseStatusCode: 409,
+        responseBody: {
+          success: false,
+          statusCode: 409,
+          errorCode: 'MUTATION_IN_FLIGHT',
+          message: 'A mutation with this idempotency key is currently processing.',
+        },
+        expiresAt: new Date(Date.now() + 86400000),
+      });
+
+      const req = {
+        headers: { 'idempotency-key': legacyKey },
+        method: 'POST',
+        originalUrl: '/api/v1/attendance/submit',
+        user: { _id: teacherUserId, role: 'TEACHER', schoolId: testSchoolId, townId: testTownId },
+        body: requestPayload,
+      };
+
+      let nextCalled = false;
+      const res = {
+        statusCode: 200,
+        headers: {},
+        setHeader(name, val) { this.headers[name] = val; },
+        status(code) { this.statusCode = code; return this; },
+        json(data) { this.data = data; return this; },
+      };
+
+      await idempotencyGuard(req, res, () => { nextCalled = true; });
+      assert.strictEqual(nextCalled, true, 'Must self-heal by treating corrupted 409 as retryable rather than replaying 409');
+    });
+
   } finally {
     // Clean up
     await IdempotencyRecord.deleteMany({ userId: { $in: [teacherUserId, attackerUserId] } });

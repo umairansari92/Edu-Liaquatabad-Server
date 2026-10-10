@@ -50,6 +50,8 @@ export const computeRequestFingerprint = (request) => {
   return crypto.createHash('sha256').update(canonicalString).digest('hex');
 };
 
+export const IN_FLIGHT_LEASE_MILLISECONDS = 60 * 1000; // 60 seconds lease window for in-flight mutations
+
 /**
  * Server-Side Idempotency Guard Middleware
  * Intercepts mutating requests providing an 'Idempotency-Key' header.
@@ -57,7 +59,7 @@ export const computeRequestFingerprint = (request) => {
  * Invariants:
  * 1. Guarantees identical execution result for network retries with matching payload.
  * 2. Blocks key-reuse attacks with differing payloads with 409 Conflict and security audit.
- * 3. Prevents concurrent duplicate in-flight mutations.
+ * 3. Prevents concurrent duplicate in-flight mutations with safe lease window recovery.
  * 4. Transparently passes through requests without an Idempotency-Key.
  */
 export const idempotencyGuard = async (request, response, nextFunction) => {
@@ -100,7 +102,11 @@ export const idempotencyGuard = async (request, response, nextFunction) => {
 
     if (existingRecord) {
       // ─── CASE 1: Previously Completed (RESOLVED) ─────────────────────────
-      if (existingRecord.status === 'RESOLVED') {
+      // If a previous transient error (409/429) was erroneously stored as RESOLVED, treat as retryable
+      const isTransientCollisionStatusCode =
+        existingRecord.responseStatusCode === 409 || existingRecord.responseStatusCode === 429;
+
+      if (existingRecord.status === 'RESOLVED' && !isTransientCollisionStatusCode) {
         // Verify Request Fingerprint Match
         if (existingRecord.requestFingerprint !== currentFingerprint) {
           // 🚨 IDEMPOTENCY KEY REUSE ATTACK / MISMATCHED PAYLOAD
@@ -140,6 +146,54 @@ export const idempotencyGuard = async (request, response, nextFunction) => {
 
       // ─── CASE 2: Currently In-Flight (PENDING) ───────────────────────────
       if (existingRecord.status === 'PENDING') {
+        const recordAgeMilliseconds =
+          Date.now() - new Date(existingRecord.updatedAt || existingRecord.createdAt).getTime();
+
+        // If the pending lease has expired (timeout, process crash, network drop)
+        if (recordAgeMilliseconds > IN_FLIGHT_LEASE_MILLISECONDS) {
+          // Check for mismatched payload attack on expired lease
+          if (existingRecord.requestFingerprint && existingRecord.requestFingerprint !== currentFingerprint) {
+            try {
+              await AuditLog.create({
+                actorId: actorUserId,
+                actorRole: request.user?.role || 'UNKNOWN',
+                actorName: request.user?.fullName || '',
+                action: 'IDEMPOTENCY_KEY_REUSE',
+                targetModel: 'IdempotencyRecord',
+                targetId: existingRecord._id,
+                targetName: endpointString,
+                townId: mongoose.Types.ObjectId.isValid(request.user?.townId) ? request.user.townId : undefined,
+                schoolId: mongoose.Types.ObjectId.isValid(request.user?.schoolId) ? request.user.schoolId : undefined,
+                result: 'DENIED',
+                reason: 'Idempotency key reuse attempted on expired lease with differing request payload.',
+                ipAddress: request.ip || '',
+                userAgent: request.headers?.['user-agent'] || '',
+                requestId: request.headers?.['x-request-id'] || '',
+              });
+            } catch (auditError) {
+              console.error('[Idempotency] Failed to write security audit log:', auditError.message);
+            }
+
+            return response.status(409).json({
+              success: false,
+              statusCode: 409,
+              errorCode: 'IDEMPOTENCY_KEY_REUSE',
+              message: 'Idempotency key reuse detected with differing request payload. Mutation rejected.',
+            });
+          }
+
+          // Reclaim expired lease for legitimate retry
+          existingRecord.status = 'PENDING';
+          existingRecord.requestFingerprint = currentFingerprint;
+          existingRecord.endpoint = endpointString;
+          existingRecord.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          await existingRecord.save();
+
+          hookResponseInterceptor(response, existingRecord);
+          return nextFunction();
+        }
+
+        // Active lease window: reject concurrent mutation attempt while previous is in-flight
         return response.status(409).json({
           success: false,
           statusCode: 409,
@@ -149,7 +203,7 @@ export const idempotencyGuard = async (request, response, nextFunction) => {
         });
       }
 
-      // ─── CASE 3: Previously Failed (FAILED) ──────────────────────────────
+      // ─── CASE 3: Previously Failed or Recovered ──────────────────────────
       // Allow retry by updating the record to PENDING
       existingRecord.status = 'PENDING';
       existingRecord.requestFingerprint = currentFingerprint;
@@ -207,14 +261,17 @@ const hookResponseInterceptor = (response, idempotencyRecord) => {
   response.json = function (responseBody) {
     const statusCode = response.statusCode;
 
-    // Cache responses for client results (2xx, 4xx). For 5xx server crashes, mark FAILED so client can retry.
-    const isPermanentResult = statusCode >= 200 && statusCode < 500;
+    // Cache responses for client results (2xx, 4xx except 409/429).
+    // Transient collisions (409 Conflict) and rate limits (429) must be marked FAILED so retries can proceed.
+    // 5xx server errors are marked FAILED.
+    const isTransientOrConflict = statusCode === 409 || statusCode === 429;
+    const isPermanentResult = statusCode >= 200 && statusCode < 500 && !isTransientOrConflict;
     const finalStatus = isPermanentResult ? 'RESOLVED' : 'FAILED';
 
     IdempotencyRecord.findByIdAndUpdate(idempotencyRecord._id, {
       status: finalStatus,
       responseStatusCode: statusCode,
-      responseBody: responseBody,
+      responseBody: isPermanentResult ? responseBody : null,
     }).catch((updateError) => {
       console.error('[Idempotency] Failed to update final response:', updateError.message);
     });
