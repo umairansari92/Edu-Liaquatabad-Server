@@ -8,6 +8,8 @@ import Attendance from '../models/Attendance.js';
 import AuditLog from '../models/AuditLog.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
+import ParentStudentLink from '../models/ParentStudentLink.js';
+import Notification from '../models/Notification.js';
 import cache from '../utils/cache.js';
 import logger from '../../config/logger.js';
 import { getKarachiDateString } from '../utils/karachiTime.js';
@@ -200,16 +202,32 @@ const dispatchClosureNotification = async (holiday, eventType = 'SCHOOL_CLOSURE'
     const recipientUserIds = [];
 
     if (holiday.scopeType === 'SCHOOL' && holiday.schoolId) {
+      // 1. Active students enrolled in the affected school
       const activeStudents = await StudentProfile.find({
         schoolId: holiday.schoolId,
         lifecycleStatus: 'ACTIVE',
-      }).select('userId parentUserId').lean();
+      }).select('_id userId').lean();
 
+      const activeStudentProfileIds = [];
       activeStudents.forEach((student) => {
+        activeStudentProfileIds.push(student._id);
         if (student.userId) recipientUserIds.push(String(student.userId));
-        if (student.parentUserId) recipientUserIds.push(String(student.parentUserId));
       });
 
+      // 2. Authoritative verified parents via ParentStudentLink (Phase 3 invariant)
+      if (activeStudentProfileIds.length > 0) {
+        const verifiedParentLinks = await ParentStudentLink.find({
+          schoolId: holiday.schoolId,
+          studentProfileId: { $in: activeStudentProfileIds },
+          verificationStatus: 'VERIFIED',
+        }).select('parentId').lean();
+
+        verifiedParentLinks.forEach((link) => {
+          if (link.parentId) recipientUserIds.push(String(link.parentId));
+        });
+      }
+
+      // 3. School staff (Teachers, Clerks, Peon, HM) belonging to this school
       const schoolStaff = await User.find({
         schoolId: holiday.schoolId,
         status: 'ACTIVE',
@@ -218,33 +236,98 @@ const dispatchClosureNotification = async (holiday, eventType = 'SCHOOL_CLOSURE'
       schoolStaff.forEach((staff) => {
         recipientUserIds.push(String(staff._id));
       });
+
+      // 4. Authorized Field Supervisors assigned to this school
+      const assignedSupervisors = await User.find({
+        role: ROLES.SUPERVISOR,
+        assignedSchools: holiday.schoolId,
+        status: 'ACTIVE',
+      }).select('_id').lean();
+
+      assignedSupervisors.forEach((supervisor) => {
+        recipientUserIds.push(String(supervisor._id));
+      });
     } else if (holiday.scopeType === 'TOWN' && holiday.townId) {
       const townSchools = await School.find({ townId: holiday.townId }).distinct('_id');
 
+      // 1. Active students across all municipal schools in the town
       const activeStudents = await StudentProfile.find({
         schoolId: { $in: townSchools },
         lifecycleStatus: 'ACTIVE',
-      }).select('userId parentUserId').lean();
+      }).select('_id userId').lean();
 
+      const activeStudentProfileIds = [];
       activeStudents.forEach((student) => {
+        activeStudentProfileIds.push(student._id);
         if (student.userId) recipientUserIds.push(String(student.userId));
-        if (student.parentUserId) recipientUserIds.push(String(student.parentUserId));
       });
 
-      const staffAndOfficials = await User.find({
+      // 2. Authoritative verified parents across municipal schools in the town
+      if (activeStudentProfileIds.length > 0) {
+        const verifiedParentLinks = await ParentStudentLink.find({
+          schoolId: { $in: townSchools },
+          studentProfileId: { $in: activeStudentProfileIds },
+          verificationStatus: 'VERIFIED',
+        }).select('parentId').lean();
+
+        verifiedParentLinks.forEach((link) => {
+          if (link.parentId) recipientUserIds.push(String(link.parentId));
+        });
+      }
+
+      // 3. School staff across municipal schools
+      const schoolStaff = await User.find({
+        schoolId: { $in: townSchools },
+        status: 'ACTIVE',
+      }).select('_id').lean();
+
+      schoolStaff.forEach((staff) => {
+        recipientUserIds.push(String(staff._id));
+      });
+
+      // 4. Supervisors assigned to municipal schools or municipal town
+      const townSupervisors = await User.find({
+        role: ROLES.SUPERVISOR,
+        status: 'ACTIVE',
         $or: [
-          { schoolId: { $in: townSchools }, status: 'ACTIVE' },
-          { townId: holiday.townId, status: 'ACTIVE', role: { $in: [ROLES.SUPERVISOR, ROLES.ADMIN, ROLES.HM] } },
+          { townId: holiday.townId },
+          { assignedSchools: { $in: townSchools } },
         ],
       }).select('_id').lean();
 
-      staffAndOfficials.forEach((person) => {
-        recipientUserIds.push(String(person._id));
+      townSupervisors.forEach((supervisor) => {
+        recipientUserIds.push(String(supervisor._id));
+      });
+
+      // 5. Municipal Town Administrators & HMs
+      const townAdmins = await User.find({
+        townId: holiday.townId,
+        status: 'ACTIVE',
+        role: { $in: [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.HM] },
+      }).select('_id').lean();
+
+      townAdmins.forEach((admin) => {
+        recipientUserIds.push(String(admin._id));
       });
     }
 
-    const uniqueRecipients = Array.from(new Set(recipientUserIds));
+    const uniqueRecipients = Array.from(new Set(recipientUserIds.map(String)));
     if (uniqueRecipients.length === 0) return;
+
+    // Idempotent dispatch check: avoid duplicate notifications across retries
+    let recipientsToNotify = uniqueRecipients;
+    if (typeof Notification.find === 'function' && (mongoose.connection?.readyState === 1 || Notification.find !== mongoose.Model.find)) {
+      const alreadyNotified = await Notification.find({
+        recipientUserId: { $in: uniqueRecipients },
+        notificationType: eventType,
+        'metadata.closureId': String(holiday._id),
+      }).distinct('recipientUserId').catch(() => []);
+
+      const alreadyNotifiedSet = new Set(alreadyNotified.map(String));
+      recipientsToNotify = uniqueRecipients.filter((id) => !alreadyNotifiedSet.has(id));
+    }
+
+    if (recipientsToNotify.length === 0) return;
 
     let notificationTitle = '';
     let notificationMessage = '';
@@ -267,7 +350,7 @@ const dispatchClosureNotification = async (holiday, eventType = 'SCHOOL_CLOSURE'
 
     await dispatchNotificationEvent({
       eventType,
-      category: 'ALERT',
+      category: 'GOVERNANCE',
       title: notificationTitle,
       message: notificationMessage,
       actionLink: '/holidays',
@@ -282,7 +365,7 @@ const dispatchClosureNotification = async (holiday, eventType = 'SCHOOL_CLOSURE'
         scopeType: holiday.scopeType,
         schoolId: holiday.schoolId ? String(holiday.schoolId) : undefined,
       },
-      recipientUserIds: uniqueRecipients,
+      recipientUserIds: recipientsToNotify,
     });
   } catch (notificationError) {
     logger.error(`[HolidayController] Failed to dispatch closure notification: ${notificationError.message}`);
@@ -290,29 +373,16 @@ const dispatchClosureNotification = async (holiday, eventType = 'SCHOOL_CLOSURE'
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /holidays — List active holidays & vacations
+// GET /holidays — List active holidays & vacations (STRICTLY READ-ONLY)
 // ═══════════════════════════════════════════════════════════════════════════════
 export const handleGetHolidays = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
   const { status = 'ACTIVE', year } = request.query;
   const todayPkt = getKarachiDateString(new Date());
 
-  // Safe idempotent lifecycle synchronization
-  if (typeof HolidayCalendar.updateMany === 'function' && (mongoose.connection?.readyState === 1 || HolidayCalendar.updateMany !== mongoose.Model.updateMany)) {
-    await HolidayCalendar.updateMany(
-      { status: 'SCHEDULED', startDate: { $lte: todayPkt }, endDate: { $gte: todayPkt } },
-      { $set: { status: 'ACTIVE' } }
-    ).catch(() => {});
-
-    await HolidayCalendar.updateMany(
-      { status: { $in: ['ACTIVE', 'SCHEDULED'] }, endDate: { $lt: todayPkt } },
-      { $set: { status: 'EXPIRED' } }
-    ).catch(() => {});
-  }
-
   const filter = {};
   if (status === 'ALL') {
-    // Return all records
+    // Return all records scoped to actor's jurisdiction
   } else if (status === 'ACTIVE') {
     filter.status = 'ACTIVE';
     filter.startDate = { $lte: todayPkt };
@@ -321,10 +391,7 @@ export const handleGetHolidays = asyncHandler(async (request, response) => {
     filter.status = 'SCHEDULED';
     filter.startDate = { $gt: todayPkt };
   } else if (status === 'EXPIRED') {
-    filter.$or = [
-      { status: 'EXPIRED' },
-      { status: { $in: ['ACTIVE', 'SCHEDULED'] }, endDate: { $lt: todayPkt } },
-    ];
+    filter.status = 'EXPIRED';
   } else if (status === 'CANCELLED') {
     filter.status = 'CANCELLED';
   } else if (status) {

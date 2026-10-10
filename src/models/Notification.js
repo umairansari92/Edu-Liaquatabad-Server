@@ -39,6 +39,8 @@ const NotificationSchema = new mongoose.Schema({
       'HOMEWORK_CREATED',
       'MEETING_SCHEDULED',
       'APPROVAL_REQUIRED',
+      'SCHOOL_CLOSURE',
+      'CLOSURE_CANCELLED',
     ],
     required: true,
     index: true,
@@ -66,5 +68,11 @@ const NotificationSchema = new mongoose.Schema({
 
 // Compound index for user unread querying
 NotificationSchema.index({ recipientUserId: 1, isRead: 1, createdAt: -1 });
+
+// Idempotent partial unique index for closure and cancellation alerts
+NotificationSchema.index(
+  { recipientUserId: 1, notificationType: 1, 'metadata.closureId': 1 },
+  { unique: true, partialFilterExpression: { 'metadata.closureId': { $exists: true } } }
+);
 
 export default mongoose.models.Notification || mongoose.model('Notification', NotificationSchema);
