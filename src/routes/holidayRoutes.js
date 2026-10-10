@@ -11,16 +11,13 @@ import { idempotencyGuard } from '../middlewares/idempotency.js';
 
 const router = express.Router();
 
-router.use(authenticate);
-router.use(idempotencyGuard);
-
 // Holidays & Emergency Closures
-router.post('/holidays', handleCreateHoliday);
-router.get('/holidays', handleGetHolidays);
-router.patch('/holidays/:id/cancel', handleCancelHoliday);
+router.post('/holidays', authenticate, idempotencyGuard, handleCreateHoliday);
+router.get('/holidays', authenticate, handleGetHolidays);
+router.patch('/holidays/:id/cancel', authenticate, idempotencyGuard, handleCancelHoliday);
 
 // Recurring Weekly Off Patterns
-router.post('/weekly-off', handleCreateWeeklyOffPattern);
-router.get('/weekly-off', handleGetWeeklyOffPatterns);
+router.post('/weekly-off', authenticate, idempotencyGuard, handleCreateWeeklyOffPattern);
+router.get('/weekly-off', authenticate, handleGetWeeklyOffPatterns);
 
 export default router;

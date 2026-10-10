@@ -242,6 +242,10 @@ export const handleViewDocument = asyncHandler(async (request, response) => {
     return sendError(response, 403, 'Access denied. You are not authorized to access this document attachment.');
   }
 
+  if (!targetDocument.fileUrl) {
+    return sendError(response, 404, 'This circular does not contain a file attachment.');
+  }
+
   return sendSuccess(response, 200, 'Document delivery authorized.', {
     documentId: targetDocument._id,
     title: targetDocument.title,
@@ -348,9 +352,9 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
 
   // ─── Cloudinary Upload & Two-Phase Safety ──────────────────────────────────
   let cloudinaryResult = null;
-  let resolvedFileUrl = fileUrl;
-  let resolvedPublicId = cloudinaryPublicId;
-  let resolvedMimeType = fileMimeType;
+  let resolvedFileUrl = fileUrl ? String(fileUrl).trim() : null;
+  let resolvedPublicId = cloudinaryPublicId ? String(cloudinaryPublicId).trim() : null;
+  let resolvedMimeType = fileMimeType || null;
   let resolvedSizeBytes = Number(fileSizeBytes) || 0;
 
   if (request.file) {
@@ -366,10 +370,6 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
     } catch (uploadError) {
       return sendError(response, 502, `Attachment upload failed: ${uploadError.message}`);
     }
-  }
-
-  if (!resolvedFileUrl) {
-    return sendError(response, 400, 'A document attachment or fileUrl is required.');
   }
 
   // ─── Resolve Organization ──────────────────────────────────────────────────
@@ -400,10 +400,10 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
       referenceNumber: referenceNumber ? String(referenceNumber).trim() : null,
       documentType,
       description: description ? String(description).trim() : '',
-      fileUrl: resolvedFileUrl.trim(),
-      cloudinaryPublicId: resolvedPublicId ? resolvedPublicId.trim() : `doc_${Date.now()}`,
-      fileMimeType: resolvedMimeType,
-      fileSizeBytes: resolvedSizeBytes,
+      fileUrl: resolvedFileUrl ? resolvedFileUrl.trim() : null,
+      cloudinaryPublicId: resolvedPublicId ? resolvedPublicId.trim() : null,
+      fileMimeType: resolvedMimeType || null,
+      fileSizeBytes: resolvedSizeBytes || 0,
       priority: isUrgent ? 'URGENT' : 'NORMAL',
       isPinned: isUrgent,
       targetAudience,

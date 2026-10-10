@@ -362,6 +362,32 @@ const runAllTests = async () => {
       assert.strictEqual(response.statusCode, 403, 'Must reject foreign school document publish with 403 Forbidden');
     });
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // 11. Text-Only Circular: Publishing succeeds without file attachment
+    // ─────────────────────────────────────────────────────────────────────────
+    await runTest('11. Text-Only Circular: HM can publish circulars without file attachments', async () => {
+      const textOnlyRequest = {
+        user: authorizedHmActor,
+        body: {
+          title: 'Urgent Monsoon School Holiday Notification',
+          description: 'All classes suspended tomorrow due to heavy rainfall advisory.',
+          documentType: DOCUMENT_TYPES.CIRCULAR,
+          priority: 'URGENT',
+          schoolId: schoolA_Id,
+          targetAudience: [AUDIENCE_TYPES.TEACHERS, AUDIENCE_TYPES.PARENTS],
+        },
+      };
+      const response = createMockResponse();
+
+      await handleCreateDocument(textOnlyRequest, response);
+      assert.strictEqual(response.statusCode, 201, 'Must return 201 Created for text-only circular');
+      assert.ok(response.data?.data?.document?._id, 'Document ID must exist');
+      assert.strictEqual(response.data.data.document.fileUrl, null);
+      assert.strictEqual(response.data.data.document.cloudinaryPublicId, null);
+      assert.strictEqual(response.data.data.document.priority, 'URGENT');
+      assert.strictEqual(response.data.data.document.isPinned, true);
+    });
+
   } finally {
     // Clean up test data
     await IdempotencyRecord.deleteMany({ userId: hmUserId });

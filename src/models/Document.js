@@ -15,10 +15,10 @@ const DocumentSchema = new mongoose.Schema({
   },
 
   description: { type: String, default: '' },
-  fileUrl: { type: String, required: true },
-  cloudinaryPublicId: { type: String, required: true },
-  fileMimeType: { type: String, required: true },
-  fileSizeBytes: { type: Number },
+  fileUrl: { type: String, default: null },
+  cloudinaryPublicId: { type: String, default: null },
+  fileMimeType: { type: String, default: null },
+  fileSizeBytes: { type: Number, default: 0 },
 
   targetAudience: [{
     type: String,
