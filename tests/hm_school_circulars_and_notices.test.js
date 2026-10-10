@@ -493,21 +493,49 @@ await runAsyncTest('Scenario 15: Magic-byte verification: authentic JPEG image p
   assert.strictEqual(nextCalled, true);
 });
 
-await runAsyncTest('Scenario 16: Missing attachment when no file is uploaded and no fileUrl provided -> rejected with 400', async () => {
+await runAsyncTest('Scenario 16: Text-only circular without document attachment or fileUrl succeeds with 201 Created', async () => {
+  const origCreate = Document.create;
+  const origAuditCreate = AuditLog.create;
+  const origStartSession = mongoose.startSession;
+
+  let createdDocumentDoc = null;
+  const mockSession = {
+    startTransaction() {},
+    commitTransaction: () => Promise.resolve(),
+    abortTransaction: () => Promise.resolve(),
+    endSession() {},
+  };
+  mongoose.startSession = () => Promise.resolve(mockSession);
+
+  Document.create = (docs) => {
+    createdDocumentDoc = {
+      _id: docA_Id,
+      ...docs[0],
+    };
+    return Promise.resolve([createdDocumentDoc]);
+  };
+  AuditLog.create = () => Promise.resolve({});
+
   const req = {
     user: hmA_User,
     body: {
-      title: 'Notice without document',
+      title: 'Text-only School Notice',
       documentType: DOCUMENT_TYPES.NOTICE,
-      // fileUrl is missing
+      description: 'Important text announcement for staff',
+      targetAudience: [AUDIENCE_TYPES.TEACHERS],
     },
   };
   const res = createMockResponse();
 
   await handleCreateDocument(req, res);
 
-  assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.message, /document attachment or fileUrl is required/i);
+  assert.strictEqual(res.statusCode, 201);
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual(createdDocumentDoc.fileUrl, null);
+
+  Document.create = origCreate;
+  AuditLog.create = origAuditCreate;
+  mongoose.startSession = origStartSession;
 });
 
 await runAsyncTest('Scenario 17: Cloudinary compensation: DB transaction failure triggers deleteFromCloudinary cleanup', async () => {

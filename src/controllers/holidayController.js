@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import asyncHandler from 'express-async-handler';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import HolidayCalendar from '../models/HolidayCalendar.js';
@@ -5,10 +6,14 @@ import WeeklyOffPattern from '../models/WeeklyOffPattern.js';
 import School from '../models/School.js';
 import Attendance from '../models/Attendance.js';
 import AuditLog from '../models/AuditLog.js';
+import User from '../models/User.js';
+import StudentProfile from '../models/StudentProfile.js';
 import cache from '../utils/cache.js';
+import logger from '../../config/logger.js';
 import { getKarachiDateString } from '../utils/karachiTime.js';
 import { ROLES } from '../../config/constants.js';
 import { invalidatePublicStatsCache } from './publicStatsController.js';
+import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /holidays — Declare Town Holiday, Break, or School Emergency Closure
@@ -127,6 +132,7 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
   }
 
   const orgId = requestingActor.organizationId?._id || requestingActor.organizationId || requestingActor.orgId;
+  const initialStatus = startDate > todayPkt ? 'SCHEDULED' : 'ACTIVE';
 
   const holiday = await HolidayCalendar.create({
     organizationId: orgId,
@@ -140,7 +146,7 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
     endDate,
     showInBanner: !!showInBanner,
     createdBy: actorId,
-    status: 'ACTIVE',
+    status: initialStatus,
   });
 
   // AuditLog Generation (Constitution Article V.6)
@@ -162,6 +168,7 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
       startDate: holiday.startDate,
       endDate: holiday.endDate,
       holidayType: holiday.holidayType,
+      status: holiday.status,
     },
     result: 'SUCCESS',
     reason: `Holiday/Closure declared: ${holiday.reason}`,
@@ -175,8 +182,112 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
   cache.delByPrefix('town:');
   invalidatePublicStatsCache();
 
+  // Dispatch notification to affected school/town community
+  await dispatchClosureNotification(holiday, 'SCHOOL_CLOSURE');
+
   return sendSuccess(response, 201, 'Holiday/Closure declared successfully.', holiday);
 });
+
+/**
+ * Dispatches closure / cancellation notifications to affected students, parents, and faculty
+ */
+const dispatchClosureNotification = async (holiday, eventType = 'SCHOOL_CLOSURE', cancelReason = '') => {
+  try {
+    if (mongoose.connection?.readyState === 0 && StudentProfile.find === mongoose.Model.find) {
+      return;
+    }
+
+    const recipientUserIds = [];
+
+    if (holiday.scopeType === 'SCHOOL' && holiday.schoolId) {
+      const activeStudents = await StudentProfile.find({
+        schoolId: holiday.schoolId,
+        lifecycleStatus: 'ACTIVE',
+      }).select('userId parentUserId').lean();
+
+      activeStudents.forEach((student) => {
+        if (student.userId) recipientUserIds.push(String(student.userId));
+        if (student.parentUserId) recipientUserIds.push(String(student.parentUserId));
+      });
+
+      const schoolStaff = await User.find({
+        schoolId: holiday.schoolId,
+        status: 'ACTIVE',
+      }).select('_id').lean();
+
+      schoolStaff.forEach((staff) => {
+        recipientUserIds.push(String(staff._id));
+      });
+    } else if (holiday.scopeType === 'TOWN' && holiday.townId) {
+      const townSchools = await School.find({ townId: holiday.townId }).distinct('_id');
+
+      const activeStudents = await StudentProfile.find({
+        schoolId: { $in: townSchools },
+        lifecycleStatus: 'ACTIVE',
+      }).select('userId parentUserId').lean();
+
+      activeStudents.forEach((student) => {
+        if (student.userId) recipientUserIds.push(String(student.userId));
+        if (student.parentUserId) recipientUserIds.push(String(student.parentUserId));
+      });
+
+      const staffAndOfficials = await User.find({
+        $or: [
+          { schoolId: { $in: townSchools }, status: 'ACTIVE' },
+          { townId: holiday.townId, status: 'ACTIVE', role: { $in: [ROLES.SUPERVISOR, ROLES.ADMIN, ROLES.HM] } },
+        ],
+      }).select('_id').lean();
+
+      staffAndOfficials.forEach((person) => {
+        recipientUserIds.push(String(person._id));
+      });
+    }
+
+    const uniqueRecipients = Array.from(new Set(recipientUserIds));
+    if (uniqueRecipients.length === 0) return;
+
+    let notificationTitle = '';
+    let notificationMessage = '';
+
+    if (eventType === 'SCHOOL_CLOSURE') {
+      notificationTitle = holiday.scopeType === 'SCHOOL'
+        ? `Emergency Closure: ${holiday.title}`
+        : `Town Holiday: ${holiday.title}`;
+
+      notificationMessage = holiday.startDate === holiday.endDate
+        ? `School operations are closed on ${holiday.startDate} (${holiday.reason}).`
+        : `School operations are closed from ${holiday.startDate} to ${holiday.endDate} (${holiday.reason}).`;
+    } else if (eventType === 'CLOSURE_CANCELLED') {
+      notificationTitle = holiday.scopeType === 'SCHOOL'
+        ? `Closure Rescinded: ${holiday.title}`
+        : `Holiday Rescinded: ${holiday.title}`;
+
+      notificationMessage = `The closure announcement for ${holiday.startDate} has been officially rescinded: ${cancelReason}. Regular operations resume.`;
+    }
+
+    await dispatchNotificationEvent({
+      eventType,
+      category: 'ALERT',
+      title: notificationTitle,
+      message: notificationMessage,
+      actionLink: '/holidays',
+      rawMetadata: {
+        closureId: String(holiday._id),
+        title: holiday.title,
+        holidayType: holiday.holidayType,
+        startDate: holiday.startDate,
+        endDate: holiday.endDate,
+        reason: holiday.reason,
+        cancelReason: cancelReason || undefined,
+        scopeType: holiday.scopeType,
+        schoolId: holiday.schoolId ? String(holiday.schoolId) : undefined,
+      },
+      recipientUserIds: uniqueRecipients,
+    });
+  } catch (notificationError) {
+    logger.error(`[HolidayController] Failed to dispatch closure notification: ${notificationError.message}`);
+  }
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // GET /holidays — List active holidays & vacations
@@ -184,9 +295,41 @@ export const handleCreateHoliday = asyncHandler(async (request, response) => {
 export const handleGetHolidays = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
   const { status = 'ACTIVE', year } = request.query;
+  const todayPkt = getKarachiDateString(new Date());
+
+  // Safe idempotent lifecycle synchronization
+  if (typeof HolidayCalendar.updateMany === 'function' && (mongoose.connection?.readyState === 1 || HolidayCalendar.updateMany !== mongoose.Model.updateMany)) {
+    await HolidayCalendar.updateMany(
+      { status: 'SCHEDULED', startDate: { $lte: todayPkt }, endDate: { $gte: todayPkt } },
+      { $set: { status: 'ACTIVE' } }
+    ).catch(() => {});
+
+    await HolidayCalendar.updateMany(
+      { status: { $in: ['ACTIVE', 'SCHEDULED'] }, endDate: { $lt: todayPkt } },
+      { $set: { status: 'EXPIRED' } }
+    ).catch(() => {});
+  }
 
   const filter = {};
-  if (status) filter.status = status;
+  if (status === 'ALL') {
+    // Return all records
+  } else if (status === 'ACTIVE') {
+    filter.status = 'ACTIVE';
+    filter.startDate = { $lte: todayPkt };
+    filter.endDate = { $gte: todayPkt };
+  } else if (status === 'SCHEDULED') {
+    filter.status = 'SCHEDULED';
+    filter.startDate = { $gt: todayPkt };
+  } else if (status === 'EXPIRED') {
+    filter.$or = [
+      { status: 'EXPIRED' },
+      { status: { $in: ['ACTIVE', 'SCHEDULED'] }, endDate: { $lt: todayPkt } },
+    ];
+  } else if (status === 'CANCELLED') {
+    filter.status = 'CANCELLED';
+  } else if (status) {
+    filter.status = status;
+  }
 
   if (year && /^\d{4}$/.test(year)) {
     filter.startDate = { $regex: `^${year}` };
@@ -197,18 +340,30 @@ export const handleGetHolidays = asyncHandler(async (request, response) => {
   const actorTownId = requestingActor.townId?._id || requestingActor.townId;
 
   if ([ROLES.HM, ROLES.TEACHER, ROLES.STUDENT, ROLES.PARENT].includes(requestingActor.role)) {
-    filter.$or = [
+    const scopeOr = [
       { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
       ...(actorSchoolId ? [{ scopeType: 'SCHOOL', schoolId: actorSchoolId }] : []),
     ];
+    if (filter.$or) {
+      filter.$and = [{ $or: filter.$or }, { $or: scopeOr }];
+      delete filter.$or;
+    } else {
+      filter.$or = scopeOr;
+    }
   } else if (requestingActor.role === ROLES.SUPERVISOR) {
     const assignedSchoolIds = Array.isArray(requestingActor.assignedSchools)
       ? requestingActor.assignedSchools.map((assignedSchool) => assignedSchool?._id || assignedSchool)
       : [];
-    filter.$or = [
+    const scopeOr = [
       { scopeType: 'TOWN', ...(actorTownId ? { townId: actorTownId } : {}) },
       { scopeType: 'SCHOOL', schoolId: { $in: assignedSchoolIds } },
     ];
+    if (filter.$or) {
+      filter.$and = [{ $or: filter.$or }, { $or: scopeOr }];
+      delete filter.$or;
+    } else {
+      filter.$or = scopeOr;
+    }
   } else if (requestingActor.role === ROLES.ADMIN && actorTownId) {
     // Town Admin: lock to their assigned municipal town
     filter.townId = actorTownId;
@@ -249,6 +404,11 @@ export const handleCancelHoliday = asyncHandler(async (request, response) => {
     return sendError(response, 400, 'This holiday announcement is already cancelled.');
   }
 
+  const todayPkt = getKarachiDateString(new Date());
+  if (holiday.status === 'EXPIRED' || holiday.endDate < todayPkt) {
+    return sendError(response, 400, 'Cannot cancel an expired holiday or closure announcement.');
+  }
+
   // Authority check
   if (actorRole === ROLES.HM) {
     const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
@@ -286,9 +446,13 @@ export const handleCancelHoliday = asyncHandler(async (request, response) => {
     requestId: request.headers['x-request-id'] || '',
   });
 
+  // Invalidate holiday caches
   cache.delByPrefix('school:');
   cache.delByPrefix('town:');
   invalidatePublicStatsCache();
+
+  // Dispatch cancellation notification
+  await dispatchClosureNotification(holiday, 'CLOSURE_CANCELLED', cancelReason.trim());
 
   return sendSuccess(response, 200, 'Holiday announcement cancelled successfully.', holiday);
 });

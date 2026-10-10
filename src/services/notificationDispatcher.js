@@ -96,6 +96,28 @@ export const NOTIFICATION_METADATA_ALLOWLIST = {
     'referenceNumber',
     'publisherName',
   ],
+  SCHOOL_CLOSURE: [
+    'closureId',
+    'title',
+    'holidayType',
+    'startDate',
+    'endDate',
+    'reason',
+    'scopeType',
+    'schoolId',
+    'schoolName',
+  ],
+  CLOSURE_CANCELLED: [
+    'closureId',
+    'title',
+    'holidayType',
+    'startDate',
+    'endDate',
+    'cancelReason',
+    'scopeType',
+    'schoolId',
+    'schoolName',
+  ],
 };
 
 /**

@@ -69,7 +69,7 @@ const HolidayCalendarSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['ACTIVE', 'CANCELLED'],
+    enum: ['SCHEDULED', 'ACTIVE', 'EXPIRED', 'CANCELLED'],
     default: 'ACTIVE',
     index: true,
   },
