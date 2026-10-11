@@ -489,6 +489,66 @@ await runTest('2.7 Defensive Hierarchy: Malformed target user ID fails closed wi
   assert.strictEqual(response.statusCode, 500, 'Must return 500 without crashing');
 });
 
+await runTest('2.8 Defensive Hierarchy: Database lookup failure fails closed with HTTP 500', async () => {
+  const origFindById = User.findById;
+  User.findById = async () => {
+    throw new Error('SIMULATED_DB_DISCONNECTION');
+  };
+
+  try {
+    const hmActor = { _id: new mongoose.Types.ObjectId(), role: ROLES.HM, roleLevel: 50 };
+    const request = { user: hmActor, params: { id: new mongoose.Types.ObjectId().toString() }, body: {} };
+    const response = createMockResponse();
+    let nextCalled = false;
+
+    await authorizeHierarchy(request, response, () => { nextCalled = true; });
+
+    assert.strictEqual(nextCalled, false, 'Must never call nextFunction on database failure');
+    assert.strictEqual(response.statusCode, 500, 'Must fail closed with HTTP 500');
+  } finally {
+    User.findById = origFindById;
+  }
+});
+
+await runTest('2.9 Defensive Scope: Incomplete/undefined request context fails closed safely', async () => {
+  const hmActor = { _id: new mongoose.Types.ObjectId(), role: ROLES.HM, schoolId: new mongoose.Types.ObjectId() };
+  // Request completely lacks params, query, body, and headers
+  const strippedRequest = { user: hmActor };
+  const response = createMockResponse();
+  let nextCalled = false;
+
+  await authorizeScope(strippedRequest, response, () => { nextCalled = true; });
+
+  assert.strictEqual(nextCalled, true, 'When no target school/user specified, passes safely to next middleware');
+});
+
+await runTest('2.10 Authorized Hierarchy: Town Admin (Level 80) modifying Teacher (Level 30) passes cleanly', async () => {
+  const teacherUser = {
+    _id: new mongoose.Types.ObjectId(),
+    role: ROLES.TEACHER,
+    roleLevel: 30,
+    status: USER_STATUS.ACTIVE,
+  };
+
+  const adminActor = {
+    _id: new mongoose.Types.ObjectId(),
+    role: ROLES.ADMIN,
+    roleLevel: 80,
+  };
+
+  const request = {
+    user: adminActor,
+    targetUser: teacherUser,
+    body: { status: 'SUSPENDED', reason: 'Administrative sanction' },
+  };
+  const response = createMockResponse();
+  let nextCalled = false;
+
+  await authorizeHierarchy(request, response, () => { nextCalled = true; });
+
+  assert.strictEqual(nextCalled, true, 'Authorized superior modifying subordinate must pass hierarchy check');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // P1: LIVE HTTP EXPORT PIPELINE, RFC 9111 CACHE HEADERS & PERSISTED AUDIT LOGS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -767,26 +827,37 @@ await runTest('3.10 Supervisor attempting unassigned school staff export is bloc
   assert.ok(response.body.message.includes('supervisory cluster'));
 });
 
-await runTest('3.11 Fail-Closed Guarantee: If AuditLog write fails, CSV export aborts with HTTP 500 and streams no data', async () => {
+await runTest('3.11 Fail-Closed Guarantee across ALL FIVE export endpoints: If AuditLog write fails, export aborts with HTTP 500 and sends zero CSV data bytes', async () => {
   const origAuditCreate = AuditLog.create;
   AuditLog.create = async () => {
     throw new Error('SIMULATED_AUDIT_DATABASE_FAILURE');
   };
 
-  try {
-    const res = await supertest(liveExportApp)
-      .get('/api/v1/export/schools')
-      .set('Authorization', `Bearer ${adminAccessToken}`);
+  const endpointsToTest = [
+    { name: 'Schools', path: '/api/v1/export/schools', token: adminAccessToken },
+    { name: 'Users', path: '/api/v1/export/users', token: superAdminAccessToken },
+    { name: 'Staff', path: '/api/v1/export/staff', token: adminAccessToken },
+    { name: 'Students', path: '/api/v1/export/students', token: adminAccessToken },
+    { name: 'Guardians', path: '/api/v1/export/guardians', token: adminAccessToken },
+  ];
 
-    assert.strictEqual(res.status, 500, 'Must return HTTP 500 when audit write fails');
-    assert.ok(res.body.message.includes('Export audit logging failed'), 'Message must indicate export audit failure');
-    assert.strictEqual(res.headers['content-type']?.includes('text/csv'), false, 'Must not send text/csv content type');
+  try {
+    for (const ep of endpointsToTest) {
+      const res = await supertest(liveExportApp)
+        .get(ep.path)
+        .set('Authorization', `Bearer ${ep.token}`);
+
+      assert.strictEqual(res.status, 500, `Endpoint ${ep.name} (${ep.path}) must return HTTP 500 when audit write fails`);
+      assert.ok(res.body.message.includes('Export audit logging failed'), `Endpoint ${ep.name} must return compliance error`);
+      assert.strictEqual(res.headers['content-type']?.includes('text/csv'), false, `Endpoint ${ep.name} must never send text/csv headers on audit failure`);
+      assert.strictEqual(res.text.includes('\uFEFF'), false, `Endpoint ${ep.name} must never stream CSV BOM on audit failure`);
+    }
   } finally {
     AuditLog.create = origAuditCreate;
   }
 });
 
-await runTest('3.12 Export Rate Limiting: Rejects rapid excessive requests with HTTP 429 when threshold exceeded', async () => {
+await runTest('3.12 Export Rate Limiting & Proxy Anti-Spoofing: Rejects rapid requests (429) even with rotating X-Forwarded-For headers', async () => {
   const rateLimitApp = express();
   rateLimitApp.use(express.json());
   rateLimitApp.use((req, res, next) => {
@@ -814,13 +885,18 @@ await runTest('3.12 Export Rate Limiting: Rejects rapid excessive requests with 
 
   // 3 allowed requests
   for (let i = 0; i < 3; i++) {
-    const okRes = await supertest(rateLimitApp).get('/test-export');
+    const okRes = await supertest(rateLimitApp)
+      .get('/test-export')
+      .set('X-Forwarded-For', `192.168.1.${10 + i}`);
     assert.strictEqual(okRes.status, 200);
   }
 
-  // 4th request trips limiter
-  const blockedRes = await supertest(rateLimitApp).get('/test-export');
-  assert.strictEqual(blockedRes.status, 429);
+  // 4th request trips limiter, even if attacker rotates client IP via X-Forwarded-For
+  const blockedRes = await supertest(rateLimitApp)
+    .get('/test-export')
+    .set('X-Forwarded-For', '203.0.113.199'); // Attacker spoofing new public IP
+
+  assert.strictEqual(blockedRes.status, 429, 'Spoofed X-Forwarded-For must NOT bypass account-keyed rate limit');
   assert.strictEqual(blockedRes.body.statusCode, 429);
   assert.ok(blockedRes.body.message.includes('Too many data export requests'));
 });

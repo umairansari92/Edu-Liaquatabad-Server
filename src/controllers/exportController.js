@@ -28,6 +28,12 @@ const getDateString = () => new Date().toISOString().slice(0, 10);
 
 const formatDate = (dateValue) => (dateValue ? new Date(dateValue).toISOString().split('T')[0] : '');
 
+const resolveTrustedObjectId = (value) => {
+  if (!value) return null;
+  const idString = String(value?._id || value);
+  return /^[0-9a-fA-F]{24}$/.test(idString) ? new mongoose.Types.ObjectId(idString) : null;
+};
+
 /**
  * Write an immutable audit log entry for each export event.
  *
@@ -36,21 +42,15 @@ const formatDate = (dateValue) => (dateValue ? new Date(dateValue).toISOString()
  * any byte leaves the server. Export records are given a distinct, unique
  * targetId (exportStreamId) to preserve semantic separation between the actor
  * initiating the export and the target export artifact.
+ *
+ * Scoping:
+ * - schoolId and townId are resolved exclusively from verified contextScope
+ *   and NEVER trusted directly from raw request.query.
  */
 const writeExportAudit = async (actor, request, action, totalRecords, filename, contextScope = {}) => {
   const exportStreamId = new mongoose.Types.ObjectId();
-  const effectiveSchoolId =
-    contextScope.schoolId ||
-    request.query?.schoolId ||
-    actor.schoolId?._id ||
-    actor.schoolId ||
-    null;
-  const effectiveTownId =
-    contextScope.townId ||
-    request.query?.townId ||
-    actor.townId?._id ||
-    actor.townId ||
-    null;
+  const effectiveSchoolId = resolveTrustedObjectId(contextScope.schoolId);
+  const effectiveTownId   = resolveTrustedObjectId(contextScope.townId);
 
   await AuditLog.create({
     actorId:          actor._id || actor.userId,
@@ -240,6 +240,9 @@ export const handleExportStaffCsv = asyncHandler(async (request, response) => {
       userFilter.schoolId = { $in: assignedSchoolIds };
     }
   } else if (schoolId) {
+    if (!/^[0-9a-fA-F]{24}$/.test(schoolId)) {
+      return sendError(response, 400, 'Invalid school ID format.');
+    }
     userFilter.schoolId = schoolId;
   }
 
