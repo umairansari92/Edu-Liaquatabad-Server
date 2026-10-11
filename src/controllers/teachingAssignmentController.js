@@ -130,8 +130,16 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     schoolId = actorSchoolId;
   }
 
-  if (!teacherId || !schoolId || !classId || !subjectId || !academicSession) {
-    return sendError(response, 400, 'All fields (teacherId, schoolId, classId, subjectId, academicSession) are required.');
+  const isWholeClassAllocation = Boolean(request.body.assignAllSubjects || request.body.allocationMode === 'WHOLE_CLASS');
+
+  if (isWholeClassAllocation) {
+    if (!teacherId || !schoolId || !classId || !academicSession) {
+      return sendError(response, 400, 'Fields teacherId, schoolId, classId, and academicSession are required for Whole-Class allocation.');
+    }
+  } else {
+    if (!teacherId || !schoolId || !classId || !subjectId || !academicSession) {
+      return sendError(response, 400, 'All fields (teacherId, schoolId, classId, subjectId, academicSession) are required.');
+    }
   }
 
   // School jurisdiction check
@@ -157,25 +165,119 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
     return sendError(response, 400, 'Non-teaching staff (e.g. Clerks, Peons) cannot be assigned teaching duties.');
   }
 
-  // Cross-validate school structure integrity: class and subject must belong to schoolId
-  const validationPromises = [
-    Class.findById(classId).lean(),
-    Subject.findById(subjectId).lean(),
-  ];
-  if (sectionId) {
-    validationPromises.push(Section.findById(sectionId).lean());
-  }
-
-  const [targetClass, targetSubject, targetSection] = await Promise.all(validationPromises);
-
+  // Verify class exists and belongs to school
+  const targetClass = await Class.findById(classId).lean();
   if (!targetClass || String(targetClass.schoolId) !== String(schoolId)) {
     return sendError(response, 400, 'Integrity violation: The specified class does not belong to this school.');
   }
+
+  let targetSection = null;
   if (sectionId) {
+    targetSection = await Section.findById(sectionId);
     if (!targetSection || String(targetSection.schoolId) !== String(schoolId) || String(targetSection.classId) !== String(classId)) {
       return sendError(response, 400, 'Integrity violation: The specified section does not belong to this class or school.');
     }
   }
+
+  // ── BRANCH A: WHOLE CLASS ALLOCATION (Poori Class Ek Teacher / General Class Teacher) ──
+  if (isWholeClassAllocation) {
+    const schoolSubjects = await Subject.find({
+      schoolId,
+      status: { $ne: 'INACTIVE' },
+    }).lean();
+
+    if (schoolSubjects.length === 0) {
+      return sendError(response, 400, 'No active subjects found for this school to allocate.');
+    }
+
+    const createdAssignments = [];
+    for (const sub of schoolSubjects) {
+      const conflictFilter = {
+        teacherId,
+        classId,
+        subjectId: sub._id,
+        academicSession: academicSession.trim(),
+        status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+      };
+      if (sectionId) {
+        conflictFilter.sectionId = sectionId;
+      } else {
+        conflictFilter.$or = [{ sectionId: null }, { sectionId: { $exists: false } }];
+      }
+
+      const existingAssignment = await TeachingAssignment.findOne(conflictFilter);
+      if (!existingAssignment) {
+        const newAssignment = await TeachingAssignment.create({
+          teacherId,
+          schoolId,
+          classId,
+          sectionId: sectionId || null,
+          subjectId: sub._id,
+          academicSession: academicSession.trim(),
+          effectiveFrom: new Date(),
+          status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+          assignedBy: actor._id,
+          remarks: remarks ? `${remarks.trim()} [Whole-Class Assignment]` : 'Whole-Class Primary General Teacher',
+        });
+        createdAssignments.push(newAssignment);
+      }
+    }
+
+    // Automatically designate as Class Teacher if section is present AND teacher is not already Class Teacher elsewhere
+    let designatedAsClassTeacher = false;
+    if (targetSection) {
+      const existingClassTeacherSection = await Section.findOne({
+        schoolId,
+        classTeacherId: teacherId,
+        _id: { $ne: targetSection._id },
+      });
+
+      if (!existingClassTeacherSection) {
+        targetSection.classTeacherId = teacherId;
+        await targetSection.save();
+        designatedAsClassTeacher = true;
+      }
+    }
+
+    // Audit Log
+    await AuditLog.create({
+      actorId: actor._id,
+      actorRole: actor.role,
+      actorDesignation: actor.designation,
+      actorName: actor.fullName,
+      action: 'TEACHING_ASSIGNMENT_WHOLE_CLASS_ALLOCATED',
+      targetModel: 'TeachingAssignment',
+      targetId: targetClass._id,
+      targetName: `${targetUser.fullName} (${targetClass.name}${targetSection ? ' - Section ' + targetSection.name : ''})`,
+      schoolId,
+      newState: {
+        teacherId,
+        classId,
+        sectionId,
+        subjectsCount: schoolSubjects.length,
+        createdAssignmentsCount: createdAssignments.length,
+        designatedAsClassTeacher,
+        academicSession,
+      },
+      result: 'SUCCESS',
+      ipAddress: request.ip || '',
+      userAgent: request.headers?.['user-agent'] || '',
+      requestId: request.headers?.['x-request-id'] || '',
+    });
+
+    return sendSuccess(
+      response,
+      201,
+      `Whole-class allocation completed: ${createdAssignments.length} curriculum subjects assigned to ${targetUser.fullName}.${designatedAsClassTeacher ? ' Also designated as Class Teacher.' : ''}`,
+      {
+        assignments: createdAssignments,
+        designatedAsClassTeacher,
+      }
+    );
+  }
+
+  // ── BRANCH B: INDIVIDUAL SUBJECT-WISE ALLOCATION ──
+  const targetSubject = await Subject.findById(subjectId).lean();
   if (!targetSubject || String(targetSubject.schoolId) !== String(schoolId)) {
     return sendError(response, 400, 'Integrity violation: The specified subject does not belong to this school.');
   }

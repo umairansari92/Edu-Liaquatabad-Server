@@ -337,7 +337,23 @@ export const handleUpdateSection = asyncHandler(async (request, response) => {
   if (name) sectionRecord.name = name.trim();
   if (capacity !== undefined) sectionRecord.capacity = capacity;
   if (roomNumber !== undefined) sectionRecord.roomNumber = roomNumber.trim();
-  if (classTeacherId !== undefined) sectionRecord.classTeacherId = classTeacherId || null;
+  if (classTeacherId !== undefined) {
+    if (classTeacherId) {
+      const existingConflict = await Section.findOne({
+        schoolId: sectionRecord.schoolId,
+        classTeacherId,
+        _id: { $ne: sectionRecord._id },
+      }).populate('classId', 'name');
+      if (existingConflict) {
+        return sendError(
+          response,
+          400,
+          `The selected teacher is already designated as Class Teacher for ${existingConflict.classId?.name || 'Class'} — Section ${existingConflict.name}. A teacher can only be Class Teacher for at most one section.`
+        );
+      }
+    }
+    sectionRecord.classTeacherId = classTeacherId || null;
+  }
   if (status) sectionRecord.status = status;
 
   await sectionRecord.save();
@@ -407,6 +423,21 @@ export const handleAssignClassTeacher = asyncHandler(async (request, response) =
     const profile = await TeacherProfile.findOne({ userId: classTeacherId });
     if (profile && profile.isTeachingStaff === false) {
       return sendError(response, 400, 'Non-teaching staff cannot be designated as Class Teacher.');
+    }
+
+    // Strict Municipal Invariant: A teacher can only be designated as Class Teacher for AT MOST one section
+    const existingClassTeacherSection = await Section.findOne({
+      schoolId: sectionSchoolId,
+      classTeacherId,
+      _id: { $ne: sectionRecord._id },
+    }).populate('classId', 'name');
+
+    if (existingClassTeacherSection) {
+      return sendError(
+        response,
+        400,
+        `Teacher ${teacherUser.fullName} is already designated as Class Teacher for ${existingClassTeacherSection.classId?.name || 'Class'} — Section ${existingClassTeacherSection.name}. In municipal governance, a teacher can only be designated as Class Teacher for at most one section.`
+      );
     }
   }
 
