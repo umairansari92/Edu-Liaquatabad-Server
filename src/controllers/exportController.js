@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import asyncHandler from 'express-async-handler';
 import { sendError } from '../utils/apiResponse.js';
 import School from '../models/School.js';
@@ -24,28 +25,50 @@ const getDateString = () => new Date().toISOString().slice(0, 10);
 
 const formatDate = (dateValue) => (dateValue ? new Date(dateValue).toISOString().split('T')[0] : '');
 
-/** Write an immutable audit log entry for each export event */
-const writeExportAudit = async (actor, request, action, totalRecords, filename) => {
-  try {
-    await AuditLog.create({
-      actorId:          actor._id || actor.userId,
-      actorRole:        actor.role,
-      actorDesignation: actor.designation || '',
-      actorName:        actor.fullName    || '',
-      action,
-      result:           'SUCCESS',
-      reason:           `Official CSV export initiated by ${actor.role}`,
-      requestMetadata: {
-        ipAddress: request.ip || 'unknown',
-        userAgent: request.headers['user-agent'] || 'unknown',
-        method:    request.method,
-        url:       request.originalUrl,
-      },
-      details: { totalRecords, filename, exportedAt: new Date().toISOString() },
-    });
-  } catch (auditErr) {
-    console.error(`[ExportController] Audit write failed (${action}):`, auditErr.message);
-  }
+/**
+ * Write an immutable audit log entry for each export event.
+ *
+ * Fail-Closed Invariant:
+ * Throws on database failure so that the caller can abort data delivery before
+ * any byte leaves the server. Export records are given a distinct, unique
+ * targetId (exportStreamId) to preserve semantic separation between the actor
+ * initiating the export and the target export artifact.
+ */
+const writeExportAudit = async (actor, request, action, totalRecords, filename, contextScope = {}) => {
+  const exportStreamId = new mongoose.Types.ObjectId();
+  const effectiveSchoolId =
+    contextScope.schoolId ||
+    request.query?.schoolId ||
+    actor.schoolId?._id ||
+    actor.schoolId ||
+    null;
+  const effectiveTownId =
+    contextScope.townId ||
+    request.query?.townId ||
+    actor.townId?._id ||
+    actor.townId ||
+    null;
+
+  await AuditLog.create({
+    actorId:          actor._id || actor.userId,
+    actorRole:        actor.role,
+    actorDesignation: actor.designation || '',
+    actorName:        actor.fullName    || '',
+    action,
+    targetModel:      'ExportStream',
+    targetId:         exportStreamId,
+    targetName:       filename,
+    townId:           effectiveTownId,
+    schoolId:         effectiveSchoolId,
+    result:           'SUCCESS',
+    reason:           `Official CSV export initiated by ${actor.role} (${totalRecords} records exported to ${filename})`,
+    ipAddress:        request.ip || '',
+    userAgent:        request.headers?.['user-agent'] || '',
+    requestId:        request.headers?.['x-request-id'] || '',
+    previousState:    { totalRecords, filename, exportedAt: new Date().toISOString() },
+  });
+
+  return exportStreamId;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -59,13 +82,26 @@ const writeExportAudit = async (actor, request, action, totalRecords, filename) 
 export const handleExportSchoolsCsv = asyncHandler(async (request, response) => {
   const actor  = request.user;
   const schools = await School.find({}).sort({ name: 1 }).lean();
-
   const filename = `schools_${getDateString()}.csv`;
+
+  // Pre-flight Audit (Fail-Closed): Guarantee audit persistence before streaming bytes
+  try {
+    await writeExportAudit(actor, request, 'SCHOOLS_CSV_EXPORTED', schools.length, filename, {
+      schoolId: null,
+      townId: actor.townId?._id || actor.townId || null,
+    });
+  } catch (auditError) {
+    return sendError(response, 500, 'Security compliance error: Export audit logging failed. Download aborted.');
+  }
+
   response
     .status(200)
     .setHeader('Content-Type', 'text/csv; charset=utf-8')
     .setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    .setHeader('Cache-Control', 'no-store');
+    .setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    .setHeader('Pragma', 'no-cache')
+    .setHeader('Expires', '0')
+    .setHeader('Surrogate-Control', 'no-store');
 
   response.write('\uFEFF');
   response.write(buildCsvRow([
@@ -89,7 +125,6 @@ export const handleExportSchoolsCsv = asyncHandler(async (request, response) => 
     ]) + '\r\n');
   }
 
-  await writeExportAudit(actor, request, 'SCHOOLS_CSV_EXPORTED', schools.length, filename);
   response.end();
 });
 
@@ -115,11 +150,25 @@ export const handleExportUsersCsv = asyncHandler(async (request, response) => {
     .lean();
 
   const filename = `users_${getDateString()}.csv`;
+
+  // Pre-flight Audit (Fail-Closed)
+  try {
+    await writeExportAudit(actor, request, 'PERSONNEL_CSV_EXPORTED', users.length, filename, {
+      schoolId: null,
+      townId: actor.townId?._id || actor.townId || null,
+    });
+  } catch (auditError) {
+    return sendError(response, 500, 'Security compliance error: Export audit logging failed. Download aborted.');
+  }
+
   response
     .status(200)
     .setHeader('Content-Type', 'text/csv; charset=utf-8')
     .setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    .setHeader('Cache-Control', 'no-store');
+    .setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    .setHeader('Pragma', 'no-cache')
+    .setHeader('Expires', '0')
+    .setHeader('Surrogate-Control', 'no-store');
 
   response.write('\uFEFF');
   response.write(buildCsvRow([
@@ -142,7 +191,6 @@ export const handleExportUsersCsv = asyncHandler(async (request, response) => {
     ]) + '\r\n');
   }
 
-  await writeExportAudit(actor, request, 'PERSONNEL_CSV_EXPORTED', users.length, filename);
   response.end();
 });
 
@@ -216,11 +264,25 @@ export const handleExportStaffCsv = asyncHandler(async (request, response) => {
   }
 
   const filename = `staff_directory_${getDateString()}.csv`;
+
+  // Pre-flight Audit (Fail-Closed)
+  try {
+    await writeExportAudit(actor, request, 'STAFF_CSV_EXPORTED', staffUsers.length, filename, {
+      schoolId: userFilter.schoolId || null,
+      townId: actor.townId?._id || actor.townId || null,
+    });
+  } catch (auditError) {
+    return sendError(response, 500, 'Security compliance error: Export audit logging failed. Download aborted.');
+  }
+
   response
     .status(200)
     .setHeader('Content-Type', 'text/csv; charset=utf-8')
     .setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    .setHeader('Cache-Control', 'no-store');
+    .setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    .setHeader('Pragma', 'no-cache')
+    .setHeader('Expires', '0')
+    .setHeader('Surrogate-Control', 'no-store');
 
   response.write('\uFEFF');
   response.write(buildCsvRow([
@@ -252,7 +314,6 @@ export const handleExportStaffCsv = asyncHandler(async (request, response) => {
     ]) + '\r\n');
   }
 
-  await writeExportAudit(actor, request, 'STAFF_CSV_EXPORTED', staffUsers.length, filename);
   response.end();
 });
 
@@ -325,11 +386,25 @@ export const handleExportStudentsCsv = asyncHandler(async (request, response) =>
   }
 
   const filename = `students_directory_${getDateString()}.csv`;
+
+  // Pre-flight Audit (Fail-Closed)
+  try {
+    await writeExportAudit(actor, request, 'STUDENTS_CSV_EXPORTED', profiles.length, filename, {
+      schoolId: profileFilter.schoolId || null,
+      townId: actor.townId?._id || actor.townId || null,
+    });
+  } catch (auditError) {
+    return sendError(response, 500, 'Security compliance error: Export audit logging failed. Download aborted.');
+  }
+
   response
     .status(200)
     .setHeader('Content-Type', 'text/csv; charset=utf-8')
     .setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    .setHeader('Cache-Control', 'no-store');
+    .setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    .setHeader('Pragma', 'no-cache')
+    .setHeader('Expires', '0')
+    .setHeader('Surrogate-Control', 'no-store');
 
   response.write('\uFEFF');
   response.write(buildCsvRow([
@@ -368,7 +443,6 @@ export const handleExportStudentsCsv = asyncHandler(async (request, response) =>
     ]) + '\r\n');
   }
 
-  await writeExportAudit(actor, request, 'STUDENTS_CSV_EXPORTED', profiles.length, filename);
   response.end();
 });
 
@@ -417,11 +491,25 @@ export const handleExportGuardiansCsv = asyncHandler(async (request, response) =
   }
 
   const filename = `guardians_directory_${getDateString()}.csv`;
+
+  // Pre-flight Audit (Fail-Closed)
+  try {
+    await writeExportAudit(actor, request, 'GUARDIANS_CSV_EXPORTED', guardians.length, filename, {
+      schoolId: actor.schoolId?._id || actor.schoolId || null,
+      townId: actor.townId?._id || actor.townId || null,
+    });
+  } catch (auditError) {
+    return sendError(response, 500, 'Security compliance error: Export audit logging failed. Download aborted.');
+  }
+
   response
     .status(200)
     .setHeader('Content-Type', 'text/csv; charset=utf-8')
     .setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    .setHeader('Cache-Control', 'no-store');
+    .setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    .setHeader('Pragma', 'no-cache')
+    .setHeader('Expires', '0')
+    .setHeader('Surrogate-Control', 'no-store');
 
   response.write('\uFEFF');
   response.write(buildCsvRow([
@@ -445,7 +533,5 @@ export const handleExportGuardiansCsv = asyncHandler(async (request, response) =
     ]) + '\r\n');
   }
 
-  await writeExportAudit(actor, request, 'GUARDIANS_CSV_EXPORTED', guardians.length, filename);
   response.end();
 });
-

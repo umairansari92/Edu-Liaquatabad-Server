@@ -7,12 +7,15 @@ import {
   handleExportGuardiansCsv,
 } from '../controllers/exportController.js';
 import { authenticate } from '../middlewares/authenticate.js';
+import { exportLimiter } from '../middlewares/tripleLockRateLimiter.js';
 import { authorizeRoles } from '../middlewares/authorize.js';
 import { ROLES } from '../../config/constants.js';
 
 const router = express.Router();
 
 router.use(authenticate);
+router.use(exportLimiter);
+
 
 // ─── Export Municipal Schools CSV ──────────────────────────────────────────────
 router.get('/schools',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN), handleExportSchoolsCsv);

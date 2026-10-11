@@ -41,13 +41,20 @@ export const authorizeHierarchy = async (request, response, nextFunction) => {
       return sendError(response, 401, 'Unauthorized: User not authenticated.');
     }
 
-    const targetUserId = request.params.id || request.params.userId || request.body.userId || request.body.targetId;
-    if (!targetUserId) {
-      return nextFunction(); // If no target user ID is specified, hierarchy check passes to next middleware
+    const targetUserId =
+      request.params?.id ||
+      request.params?.userId ||
+      request.body?.userId ||
+      request.body?.targetId ||
+      (request.targetUser ? request.targetUser._id : null);
+
+    let targetUser = request.targetUser;
+    if (!targetUser && targetUserId) {
+      targetUser = await User.findById(targetUserId);
     }
 
-    const targetUser = await User.findById(targetUserId);
     if (!targetUser) {
+      if (!targetUserId) return nextFunction();
       return sendError(response, 404, 'Target user account not found.');
     }
 
@@ -227,8 +234,8 @@ const writeHierarchyAuditDenied = async (request, requestingActor, targetUser, {
       result:           'DENIED',
       reason,
       ipAddress:        request.ip || '',
-      userAgent:        request.headers['user-agent'] || '',
-      requestId:        request.headers['x-request-id'] || '',
+      userAgent:        request.headers?.['user-agent'] || '',
+      requestId:        request.headers?.['x-request-id'] || '',
     });
   } catch (auditWriteError) {
     // Audit write failure must NEVER suppress the security block — log to stderr only

@@ -132,13 +132,18 @@ export const authorizeScope = async (request, response, nextFunction) => {
 
     // ── Check A: Target School Boundary (query/body schoolId check) ───────────────
     const targetSchoolId =
-      request.params.schoolId ||
-      request.query.schoolId ||
-      request.body.schoolId ||
+      request.params?.schoolId ||
+      request.query?.schoolId ||
+      request.body?.schoolId ||
       null;
 
     // 3. Resolve Target User (if an account is being accessed or modified)
-    const targetUserId = request.params.id || request.params.userId || request.body.userId || request.body.targetId;
+    const targetUserId =
+      request.params?.id ||
+      request.params?.userId ||
+      request.body?.userId ||
+      request.body?.targetId;
+
     let targetUser = request.targetUser;
 
     if (!targetUser && targetUserId) {

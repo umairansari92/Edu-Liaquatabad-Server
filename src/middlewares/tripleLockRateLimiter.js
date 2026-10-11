@@ -276,3 +276,35 @@ export const parentLookupLimiter = rateLimit({
   },
 });
 
+/**
+ * Dedicated Data Export Limiter (CF-01)
+ * Throttles expensive streaming CSV exports (Students, Staff, Guardians, Schools)
+ * to prevent database CPU spikes, memory exhaustion, and bulk data scraping.
+ *
+ * Scoping & Security Guarantees:
+ * - Keyed on authenticated user ID (request.user._id) with IP fallback.
+ * - Prevents compromised account rotating IPs from evading export quota.
+ * - Prevents multiple legitimate users sharing the same NAT IP from colliding.
+ * - Enforced in all environments without localhost skip.
+ * - Process-Local Invariant: Uses express-rate-limit default in-memory store.
+ *   In multi-instance production clusters, a distributed Redis store is recommended.
+ */
+export const exportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15-minute window
+  max: isDevelopmentEnvironment ? 150 : 25, // 25 exports per 15 mins in production, 150 in dev
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (incomingRequest) => {
+    return incomingRequest.user?._id
+      ? `export:user:${incomingRequest.user._id}`
+      : `export:ip:${incomingRequest.ip || 'unknown'}`;
+  },
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many data export requests from this account or IP. Please wait a few moments before generating additional reports.',
+  },
+});
+
+
+
