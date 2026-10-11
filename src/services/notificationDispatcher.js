@@ -239,7 +239,7 @@ export const dispatchNotificationEvent = async ({
         audienceCriteria,
         status: 'PENDING',
         retryCount: 0,
-        lastError: error.message,
+        lastError: notificationDispatchError.message,
       });
 
       logger.info(`[NotificationDispatcher] Outbox record ${outboxEntry._id} created for deferred retry.`);

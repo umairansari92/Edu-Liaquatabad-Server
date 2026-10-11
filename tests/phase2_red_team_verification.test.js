@@ -50,6 +50,9 @@ import '../src/models/Section.js';
 import { checkEmailLockout, recordFailedLogin } from '../src/middlewares/tripleLockRateLimiter.js';
 import exportRouter from '../src/routes/exportRoutes.js';
 import { handleExportStudentsCsv, handleExportStaffCsv } from '../src/controllers/exportController.js';
+import Notification from '../src/models/Notification.js';
+import NotificationOutbox from '../src/models/NotificationOutbox.js';
+import { dispatchNotificationEvent } from '../src/services/notificationDispatcher.js';
 
 let passed = 0;
 let failed = 0;
@@ -1046,6 +1049,44 @@ await runTest('5.4 AuditLog model strictly enforces append-only immutability (up
     assert.ok(error.message.includes('append-only'), 'Error must specify append-only enforcement');
   }
   assert.strictEqual(deleteErrorCaught, true, 'AuditLog.deleteOne must throw fatal error');
+});
+
+await runTest('5.5 Notification Dispatcher Outbox Fallback: Primary insert failure routes cleanly to Outbox with recorded lastError', async () => {
+  const origInsertMany = Notification.insertMany;
+  Notification.insertMany = async () => {
+    throw new Error('SIMULATED_PRIMARY_NOTIFICATION_INSERT_FAILURE');
+  };
+
+  try {
+    const testRecipientId = new mongoose.Types.ObjectId().toString();
+    const result = await dispatchNotificationEvent({
+      eventType: 'SCHOOL_CLOSURE',
+      title: 'Emergency School Closure',
+      message: 'School operations suspended due to heavy monsoon rains.',
+      recipientUserIds: [testRecipientId],
+      rawMetadata: {
+        closureId: new mongoose.Types.ObjectId().toString(),
+        schoolId: new mongoose.Types.ObjectId().toString(),
+      },
+    });
+
+    assert.strictEqual(result.success, true, 'Fallback to Outbox must succeed gracefully');
+    assert.strictEqual(result.deferred, true, 'Dispatch must indicate deferred status');
+    assert.ok(result.outboxId, 'Must return generated outboxId');
+
+    const outboxRecord = await NotificationOutbox.findById(result.outboxId);
+    assert.ok(outboxRecord, 'Outbox record must exist in MongoDB');
+    assert.strictEqual(outboxRecord.status, 'PENDING');
+    assert.strictEqual(outboxRecord.retryCount, 0);
+    assert.ok(
+      outboxRecord.lastError.includes('SIMULATED_PRIMARY_NOTIFICATION_INSERT_FAILURE'),
+      `lastError must record primary failure reason without throwing ReferenceError: received ${outboxRecord.lastError}`
+    );
+
+    await NotificationOutbox.deleteOne({ _id: result.outboxId });
+  } finally {
+    Notification.insertMany = origInsertMany;
+  }
 });
 
 console.log('\n======================================================================');
