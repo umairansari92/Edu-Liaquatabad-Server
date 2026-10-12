@@ -328,6 +328,10 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     records = [],
     isLateOverride = false,
     lateReason = '',
+    // CL Proxy fields — HM only. When the assigned teacher is on Casual Leave,
+    // the HM submits attendance on that teacher's behalf using these fields.
+    proxyTeacherId = null,
+    proxyReason    = '',
   } = request.body;
 
   if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
@@ -524,6 +528,37 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   const teacherSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || "");
   const teacherId       = requestingActor._id || requestingActor.userId;
 
+  // ── CL Proxy Validation (HM only) ────────────────────────────────────────────
+  // When an HM submits attendance for a section whose teacher is on Casual Leave,
+  // they MUST supply proxyTeacherId (the teacher being proxied) and proxyReason.
+  // We verify the teacher belongs to the same school — no cross-school proxy allowed.
+  let proxyTeacherRecord = null;
+  const isHmClProxy = requestingActor.role === ROLES.HM && proxyTeacherId && typeof proxyTeacherId === 'string';
+
+  if (isHmClProxy) {
+    if (!/^[0-9a-fA-F]{24}$/.test(proxyTeacherId)) {
+      return sendError(response, 400, 'Invalid proxyTeacherId format. Must be a valid MongoDB ObjectId.');
+    }
+    if (!proxyReason || typeof proxyReason !== 'string' || proxyReason.trim().length < 5) {
+      return sendError(response, 400, 'proxyReason is required when submitting attendance as CL proxy (minimum 5 characters).');
+    }
+    // Verify the proxied teacher belongs to this school and holds TEACHER role
+    proxyTeacherRecord = await User.findOne({
+      _id:      proxyTeacherId,
+      schoolId: teacherSchoolId,
+      role:     ROLES.TEACHER,
+    }).select('fullName designation').lean();
+
+    if (!proxyTeacherRecord) {
+      return sendError(
+        response,
+        403,
+        `CL Proxy denied: Teacher ${proxyTeacherId} does not belong to your school or does not hold a TEACHER role. ` +
+        'You can only proxy for teachers within your own school.'
+      );
+    }
+  }
+
   // Retrieve existing record to compute accurate mathematical delta (edit-safe)
   const existingRecord = await Attendance.findOne({
     schoolId:      teacherSchoolId,
@@ -575,10 +610,23 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   const absentCount  = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.ABSENT).length;
   const leaveCount   = sanitizedRecords.filter((sanitizedRecord) => sanitizedRecord.status === ATTENDANCE_STATUS.LEAVE).length;
 
-  const auditAction = windowCheck.isLateOverride ? "ATTENDANCE_LATE_OVERRIDE_SUBMITTED" : "ATTENDANCE_SUBMITTED";
-  const auditReason = windowCheck.isLateOverride
-    ? `HM Emergency Late Clearance: ${windowCheck.lateReason}`
-    : "Teacher submitted daily attendance (A/L exceptions; P server-derived from enrollment).";
+  // ── Determine audit action and reason based on submission context ────────────
+  let auditAction;
+  let auditReason;
+
+  if (isHmClProxy && proxyTeacherRecord) {
+    auditAction = "ATTENDANCE_HM_CL_PROXY_SUBMITTED";
+    auditReason =
+      `HM submitted student attendance on behalf of teacher ` +
+      `'${proxyTeacherRecord.fullName}' (${proxyTeacherId}) who is on Casual Leave. ` +
+      `Proxy reason: ${proxyReason.trim()}`;
+  } else if (windowCheck.isLateOverride) {
+    auditAction = "ATTENDANCE_LATE_OVERRIDE_SUBMITTED";
+    auditReason = `HM Emergency Late Clearance: ${windowCheck.lateReason}`;
+  } else {
+    auditAction = "ATTENDANCE_SUBMITTED";
+    auditReason = "Teacher submitted daily attendance (A/L exceptions; P server-derived from enrollment).";
+  }
 
   await AuditLog.create({
     actorId:          teacherId,
@@ -592,14 +640,19 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     schoolId:         teacherSchoolId,
     previousState:    null,
     newState: {
-      sectionId:    String(section._id),
-      date:         dayStart.toISOString().split("T")[0],
-      totalRecords: sanitizedRecords.length,
+      sectionId:       String(section._id),
+      date:            dayStart.toISOString().split("T")[0],
+      totalRecords:    sanitizedRecords.length,
       presentCount,
       absentCount,
       leaveCount,
-      isLateOverride: Boolean(windowCheck.isLateOverride),
-      lateReason: windowCheck.lateReason || null,
+      isLateOverride:  Boolean(windowCheck.isLateOverride),
+      lateReason:      windowCheck.lateReason || null,
+      // CL Proxy fields — present only when HM is acting on behalf of a CL teacher
+      isClProxy:       isHmClProxy,
+      proxyTeacherId:  isHmClProxy ? proxyTeacherId : null,
+      proxyTeacherName: isHmClProxy ? (proxyTeacherRecord?.fullName || null) : null,
+      proxyReason:     isHmClProxy ? proxyReason.trim() : null,
     },
     result:    "SUCCESS",
     reason:    auditReason,
@@ -618,6 +671,15 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     leaveCount,
     verificationStatus: "PENDING_VERIFICATION",
     submittedAt:        attendanceRecord.updatedAt,
+    // Included when HM submits on behalf of a CL teacher
+    proxyContext: isHmClProxy
+      ? {
+          isClProxy:        true,
+          proxyTeacherId,
+          proxyTeacherName: proxyTeacherRecord?.fullName || null,
+          proxyReason:      proxyReason.trim(),
+        }
+      : null,
   });
 });
 

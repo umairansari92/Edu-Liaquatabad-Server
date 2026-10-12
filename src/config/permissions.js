@@ -133,6 +133,12 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
 
   // HM: School authority
   // e.g., Head Master or Assistant Head Master holds HM role
+  //
+  // ATTENDANCE_MARK is intentionally included here:
+  //   HM may submit student-section attendance directly when the assigned
+  //   teacher is on Casual Leave (CL) or otherwise absent. The resolveTeacherSection
+  //   gate already grants HM school-boundary access without a TeachingAssignment;
+  //   this permission unlocks the route-level authorizePermissions check.
   [ROLES.HM]: [
     PERMISSIONS.USERS_VIEW,
     PERMISSIONS.USERS_APPROVE,
@@ -140,6 +146,7 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.SCHOOLS_VIEW,
     PERMISSIONS.SCHOOLS_SET_CODE,
     PERMISSIONS.ATTENDANCE_VIEW,
+    PERMISSIONS.ATTENDANCE_MARK,
     PERMISSIONS.ATTENDANCE_VERIFY,
     PERMISSIONS.EXAMS_VIEW,
     PERMISSIONS.EXAMS_CREATE,
