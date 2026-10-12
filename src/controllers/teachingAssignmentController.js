@@ -173,7 +173,8 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
 
   let targetSection = null;
   if (sectionId) {
-    targetSection = await Section.findById(sectionId);
+    const rawSection = await Section.findById(sectionId);
+    targetSection = rawSection && typeof rawSection.lean === 'function' ? await rawSection.lean() : rawSection;
     if (!targetSection || String(targetSection.schoolId) !== String(schoolId) || String(targetSection.classId) !== String(classId)) {
       return sendError(response, 400, 'Integrity violation: The specified section does not belong to this class or school.');
     }
@@ -234,7 +235,11 @@ export const handleAddTeachingAssignment = asyncHandler(async (request, response
 
       if (!existingClassTeacherSection) {
         targetSection.classTeacherId = teacherId;
-        await targetSection.save();
+        if (typeof targetSection.save === 'function') {
+          await targetSection.save();
+        } else {
+          await Section.findByIdAndUpdate(targetSection._id, { classTeacherId: teacherId });
+        }
         designatedAsClassTeacher = true;
       }
     }

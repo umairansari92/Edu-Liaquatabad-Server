@@ -210,9 +210,16 @@ console.log('\n--- 3. Class Teacher Production Controller (handleAssignClassTeac
 
 // Backup original Mongoose methods
 const origSectionFindById = Section.findById;
+const origSectionFindOne = Section.findOne;
 const origUserFindById = User.findById;
 const origTeacherProfileFindOne = TeacherProfile.findOne;
 const origAuditLogCreate = AuditLog.create;
+
+// Default Section.findOne to null (no conflicting existing class teacher assignment)
+Section.findOne = () => ({
+  populate: () => Promise.resolve(null),
+  then: (resolve) => resolve(null),
+});
 
 let capturedAudits = [];
 AuditLog.create = async function (docs) {
@@ -449,6 +456,7 @@ await runAsyncTest('handleAssignClassTeacher allows Town ADMIN to designate Clas
 
 // Restore stubs
 Section.findById = origSectionFindById;
+Section.findOne = origSectionFindOne;
 User.findById = origUserFindById;
 TeacherProfile.findOne = origTeacherProfileFindOne;
 AuditLog.create = origAuditLogCreate;

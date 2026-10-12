@@ -196,7 +196,10 @@ async function runAllTests() {
       });
       TeacherProfile.findOne = () => Promise.resolve({ isTeachingStaff: true });
       Class.findById = () => ({ lean: () => Promise.resolve(mockClass) });
-      Section.findById = () => ({ lean: () => Promise.resolve(mockSection) });
+      Section.findById = () => ({
+        lean: () => Promise.resolve(mockSection),
+        then: (resolve) => resolve(mockSection),
+      });
       Subject.findById = () => ({ lean: () => Promise.resolve(mockSubject) });
       TeachingAssignment.findOne = () => Promise.resolve(null);
       TeachingAssignment.create = (data) => {
