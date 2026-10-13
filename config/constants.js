@@ -242,3 +242,68 @@ export const TIMETABLE_DAYS = Object.freeze([
   'SATURDAY',
 ]);
 
+// ─── Staff Category — School Staff vs Office Staff ─────────────────────────────
+// Governs WHO approves attendance and leave requests.
+// school_staff → HM approves  |  office_staff → Admin approves
+// NOTE: staffCategory is derived from the User record, NOT from designation text.
+
+export const STAFF_CATEGORY = Object.freeze({
+  SCHOOL_STAFF: 'SCHOOL_STAFF', // School teachers, peons, clerks, head clerks assigned to a school
+  OFFICE_STAFF: 'OFFICE_STAFF', // Education office staff regardless of designation
+});
+
+// ─── Casual / Earned Leave — Types & Statuses ─────────────────────────────────
+
+export const LEAVE_TYPE = Object.freeze({
+  CASUAL_LEAVE: 'CASUAL_LEAVE', // CL — 24 days per calendar year; reset 1 January; no carry-forward
+  EARNED_LEAVE:  'EARNED_LEAVE',  // EL — minimum 3 consecutive calendar days; Admin-level approval required
+});
+
+export const LEAVE_STATUS = Object.freeze({
+  PENDING:    'PENDING',    // Submitted; awaiting approver decision
+  APPROVED:   'APPROVED',   // Approved by authorized approver
+  REJECTED:   'REJECTED',   // Rejected by approver; day treated per attendance policy
+  CANCELLED:  'CANCELLED',  // Withdrawn by requester before decision
+  SUPERSEDED: 'SUPERSEDED', // Original record replaced by an authorized correction (original history preserved)
+});
+
+// Source identifies HOW the leave record was created.
+export const LEAVE_SOURCE = Object.freeze({
+  TEACHER_INITIATED: 'TEACHER_INITIATED', // Staff submitted their own CL request via platform
+  HM_INITIATED:      'HM_INITIATED',      // HM created leave on behalf of absent staff
+  SYSTEM:            'SYSTEM',            // Automated process (e.g., midnight CL→ABSENT transition)
+});
+
+// ─── Staff Attendance Approval Flow Statuses ───────────────────────────────────
+// Used in the staff self-submission attendance flow (distinct from student attendance).
+
+export const STAFF_ATTENDANCE_STATUS = Object.freeze({
+  PENDING_APPROVAL: 'PENDING_APPROVAL', // Submitted by staff; awaiting HM/Admin approval
+  APPROVED:         'APPROVED',         // Approved by authorized approver
+  REJECTED:         'REJECTED',         // Rejected — day treated per attendance policy
+});
+
+// ─── CL Annual Policy (Owner-Confirmed — DO NOT CHANGE without explicit owner authorization) ──
+export const CL_POLICY = Object.freeze({
+  ANNUAL_ENTITLEMENT_DAYS: 24,   // Calendar year entitlement per staff member
+  CARRY_FORWARD_ALLOWED:   false, // Unused CL does NOT carry forward to next year
+  RESET_MONTH:             1,     // January (1-indexed)
+  RESET_DAY:               1,     // 1st of January
+});
+
+// ─── EL Policy — PARTIALLY SPECIFIED ──────────────────────────────────────────
+// CONFIRMED: minimum duration, approval authority
+// UNVERIFIED / POLICY DECISION REQUIRED: annual entitlement, carry-forward, max duration, accrual
+export const EL_POLICY = Object.freeze({
+  MINIMUM_DURATION_CALENDAR_DAYS: 3, // Inclusive calendar days (weekends + holidays count)
+  // ANNUAL_ENTITLEMENT: POLICY_DECISION_REQUIRED
+  // CARRY_FORWARD: POLICY_DECISION_REQUIRED
+  // MAXIMUM_DURATION: POLICY_DECISION_REQUIRED
+  // ACCRUAL_FORMULA: POLICY_DECISION_REQUIRED
+});
+
+// ─── Approval 5-Minute Relaxation Window ──────────────────────────────────────
+// Within this window, approver may approve staff attendance without a free-text reason.
+// After this window, a mandatory free-text reason is required.
+export const APPROVAL_RELAXATION_WINDOW_MS = 5 * 60 * 1000; // 5 minutes in milliseconds
+

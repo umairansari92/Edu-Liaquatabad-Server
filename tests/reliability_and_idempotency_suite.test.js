@@ -464,11 +464,17 @@ const runAllTests = async () => {
 
       // Simulate downstream middleware/controller yielding 409
       res.status(409).json({ success: false, statusCode: 409, errorCode: 'CONCURRENT_COLLISION' });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      
+      // Resilient poll for the asynchronous DB update to persist
+      let record = null;
+      for (let attemptIndex = 0; attemptIndex < 10; attemptIndex++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        record = await IdempotencyRecord.findOne({ userId: teacherUserId, idempotencyKey: transientKey });
+        if (record && record.status !== 'PENDING') break;
+      }
 
-      const record = await IdempotencyRecord.findOne({ userId: teacherUserId, idempotencyKey: transientKey });
-      assert.strictEqual(record.status, 'FAILED', '409 response must be marked FAILED rather than permanently RESOLVED');
-      assert.strictEqual(record.responseBody, null, 'Transient collision body must not be permanently cached');
+      assert.strictEqual(record?.status, 'FAILED', '409 response must be marked FAILED rather than permanently RESOLVED');
+      assert.strictEqual(record?.responseBody, null, 'Transient collision body must not be permanently cached');
     });
 
     await runTest('22. Self-Healing: Legacy corrupted RESOLVED record with 409 allows legitimate retry', async () => {

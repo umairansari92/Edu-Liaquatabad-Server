@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY } from '../../config/constants.js';
+import { ROLES, BASE_ROLES, SCOPES, USER_STATUS, ROLE_HIERARCHY, STAFF_CATEGORY } from '../../config/constants.js';
 
 const ActiveSessionSchema = new mongoose.Schema({
   sessionId: { type: String, required: true },
@@ -64,6 +64,18 @@ const UserSchema = new mongoose.Schema({
   // Civil Service Title (e.g., "DDO", "Senior Clerk", "Accountant", "Head Master", "Teacher")
   // MANDATE: Designation has ZERO authorization power. Free-text metadata only.
   designation: { type: String, trim: true, default: '' },
+
+  // Staff Category — governs approval authority for attendance and leave requests.
+  // SCHOOL_STAFF: school teachers, peons, clerks, etc. assigned to a school → HM approves.
+  // OFFICE_STAFF: education office staff regardless of designation → Admin approves.
+  // MANDATE: staffCategory is set at onboarding and NEVER derived from designation text.
+  // Optional: null for roles that don't require attendance approval (STUDENT, PARENT, ROOT_ADMIN, SUPER_ADMIN).
+  staffCategory: {
+    type: String,
+    enum: [...Object.values(STAFF_CATEGORY), null],
+    default: null,
+    index: true,
+  },
 
   // Controlled Base Role at Onboarding (PEON, TEACHER, SUPERVISOR, STUDENT, PARENT)
   baseRole: {

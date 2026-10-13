@@ -67,6 +67,17 @@ export const PERMISSIONS = Object.freeze({
   // Homework Operations
   HOMEWORK_VIEW:   'homework.view',
   HOMEWORK_CREATE: 'homework.create',
+
+  // Leave Management (CL / EL)
+  LEAVE_VIEW:             'leave.view',           // View own or school leave records
+  LEAVE_SUBMIT:           'leave.submit',          // Submit own CL or EL request
+  LEAVE_APPROVE_CL:       'leave.approve_cl',      // Approve/reject CL (HM for school staff; Supervisor/Admin for HM)
+  LEAVE_APPROVE_EL:       'leave.approve_el',      // Approve/reject EL (Admin-level and above ONLY)
+  LEAVE_INITIATE_HM:      'leave.initiate_hm',     // HM initiating CL/Absent on behalf of absent teacher (school-scope)
+
+  // Staff Self-Submission Attendance
+  STAFF_ATTENDANCE_SUBMIT:  'staff_attendance.submit',  // Staff submits own attendance for approval
+  STAFF_ATTENDANCE_APPROVE: 'staff_attendance.approve', // Approver (HM/Admin) approves/rejects staff attendance
 });
 
 // ─── Role Default Permissions ─────────────────────────────────────────────────
@@ -111,6 +122,13 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_PUBLISH,
     PERMISSIONS.DOCUMENTS_DELETE,
     PERMISSIONS.AUDIT_VIEW,
+    // Leave management — Admin approves office staff CL/EL and HM EL
+    PERMISSIONS.LEAVE_VIEW,
+    PERMISSIONS.LEAVE_SUBMIT,
+    PERMISSIONS.LEAVE_APPROVE_CL,
+    PERMISSIONS.LEAVE_APPROVE_EL,
+    PERMISSIONS.STAFF_ATTENDANCE_SUBMIT,
+    PERMISSIONS.STAFF_ATTENDANCE_APPROVE,
   ],
 
   // SUPERVISOR: Field oversight across assigned schools
@@ -129,6 +147,12 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_VIEW,
     PERMISSIONS.DOCUMENTS_PUBLISH,
     PERMISSIONS.AUDIT_VIEW,
+    // Supervisor may approve HM CL requests (per confirmed institutional policy)
+    // Supervisor CANNOT approve EL unless separately granted Admin-level authority
+    PERMISSIONS.LEAVE_VIEW,
+    PERMISSIONS.LEAVE_SUBMIT,
+    PERMISSIONS.LEAVE_APPROVE_CL,
+    PERMISSIONS.STAFF_ATTENDANCE_SUBMIT,
   ],
 
   // HM: School authority
@@ -160,6 +184,14 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_DELETE,
     PERMISSIONS.HOMEWORK_VIEW,
     PERMISSIONS.HOMEWORK_CREATE,
+    // Leave management — HM approves school staff CL; HM initiates CL/Absent for absent teachers
+    // HM CANNOT approve EL (Admin-level authority required)
+    PERMISSIONS.LEAVE_VIEW,
+    PERMISSIONS.LEAVE_SUBMIT,
+    PERMISSIONS.LEAVE_APPROVE_CL,
+    PERMISSIONS.LEAVE_INITIATE_HM,
+    PERMISSIONS.STAFF_ATTENDANCE_SUBMIT,
+    PERMISSIONS.STAFF_ATTENDANCE_APPROVE,
   ],
 
   // TEACHER: Class/section operational authority
@@ -172,11 +204,18 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.DOCUMENTS_VIEW,
     PERMISSIONS.HOMEWORK_VIEW,
     PERMISSIONS.HOMEWORK_CREATE,
+    // Teachers can submit their own CL requests and view their leave history
+    PERMISSIONS.LEAVE_VIEW,
+    PERMISSIONS.LEAVE_SUBMIT,
+    PERMISSIONS.STAFF_ATTENDANCE_SUBMIT,
   ],
 
-  // PEON: Operational support staff — documents view
+  // PEON: Operational support staff — documents view + can submit own attendance/leave
   [ROLES.PEON]: [
     PERMISSIONS.DOCUMENTS_VIEW,
+    PERMISSIONS.LEAVE_VIEW,
+    PERMISSIONS.LEAVE_SUBMIT,
+    PERMISSIONS.STAFF_ATTENDANCE_SUBMIT,
   ],
 
   // STUDENT: Read-only access to own records

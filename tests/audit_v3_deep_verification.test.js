@@ -259,7 +259,13 @@ async function runAuditV3DeepVerificationSuite() {
     }
 
     // Allow all concurrent requests to hit the in-flight lock
-    await new Promise(r => setTimeout(r, 150));
+    for (let pollIndex = 0; pollIndex < 20; pollIndex++) {
+      if (passedToNextCount >= 1) {
+        await new Promise(r => setTimeout(r, 200));
+        break;
+      }
+      await new Promise(r => setTimeout(r, 50));
+    }
 
     // Release the handler to complete execution
     completeHandler();

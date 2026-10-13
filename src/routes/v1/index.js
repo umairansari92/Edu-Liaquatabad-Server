@@ -25,6 +25,8 @@ import schoolInspectionRoutes from '../schoolInspectionRoutes.js';
 import parentRoutes from '../parentRoutes.js';
 import hmParentLinkRoutes from '../hmParentLinkRoutes.js';
 import timetableRoutes from '../timetableRoutes.js';
+import leaveRoutes from '../leaveRoutes.js';
+import staffAttendanceRoutes from '../staffAttendanceRoutes.js';
 import { systemOutageGuard } from '../../middlewares/systemOutageGuard.js';
 
 const router = express.Router();
@@ -109,6 +111,12 @@ router.use('/hm/parent-links', hmParentLinkRoutes);
 
 // Institutional Timetable Engine & Live Monitor (Option 3 / Phase G)
 router.use('/timetables', timetableRoutes);
+
+// Leave Management (CL & EL lifecycle)
+router.use('/leave', leaveRoutes);
+
+// Staff Self-Submission Attendance & Approval Engine
+router.use('/staff-attendance', staffAttendanceRoutes);
 
 export default router;
 

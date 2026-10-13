@@ -3,6 +3,7 @@ import logger from './logger.js';
 import SecurityLockout from '../src/models/SecurityLockout.js';
 import { cleanupExpiredHomeworkAttachments } from '../src/services/homeworkCleanupService.js';
 import { reconcileHolidayLifecycle } from '../src/services/holidayLifecycleService.js';
+import { processMidnightHmClTransition, performAnnualClReset } from '../src/services/leaveService.js';
 
 /**
  * Scheduled Background Jobs
@@ -65,6 +66,37 @@ export const startScheduledJobs = () => {
       }
     } catch (cronError) {
       logger.error(`[Cron] Holiday lifecycle reconciliation encountered an error: ${cronError.message}`);
+    }
+  }, {
+    timezone: 'Asia/Karachi',
+  });
+
+  // ─── Job 5: Midnight HM CL Rollover Transition (PKT) ────────────────────────
+  // Runs every day at 00:05 AM PKT — unapproved HM CL requests for yesterday auto-superseded to ABSENT
+  cron.schedule('5 0 * * *', async () => {
+    try {
+      logger.info('[Cron] Starting midnight HM CL rollover check...');
+      const summary = await processMidnightHmClTransition();
+      if (summary.processed > 0) {
+        logger.info(`[Cron] Midnight HM CL rollover complete: ${summary.processed} unapproved requests transitioned to ABSENT.`);
+      }
+    } catch (cronError) {
+      logger.error(`[Cron] Midnight HM CL rollover encountered an error: ${cronError.message}`);
+    }
+  }, {
+    timezone: 'Asia/Karachi',
+  });
+
+  // ─── Job 6: Annual Casual Leave (CL) Balance Reset ─────────────────────────
+  // Runs on 1st January at 00:01 AM PKT — marks new calendar year CL baseline (24 days)
+  cron.schedule('1 0 1 1 *', async () => {
+    try {
+      const currentYear = new Date().getFullYear();
+      logger.info(`[Cron] Running annual CL reset for year ${currentYear}...`);
+      const resetSummary = await performAnnualClReset(currentYear);
+      logger.info(`[Cron] Annual CL reset complete: ${resetSummary.message}`);
+    } catch (cronError) {
+      logger.error(`[Cron] Annual CL reset encountered an error: ${cronError.message}`);
     }
   }, {
     timezone: 'Asia/Karachi',
