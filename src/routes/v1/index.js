@@ -114,6 +114,7 @@ router.use('/timetables', timetableRoutes);
 
 // Leave Management (CL & EL lifecycle)
 router.use('/leave', leaveRoutes);
+router.use('/leaves', leaveRoutes);
 
 // Staff Self-Submission Attendance & Approval Engine
 router.use('/staff-attendance', staffAttendanceRoutes);

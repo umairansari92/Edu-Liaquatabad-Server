@@ -307,9 +307,18 @@ export const handleGetClBalance = async (request, response) => {
  */
 export const handleGetPendingLeaveRequests = async (request, response) => {
   const requestingActor = request.user;
-  const { leaveType, page = 1, limit = 20 } = request.query;
+  const { leaveType, status, page = 1, limit = 20 } = request.query;
 
-  const queryFilter = { status: LEAVE_STATUS.PENDING };
+  const queryFilter = {};
+  if (status) {
+    if (status.includes(',')) {
+      queryFilter.status = { $in: status.split(',').map((item) => item.trim()) };
+    } else {
+      queryFilter.status = status.trim();
+    }
+  } else {
+    queryFilter.status = LEAVE_STATUS.PENDING;
+  }
   if (leaveType) queryFilter.leaveType = leaveType;
 
   // Scope enforcement
@@ -360,7 +369,7 @@ export const handleGetPendingLeaveRequests = async (request, response) => {
 export const handleApproveLeaveRequest = async (request, response) => {
   const requestingActor = request.user;
   const { id: leaveRequestId } = request.params;
-  const { reason: approvalReason } = request.body;
+  const approvalReason = request.body.reason || request.body.approvalReason || request.body.remarks || '';
 
   if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
     return response.status(400).json({ success: false, message: 'Invalid leave request ID.' });
@@ -496,7 +505,7 @@ export const handleApproveLeaveRequest = async (request, response) => {
 export const handleRejectLeaveRequest = async (request, response) => {
   const requestingActor = request.user;
   const { id: leaveRequestId } = request.params;
-  const { reason: rejectionReason } = request.body;
+  const rejectionReason = request.body.reason || request.body.rejectionReason;
 
   if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
     return response.status(400).json({ success: false, message: 'Invalid leave request ID.' });
@@ -816,7 +825,7 @@ export const handleGetSchoolLeaveSummary = async (request, response) => {
 export const handleLateCorrectionLeaveRequest = async (request, response) => {
   const requestingActor = request.user;
   const { id: leaveRequestId } = request.params;
-  const { correctionReason } = request.body;
+  const correctionReason = request.body.correctionReason || request.body.reason;
 
   if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
     return response.status(400).json({ success: false, message: 'Invalid leave request ID.' });

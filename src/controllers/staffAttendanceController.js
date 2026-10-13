@@ -265,7 +265,7 @@ export const handleSubmitStaffAttendance = async (request, response) => {
 export const handleApproveStaffAttendance = async (request, response) => {
   const requestingActor = request.user;
   const { id: recordId } = request.params;
-  const { lateApprovalReason } = request.body;
+  const lateApprovalReason = request.body.lateApprovalReason || request.body.reason;
 
   if (!mongoose.Types.ObjectId.isValid(recordId)) {
     return response.status(400).json({ success: false, message: 'Invalid attendance record ID.' });
@@ -420,7 +420,7 @@ export const handleApproveStaffAttendance = async (request, response) => {
 export const handleRejectStaffAttendance = async (request, response) => {
   const requestingActor = request.user;
   const { id: recordId } = request.params;
-  const { rejectionReason } = request.body;
+  const rejectionReason = request.body.rejectionReason || request.body.reason;
 
   if (!mongoose.Types.ObjectId.isValid(recordId)) {
     return response.status(400).json({ success: false, message: 'Invalid attendance record ID.' });

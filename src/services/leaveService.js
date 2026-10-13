@@ -160,16 +160,18 @@ export const performAnnualClReset = async (targetYear) => {
 };
 
 export const processMidnightHmClTransition = async () => {
-  const yesterdayDate = new Date();
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  const yesterdayPktString = yesterdayDate.toLocaleDateString('en-CA', { timeZone: PKT_TIMEZONE });
-  const yesterdayStartUtc = parsePktDateString(yesterdayPktString);
+  // Compute yesterday's date authoritative in PKT
+  const todayPktString = new Date().toLocaleDateString('en-CA', { timeZone: PKT_TIMEZONE });
+  const todayStartUtc = parsePktDateString(todayPktString);
+  const yesterdayStartUtc = new Date(todayStartUtc.getTime() - 24 * 60 * 60 * 1000);
+  const yesterdayPktString = yesterdayStartUtc.toLocaleDateString('en-CA', { timeZone: PKT_TIMEZONE });
 
+  // Scan for any unapproved HM CL requests up to and including yesterday
   const pendingHmClRequests = await LeaveRequest.find({
     leaveType: LEAVE_TYPE.CASUAL_LEAVE,
     status: LEAVE_STATUS.PENDING,
     staffRole: ROLES.HM,
-    startDate: yesterdayStartUtc,
+    startDate: { $lte: yesterdayStartUtc },
   }).lean();
 
   let processedCount = 0;
@@ -177,11 +179,15 @@ export const processMidnightHmClTransition = async () => {
 
   for (const pendingRequest of pendingHmClRequests) {
     try {
+      const requestDatePkt = pendingRequest.startDate
+        ? new Date(pendingRequest.startDate).toLocaleDateString('en-CA', { timeZone: PKT_TIMEZONE })
+        : yesterdayPktString;
+
       // 1. Transition LeaveRequest to SUPERSEDED with reason
       await LeaveRequest.findByIdAndUpdate(pendingRequest._id, {
         $set: {
           status: LEAVE_STATUS.SUPERSEDED,
-          decisionReason: `Auto-superseded at midnight PKT: CL not approved before date rollover. HM attendance defaulted to ABSENT for ${yesterdayPktString}.`,
+          decisionReason: `Auto-superseded at midnight PKT: CL not approved before date rollover. HM attendance defaulted to ABSENT for ${requestDatePkt}.`,
         },
       });
 
@@ -189,7 +195,7 @@ export const processMidnightHmClTransition = async () => {
       await StaffAttendanceRecord.findOneAndUpdate(
         {
           staffUserId: pendingRequest.staffUserId,
-          attendanceDate: yesterdayStartUtc,
+          attendanceDate: pendingRequest.startDate,
         },
         {
           $setOnInsert: {
@@ -223,14 +229,14 @@ export const processMidnightHmClTransition = async () => {
         newState: {
           status: LEAVE_STATUS.SUPERSEDED,
           attendanceResult: 'ABSENT',
-          dateRollover: yesterdayPktString,
+          dateRollover: requestDatePkt,
         },
         result: 'SUCCESS',
-        reason: `Auto-superseded at midnight PKT: unapproved HM CL defaulted to ABSENT for ${yesterdayPktString}.`,
+        reason: `Auto-superseded at midnight PKT: unapproved HM CL defaulted to ABSENT for ${requestDatePkt}.`,
       });
 
       processedCount++;
-      logger.info(`[LeaveService Midnight] HM CL ${pendingRequest._id} superseded for ${yesterdayPktString} and ABSENT record preserved.`);
+      logger.info(`[LeaveService Midnight] HM CL ${pendingRequest._id} superseded for ${requestDatePkt} and ABSENT record preserved.`);
     } catch (transitionError) {
       errorCount++;
       logger.error(`[LeaveService Midnight] Failed to supersede HM CL ${pendingRequest._id}: ${transitionError.message}`);
