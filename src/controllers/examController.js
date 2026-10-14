@@ -17,6 +17,8 @@ import {
   generateTabulationSheetPdf,
 } from '../utils/marksheetPdfGenerator.js';
 import { computeClassTabulation, computeStudentResultMetrics } from '../utils/examCalculations.js';
+import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
+import logger from '../../config/logger.js';
 
 /**
  * Resolves the authorized school context for an exam operation.
@@ -789,6 +791,31 @@ export const handlePublishExamResults = asyncHandler(async (request, response) =
 
     await session.commitTransaction();
     session.endSession();
+
+    // Dispatch in-app notifications to affected students and parents
+    try {
+      await dispatchNotificationEvent({
+        eventType: 'EXAM_RESULT',
+        category: 'ACADEMIC',
+        title: `Gazette Published: ${lockedExam.name || 'Examination Results'}`,
+        message: `Official results and marksheets for ${lockedExam.name || 'the examination'} have been officially released.`,
+        actionLink: '/exams',
+        rawMetadata: {
+          examId: String(lockedExam._id),
+          examName: lockedExam.name || '',
+          schoolId: String(lockedExam.schoolId),
+          classId: lockedExam.classId ? String(lockedExam.classId) : undefined,
+          academicYear: lockedExam.academicYear || '',
+        },
+        audienceCriteria: {
+          type: 'CLASS_STUDENTS_AND_PARENTS',
+          schoolId: lockedExam.schoolId,
+          classId: lockedExam.classId,
+        },
+      });
+    } catch (notificationError) {
+      logger.warn(`[ExamController] Result publication notification failed: ${notificationError.message}`);
+    }
 
     return sendSuccess(
       response,

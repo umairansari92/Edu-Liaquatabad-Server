@@ -244,8 +244,25 @@ const attendanceSubmissionEvent = {
 assert.equal(attendanceSubmissionEvent.targetRecipient, hmId, 'Attendance submission must target HM approval queue');
 console.log('✅ PASS [16]: Recipient targeting correctly maps teacher attendance events to intended roles.');
 
+// Test EXAM_RESULT metadata allowlist
+const dirtyExamMeta = {
+  examId: 'exam-888',
+  examName: 'Midterm Assessment 2026',
+  schoolId: 'sch-001',
+  classId: 'cls-005',
+  academicYear: '2026-2027',
+  studentMarks: [95, 88, 72], // unallowed internal details
+  teacherPrivateRemarks: 'Strict grading applied',
+};
+const cleanExamMeta = sanitizeNotificationMetadata('EXAM_RESULT', dirtyExamMeta);
+assert.equal(cleanExamMeta.examId, 'exam-888');
+assert.equal(cleanExamMeta.examName, 'Midterm Assessment 2026');
+assert.equal(cleanExamMeta.studentMarks, undefined, 'Student marks array must be stripped from notification metadata');
+assert.equal(cleanExamMeta.teacherPrivateRemarks, undefined, 'Private remarks must be stripped from notification metadata');
+console.log('✅ PASS [17]: EXAM_RESULT metadata allowlist preserves public identifiers and strips individual marks.');
+
 console.log('\n======================================================================');
-console.log('🎉 ALL 16 CENTRALIZED NOTIFICATION TESTS PASSED PERFECTLY!');
+console.log('🎉 ALL 17 CENTRALIZED NOTIFICATION TESTS PASSED PERFECTLY!');
 console.log('======================================================================\n');
 
 process.exit(0);

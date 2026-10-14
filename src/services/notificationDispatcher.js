@@ -49,6 +49,13 @@ export const NOTIFICATION_METADATA_ALLOWLIST = {
     'dueDate',
     'teacherName',
   ],
+  EXAM_RESULT: [
+    'examId',
+    'examName',
+    'schoolId',
+    'classId',
+    'academicYear',
+  ],
   TRANSFER: [
     'transferRequestId',
     'employeeId',
