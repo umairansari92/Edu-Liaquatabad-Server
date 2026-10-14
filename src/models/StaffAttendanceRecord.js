@@ -1,4 +1,4 @@
-﻿/**
+/**
  * StaffAttendanceRecord Model
  * Education Department Liaquatabad Town Centre (DMC)
  *
@@ -66,6 +66,17 @@ const StaffAttendanceRecordSchema = new mongoose.Schema({
   // Notification tracking
   notificationDispatched: { type: Boolean, default: false },
   notificationDispatchedAt: { type: Date },
+
+  // Immutable audit timeline of lifecycle transitions (e.g., rollover absent, late correction)
+  statusHistory: [{
+    event:          { type: String, required: true },
+    previousStatus: { type: String },
+    newStatus:      { type: String, required: true },
+    changedBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt:      { type: Date, default: Date.now },
+    reason:         { type: String, trim: true },
+    snapshot:       { type: mongoose.Schema.Types.Mixed },
+  }],
 
 }, { timestamps: true });
 

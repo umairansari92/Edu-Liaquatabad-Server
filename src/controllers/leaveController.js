@@ -926,25 +926,47 @@ export const handleLateCorrectionLeaveRequest = async (request, response) => {
 
   await existingLeaveRequest.save();
 
-  // Update linked StaffAttendanceRecord if it exists (e.g. from midnight rollover or absent record)
-  // Ensure the original Absent record is NOT silently erased
+  // Update linked StaffAttendanceRecord(s) across the entire leave date range
+  // Ensure the original Absent record is NOT silently erased and statusHistory is immutably appended
   let attendanceUpdated = false;
-  const linkedAttendance = await StaffAttendanceRecord.findOne({
+  let attendanceUpdatedCount = 0;
+  const linkedAttendanceRecords = await StaffAttendanceRecord.find({
     staffUserId: existingLeaveRequest.staffUserId,
-    attendanceDate: existingLeaveRequest.startDate,
+    attendanceDate: {
+      $gte: existingLeaveRequest.startDate,
+      $lte: existingLeaveRequest.endDate,
+    },
   });
 
-  if (linkedAttendance) {
-    const priorAttendanceStatus = linkedAttendance.approvalStatus;
-    const priorAbsentReason = linkedAttendance.rejectionReason || 'No prior reason recorded';
-    
-    linkedAttendance.approvalStatus = STAFF_ATTENDANCE_STATUS.APPROVED;
-    linkedAttendance.approvedBy = requestingActor._id;
-    linkedAttendance.approvedAt = nowTimestamp;
-    // Explicitly retain original Absent note and provenance in lateApprovalReason
-    linkedAttendance.lateApprovalReason = `[CORRECTED from ${priorAttendanceStatus}] Approved by ${requestingActor.fullName}: ${correctionReason.trim()}. Original Absent record preserved: "${priorAbsentReason}".`;
-    await linkedAttendance.save();
+  for (const linkedRecord of linkedAttendanceRecords) {
+    const priorAttendanceStatus = linkedRecord.approvalStatus;
+    const priorAbsentReason = linkedRecord.rejectionReason || 'No prior reason recorded';
+
+    linkedRecord.statusHistory.push({
+      event: 'LATE_CORRECTION_APPROVED',
+      previousStatus: priorAttendanceStatus,
+      newStatus: STAFF_ATTENDANCE_STATUS.APPROVED,
+      changedBy: requestingActor._id,
+      changedAt: nowTimestamp,
+      reason: correctionReason.trim(),
+      snapshot: {
+        priorAttendanceStatus,
+        priorRejectionReason: linkedRecord.rejectionReason,
+        priorLateApprovalReason: linkedRecord.lateApprovalReason,
+        priorApprovedBy: linkedRecord.approvedBy,
+        priorRejectedBy: linkedRecord.rejectedBy,
+        leaveRequestId: existingLeaveRequest._id,
+        attendanceDate: linkedRecord.attendanceDate,
+      },
+    });
+
+    linkedRecord.approvalStatus = STAFF_ATTENDANCE_STATUS.APPROVED;
+    linkedRecord.approvedBy = requestingActor._id;
+    linkedRecord.approvedAt = nowTimestamp;
+    linkedRecord.lateApprovalReason = `[CORRECTED from ${priorAttendanceStatus}] Approved by ${requestingActor.fullName}: ${correctionReason.trim()}. Original Absent record preserved: "${priorAbsentReason}".`;
+    await linkedRecord.save();
     attendanceUpdated = true;
+    attendanceUpdatedCount++;
   }
 
   // Audit Log

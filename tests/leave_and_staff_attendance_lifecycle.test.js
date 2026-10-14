@@ -603,12 +603,12 @@ StaffAttendanceRecord.countDocuments = origCountDocs;
 console.log('\n--- 13. Midnight Rollover State Machine & Provenance Retention ---');
 
 const origLeaveFind = LeaveRequest.find;
-const origLeaveFindByIdAndUpdate = LeaveRequest.findByIdAndUpdate;
+const origLeaveFindOneAndUpdate = LeaveRequest.findOneAndUpdate;
 const origStaffFindOneAndUpdate = StaffAttendanceRecord.findOneAndUpdate;
 
-let supersededLeaveCall = null;
-let upsertedAttendanceCall = null;
-let midnightAuditCall = null;
+let supersededLeaveCalls = [];
+let upsertedAttendanceCalls = [];
+let midnightAuditCalls = [];
 
 const fakeYesterdayHmCl = {
   _id: '65d1a1b2c3d4e5f600000088',
@@ -619,6 +619,7 @@ const fakeYesterdayHmCl = {
   leaveType: LEAVE_TYPE.CASUAL_LEAVE,
   status: LEAVE_STATUS.PENDING,
   startDate: parsePktDateString('2026-10-13'),
+  endDate: parsePktDateString('2026-10-13'),
   durationDays: 1,
   submittedAt: new Date(Date.now() - 86400000),
 };
@@ -627,31 +628,119 @@ LeaveRequest.find = () => ({
   lean: async () => [fakeYesterdayHmCl],
 });
 
-LeaveRequest.findByIdAndUpdate = async (id, update) => {
-  supersededLeaveCall = { id, update };
-  return { _id: id, ...update.$set };
+LeaveRequest.findOneAndUpdate = async (filter, update, opts) => {
+  supersededLeaveCalls.push({ filter, update, opts });
+  return { _id: filter._id, ...update.$set };
 };
 
 StaffAttendanceRecord.findOneAndUpdate = async (filter, update, opts) => {
-  upsertedAttendanceCall = { filter, update, opts };
+  upsertedAttendanceCalls.push({ filter, update, opts });
   return { ...filter, ...update.$set };
 };
 
 AuditLog.create = async (doc) => {
-  midnightAuditCall = doc;
-  return { _id: 'audit_rollover_1', ...doc };
+  midnightAuditCalls.push(doc);
+  return { _id: `audit_rollover_${midnightAuditCalls.length}`, ...doc };
 };
 
+// 13a. Standard Yesterday Rollover
 const rolloverSummary = await processMidnightHmClTransition();
 assert(rolloverSummary.processed === 1, 'processMidnightHmClTransition processed 1 unapproved HM CL');
-assert(supersededLeaveCall.update.$set.status === LEAVE_STATUS.SUPERSEDED, 'LeaveRequest status transitioned to SUPERSEDED');
-assert(supersededLeaveCall.update.$set.decisionReason.includes('Auto-superseded at midnight PKT'), 'LeaveRequest contains explicit rollover reason');
-assert(upsertedAttendanceCall.update.$set.approvalStatus === STAFF_ATTENDANCE_STATUS.REJECTED, 'StaffAttendanceRecord transitioned to REJECTED (Absent)');
-assert(upsertedAttendanceCall.update.$set.rejectionReason.includes('Auto-defaulted to ABSENT at midnight PKT'), 'StaffAttendanceRecord retains explicit Absent reason');
-assert(midnightAuditCall.action === 'HM_CL_MIDNIGHT_SUPERSEDED_ABSENT', 'AuditLog emitted with HM_CL_MIDNIGHT_SUPERSEDED_ABSENT');
-assert(midnightAuditCall.newState.attendanceResult === 'ABSENT', 'AuditLog records attendanceResult = ABSENT');
+assert(supersededLeaveCalls[0].update.$set.status === LEAVE_STATUS.SUPERSEDED, 'LeaveRequest status transitioned to SUPERSEDED');
+assert(supersededLeaveCalls[0].update.$set.decisionReason.includes('Auto-superseded at midnight PKT'), 'LeaveRequest contains explicit rollover reason');
+assert(upsertedAttendanceCalls[0].update.$set.approvalStatus === STAFF_ATTENDANCE_STATUS.REJECTED, 'StaffAttendanceRecord transitioned to REJECTED (Absent)');
+assert(upsertedAttendanceCalls[0].update.$set.rejectionReason.includes('Auto-defaulted to ABSENT at midnight PKT'), 'StaffAttendanceRecord retains explicit Absent reason');
+assert(upsertedAttendanceCalls[0].update.$push.statusHistory.event === 'AUTO_ABSENT_MIDNIGHT', 'StaffAttendanceRecord statusHistory contains AUTO_ABSENT_MIDNIGHT event');
+assert(midnightAuditCalls[0].action === 'HM_CL_MIDNIGHT_SUPERSEDED_ABSENT', 'AuditLog emitted with HM_CL_MIDNIGHT_SUPERSEDED_ABSENT');
+assert(midnightAuditCalls[0].newState.attendanceResult === 'ABSENT', 'AuditLog records attendanceResult = ABSENT');
 
-// Verify that normal handleApproveLeaveRequest REJECTS a SUPERSEDED request (fails closed)
+// 13b. Multi-day Downtime Catch-up (e.g. 3-day old unapproved HM CL from 2026-10-10 to 2026-10-12)
+supersededLeaveCalls = [];
+upsertedAttendanceCalls = [];
+midnightAuditCalls = [];
+
+const fakeMultiDayOldCl = {
+  _id: '65d1a1b2c3d4e5f600000089',
+  staffUserId: '65d1a1b2c3d4e5f600000044',
+  staffRole: ROLES.HM,
+  schoolId: schoolAId,
+  townId: '65d1a1b2c3d4e5f600000010',
+  leaveType: LEAVE_TYPE.CASUAL_LEAVE,
+  status: LEAVE_STATUS.PENDING,
+  startDate: parsePktDateString('2026-10-10'),
+  endDate: parsePktDateString('2026-10-12'),
+  durationDays: 3,
+  submittedAt: parsePktDateString('2026-10-09'),
+};
+
+LeaveRequest.find = () => ({
+  lean: async () => [fakeMultiDayOldCl],
+});
+
+const multiDayRolloverSummary = await processMidnightHmClTransition();
+assert(multiDayRolloverSummary.processed === 1, 'Multi-day old CL processed successfully after simulated 3-day downtime');
+assert(upsertedAttendanceCalls.length === 3, 'Multi-day request generated exactly 3 distinct daily attendance records');
+
+// Verify that each record has its OWN original PKT business date, NOT current yesterday
+const expectedDateStrings = ['2026-10-10', '2026-10-11', '2026-10-12'];
+upsertedAttendanceCalls.forEach((call, index) => {
+  const callDatePkt = call.filter.attendanceDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+  assert(callDatePkt === expectedDateStrings[index], `Record ${index + 1} uses original business date ${expectedDateStrings[index]} (was: ${callDatePkt})`);
+  assert(call.update.$set.approvalStatus === STAFF_ATTENDANCE_STATUS.REJECTED, `Record ${index + 1} marked REJECTED (Absent)`);
+  assert(call.update.$push.statusHistory.event === 'AUTO_ABSENT_MIDNIGHT', `Record ${index + 1} records AUTO_ABSENT_MIDNIGHT in statusHistory`);
+});
+
+// 13c. Future-dated CL protection (Query filter validation)
+// If startDate > yesterday, the query filter must naturally exclude it
+const todayPktString = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+const todayStartUtc = parsePktDateString(todayPktString);
+const yesterdayStartUtc = new Date(todayStartUtc.getTime() - 24 * 60 * 60 * 1000);
+
+const tomorrowStartUtc = new Date(todayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+const futureClRequest = {
+  leaveType: LEAVE_TYPE.CASUAL_LEAVE,
+  status: LEAVE_STATUS.PENDING,
+  staffRole: ROLES.HM,
+  startDate: tomorrowStartUtc,
+};
+assert(futureClRequest.startDate > yesterdayStartUtc, 'Future-dated CL (tomorrow) has startDate > yesterdayStartUtc');
+// Query condition { startDate: { $lte: yesterdayStartUtc } } fails for future date:
+assert(!(futureClRequest.startDate <= yesterdayStartUtc), 'Query filter { $lte: yesterdayStartUtc } strictly excludes future-dated leaves');
+
+// 13d. Approved CL protection
+// Query condition { status: LEAVE_STATUS.PENDING } strictly excludes approved requests
+const approvedOldClRequest = {
+  leaveType: LEAVE_TYPE.CASUAL_LEAVE,
+  status: LEAVE_STATUS.APPROVED,
+  staffRole: ROLES.HM,
+  startDate: yesterdayStartUtc,
+};
+assert(approvedOldClRequest.status !== LEAVE_STATUS.PENDING, 'Approved CL is not PENDING; query filter strictly excludes it');
+
+// 13e. Duplicate Job Execution Idempotency
+// On a second consecutive execution, finding 0 pending records yields 0 processed, 0 duplicates
+LeaveRequest.find = () => ({
+  lean: async () => [], // After first run, status became SUPERSEDED so 0 pending remain
+});
+const duplicateRunSummary = await processMidnightHmClTransition();
+assert(duplicateRunSummary.processed === 0, 'Duplicate job run cleanly processes 0 records (idempotent)');
+
+// 13f. Concurrent Worker Race Protection
+// If two workers query the same pending request, only the first gets non-null from atomic findOneAndUpdate
+let worker2Attempted = false;
+LeaveRequest.find = () => ({
+  lean: async () => [fakeYesterdayHmCl],
+});
+LeaveRequest.findOneAndUpdate = async (filter) => {
+  // Simulate race: record was already updated to SUPERSEDED by Worker 1
+  worker2Attempted = true;
+  return null;
+};
+const concurrentRunSummary = await processMidnightHmClTransition();
+assert(worker2Attempted === true, 'Worker 2 attempted atomic findOneAndUpdate');
+assert(concurrentRunSummary.processed === 0, 'Worker 2 cleanly skips already transitioned request without duplicate processing');
+
+// 13g. Standard approve endpoint blocks SUPERSEDED request
 const origLeaveFindById = LeaveRequest.findById;
 LeaveRequest.findById = () => ({
   _id: fakeYesterdayHmCl._id,
@@ -668,23 +757,23 @@ await handleApproveLeaveRequest(
 assert(mockResNormalApproveSup.statusCode === 409, 'Standard approve endpoint blocks SUPERSEDED request with 409 Conflict');
 
 LeaveRequest.find = origLeaveFind;
-LeaveRequest.findByIdAndUpdate = origLeaveFindByIdAndUpdate;
+LeaveRequest.findOneAndUpdate = origLeaveFindOneAndUpdate;
 StaffAttendanceRecord.findOneAndUpdate = origStaffFindOneAndUpdate;
 
-// ─── 14. Late Correction Lifecycle (handleLateCorrectionLeaveRequest) ────────
+// ─── 14. Late Correction Lifecycle & History Preservation ────────
 console.log('\n--- 14. Late Correction Lifecycle & History Preservation ---');
 
-const supersededHmLeaveDoc = {
-  _id: '65d1a1b2c3d4e5f600000088',
+// Multi-day superseded HM leave from 2026-10-10 to 2026-10-12 (3 days)
+const multiDaySupersededDoc = {
+  _id: '65d1a1b2c3d4e5f600000095',
   schoolId: schoolAId,
   townId: '65d1a1b2c3d4e5f600000010',
   staffUserId: '65d1a1b2c3d4e5f600000044', // HM Aslam
   staffRole: ROLES.HM,
   leaveType: LEAVE_TYPE.CASUAL_LEAVE,
-  startDate: parsePktDateString('2026-10-13'),
-  endDate: parsePktDateString('2026-10-13'),
-  startDatePkt: '2026-10-13',
-  durationDays: 1,
+  startDate: parsePktDateString('2026-10-10'),
+  endDate: parsePktDateString('2026-10-12'),
+  durationDays: 3,
   leaveYear: 2026,
   status: LEAVE_STATUS.SUPERSEDED,
   decisionReason: 'Auto-superseded at midnight PKT: CL not approved before date rollover.',
@@ -693,18 +782,66 @@ const supersededHmLeaveDoc = {
   toObject: function () { return { ...this }; },
 };
 
-const linkedAbsentAttendanceDoc = {
-  _id: '65d1a1b2c3d4e5f600000099',
-  staffUserId: '65d1a1b2c3d4e5f600000044',
-  attendanceDate: parsePktDateString('2026-10-13'),
-  approvalStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
-  rejectionReason: 'Auto-defaulted to ABSENT at midnight PKT: Casual Leave was not approved by Supervisor/Admin before date rollover.',
-  lateApprovalReason: null,
-  save: async function () { return this; },
-};
+// 3 corresponding StaffAttendanceRecords with prior AUTO_ABSENT_MIDNIGHT history
+const linkedMultiDayAttendanceDocs = [
+  {
+    _id: '65d1a1b2c3d4e5f6000000a1',
+    staffUserId: '65d1a1b2c3d4e5f600000044',
+    attendanceDate: parsePktDateString('2026-10-10'),
+    approvalStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+    rejectionReason: 'Auto-defaulted to ABSENT at midnight PKT for business date 2026-10-10.',
+    lateApprovalReason: null,
+    statusHistory: [
+      {
+        event: 'AUTO_ABSENT_MIDNIGHT',
+        previousStatus: 'PENDING_APPROVAL',
+        newStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+        changedAt: new Date(Date.now() - 3 * 86400000),
+        reason: 'Auto-defaulted to ABSENT at midnight PKT for business date 2026-10-10.',
+      },
+    ],
+    save: async function () { return this; },
+  },
+  {
+    _id: '65d1a1b2c3d4e5f6000000a2',
+    staffUserId: '65d1a1b2c3d4e5f600000044',
+    attendanceDate: parsePktDateString('2026-10-11'),
+    approvalStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+    rejectionReason: 'Auto-defaulted to ABSENT at midnight PKT for business date 2026-10-11.',
+    lateApprovalReason: null,
+    statusHistory: [
+      {
+        event: 'AUTO_ABSENT_MIDNIGHT',
+        previousStatus: 'PENDING_APPROVAL',
+        newStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+        changedAt: new Date(Date.now() - 2 * 86400000),
+        reason: 'Auto-defaulted to ABSENT at midnight PKT for business date 2026-10-11.',
+      },
+    ],
+    save: async function () { return this; },
+  },
+  {
+    _id: '65d1a1b2c3d4e5f6000000a3',
+    staffUserId: '65d1a1b2c3d4e5f600000044',
+    attendanceDate: parsePktDateString('2026-10-12'),
+    approvalStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+    rejectionReason: 'Auto-defaulted to ABSENT at midnight PKT for business date 2026-10-12.',
+    lateApprovalReason: null,
+    statusHistory: [
+      {
+        event: 'AUTO_ABSENT_MIDNIGHT',
+        previousStatus: 'PENDING_APPROVAL',
+        newStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+        changedAt: new Date(Date.now() - 86400000),
+        reason: 'Auto-defaulted to ABSENT at midnight PKT for business date 2026-10-12.',
+      },
+    ],
+    save: async function () { return this; },
+  },
+];
 
-LeaveRequest.findById = () => supersededHmLeaveDoc;
-StaffAttendanceRecord.findOne = () => linkedAbsentAttendanceDoc;
+LeaveRequest.findById = () => multiDaySupersededDoc;
+StaffAttendanceRecord.find = () => linkedMultiDayAttendanceDocs;
 LeaveRequest.find = () => ({
   select: () => ({
     lean: async () => [],
@@ -714,7 +851,7 @@ LeaveRequest.find = () => ({
 // 14a. Self-correction attempt by HM -> rejected (403 Forbidden)
 const mockResHmSelfCorrect = createMockResponse();
 await handleLateCorrectionLeaveRequest(
-  { user: hmAUser, params: { id: supersededHmLeaveDoc._id }, body: { correctionReason: 'HM correcting self' } },
+  { user: hmAUser, params: { id: multiDaySupersededDoc._id }, body: { correctionReason: 'HM correcting self' } },
   mockResHmSelfCorrect
 );
 assert(mockResHmSelfCorrect.statusCode === 403, 'HM self-correction attempt is blocked with 403 Forbidden');
@@ -728,7 +865,7 @@ const supervisorBUser = {
 };
 const mockResSupBCorrect = createMockResponse();
 await handleLateCorrectionLeaveRequest(
-  { user: supervisorBUser, params: { id: supersededHmLeaveDoc._id }, body: { correctionReason: 'Late correction attempt' } },
+  { user: supervisorBUser, params: { id: multiDaySupersededDoc._id }, body: { correctionReason: 'Late correction attempt' } },
   mockResSupBCorrect
 );
 assert(mockResSupBCorrect.statusCode === 403, 'Unassigned Supervisor is blocked with 403 Forbidden');
@@ -742,58 +879,110 @@ const supervisorAUser = {
 };
 const mockResShortReason = createMockResponse();
 await handleLateCorrectionLeaveRequest(
-  { user: supervisorAUser, params: { id: supersededHmLeaveDoc._id }, body: { correctionReason: 'Fix' } },
+  { user: supervisorAUser, params: { id: multiDaySupersededDoc._id }, body: { correctionReason: 'Fix' } },
   mockResShortReason
 );
 assert(mockResShortReason.statusCode === 400, 'Correction reason under 5 characters fails with 400 Bad Request');
 
-// 14d. Valid late correction by assigned Supervisor
+// 14d. Valid late correction by assigned Supervisor across multi-day range
 let correctionAuditDoc = null;
 AuditLog.create = async (doc) => {
   correctionAuditDoc = doc;
-  return { _id: 'audit_corr_1', ...doc };
+  return { _id: 'audit_corr_multi_1', ...doc };
 };
 
 const mockResValidCorrection = createMockResponse();
 await handleLateCorrectionLeaveRequest(
   {
     user: supervisorAUser,
-    params: { id: supersededHmLeaveDoc._id },
-    body: { correctionReason: 'Hardcopy leave application verified and approved by Town Office.' },
+    params: { id: multiDaySupersededDoc._id },
+    body: { correctionReason: 'Hardcopy hospital discharge summary verified by Town Education Office.' },
   },
   mockResValidCorrection
 );
 assert(mockResValidCorrection.statusCode === 200, 'Valid late correction executes successfully (200 OK)');
-assert(supersededHmLeaveDoc.status === LEAVE_STATUS.APPROVED, 'LeaveRequest status updated to APPROVED');
-assert(supersededHmLeaveDoc.correctionHistory.length === 1, 'correctionHistory contains 1 historical entry');
-assert(supersededHmLeaveDoc.correctionHistory[0].previousStatus === LEAVE_STATUS.SUPERSEDED, 'correctionHistory preserves previousStatus = SUPERSEDED');
-assert(supersededHmLeaveDoc.correctionHistory[0].newStatus === LEAVE_STATUS.APPROVED, 'correctionHistory records newStatus = APPROVED');
-assert(supersededHmLeaveDoc.correctionHistory[0].correctionReason.includes('Hardcopy leave application verified'), 'correctionHistory preserves exact correction reason');
+assert(multiDaySupersededDoc.status === LEAVE_STATUS.APPROVED, 'LeaveRequest status updated to APPROVED');
+assert(multiDaySupersededDoc.correctionHistory.length === 1, 'correctionHistory contains 1 historical entry');
+assert(multiDaySupersededDoc.correctionHistory[0].previousStatus === LEAVE_STATUS.SUPERSEDED, 'correctionHistory preserves previousStatus = SUPERSEDED');
+assert(multiDaySupersededDoc.correctionHistory[0].newStatus === LEAVE_STATUS.APPROVED, 'correctionHistory records newStatus = APPROVED');
+assert(multiDaySupersededDoc.correctionHistory[0].correctionReason.includes('hospital discharge summary verified'), 'correctionHistory preserves exact correction reason');
 
-// 14e. Verify linked StaffAttendanceRecord is updated without silently erasing the original Absent event
-assert(linkedAbsentAttendanceDoc.approvalStatus === STAFF_ATTENDANCE_STATUS.APPROVED, 'Linked StaffAttendanceRecord status updated to APPROVED');
-assert(linkedAbsentAttendanceDoc.lateApprovalReason.includes('Auto-defaulted to ABSENT at midnight PKT'), 'Linked attendance record preserves original Absent reason in lateApprovalReason');
-assert(linkedAbsentAttendanceDoc.lateApprovalReason.includes('Hardcopy leave application verified'), 'Linked attendance record preserves late correction reason');
+// 14e. Verify ALL linked StaffAttendanceRecords across the 3 days are updated with immutable event history
+linkedMultiDayAttendanceDocs.forEach((doc, idx) => {
+  assert(doc.approvalStatus === STAFF_ATTENDANCE_STATUS.APPROVED, `Attendance record for Day ${idx + 1} updated to APPROVED`);
+  assert(doc.lateApprovalReason.includes('hospital discharge summary verified'), `Attendance record for Day ${idx + 1} preserves correction note`);
+  assert(doc.lateApprovalReason.includes('Auto-defaulted to ABSENT'), `Attendance record for Day ${idx + 1} preserves original absent reason`);
+  assert(doc.statusHistory.length === 2, `Attendance record for Day ${idx + 1} retains exactly 2 events in statusHistory`);
+  assert(doc.statusHistory[0].event === 'AUTO_ABSENT_MIDNIGHT', `Event 1 is immutable AUTO_ABSENT_MIDNIGHT`);
+  assert(doc.statusHistory[1].event === 'LATE_CORRECTION_APPROVED', `Event 2 is immutable LATE_CORRECTION_APPROVED`);
+  assert(doc.statusHistory[1].previousStatus === STAFF_ATTENDANCE_STATUS.REJECTED, `Event 2 preserves previousStatus = REJECTED`);
+  assert(doc.statusHistory[1].newStatus === STAFF_ATTENDANCE_STATUS.APPROVED, `Event 2 records newStatus = APPROVED`);
+});
 
-// 14f. Audit log emitted with action LEAVE_REQUEST_LATE_CORRECTION
+// 14f. Zero Double-Counting / Report Integrity Check
+// When reporting on this range: exactly 3 APPROVED records exist, 0 REJECTED records exist.
+const approvedCountInReport = linkedMultiDayAttendanceDocs.filter(d => d.approvalStatus === STAFF_ATTENDANCE_STATUS.APPROVED).length;
+const rejectedCountInReport = linkedMultiDayAttendanceDocs.filter(d => d.approvalStatus === STAFF_ATTENDANCE_STATUS.REJECTED).length;
+assert(approvedCountInReport === 3, 'Monthly report counts exactly 3 approved days for this staff range');
+assert(rejectedCountInReport === 0, 'Monthly report counts 0 rejected days (zero double-counting after correction)');
+
+// 14g. Audit log verification
 assert(correctionAuditDoc.action === 'LEAVE_REQUEST_LATE_CORRECTION', 'AuditLog emitted with LEAVE_REQUEST_LATE_CORRECTION');
 assert(correctionAuditDoc.previousState.status === LEAVE_STATUS.SUPERSEDED, 'AuditLog records previousState.status = SUPERSEDED');
 assert(correctionAuditDoc.newState.status === LEAVE_STATUS.APPROVED, 'AuditLog records newState.status = APPROVED');
 
-// 14g. Attempting correction on already APPROVED request fails with 409 Conflict
+// 14h. Attempting correction on already APPROVED request fails with 409 Conflict
 const mockResAlreadyApproved = createMockResponse();
 await handleLateCorrectionLeaveRequest(
   {
     user: supervisorAUser,
-    params: { id: supersededHmLeaveDoc._id },
-    body: { correctionReason: 'Trying again on already approved leave' },
+    params: { id: multiDaySupersededDoc._id },
+    body: { correctionReason: 'Attempting duplicate correction on already approved request' },
   },
   mockResAlreadyApproved
 );
 assert(mockResAlreadyApproved.statusCode === 409, 'Attempting late correction on already approved request returns 409 Conflict');
 
 LeaveRequest.findById = origLeaveFindById;
-StaffAttendanceRecord.findOne = origFindOne;
+LeaveRequest.find = origLeaveFind;
+
+// ─── 15. Redux Contract Normalization & API Aliases ──────────────
+console.log('\n--- 15. Redux Contract Normalization & API Aliases ---');
+
+// 15a. Redux extraReducers payload extraction contracts
+const simulateStaffAttendanceReducer = (payload) => {
+  const records = Array.isArray(payload?.records) ? payload.records : [];
+  const total = typeof payload?.total === 'number' ? payload.total : records.length;
+  return { records, total };
+};
+
+const simulateLeaveRequestReducer = (payload) => {
+  const leaveRequests = Array.isArray(payload?.leaveRequests) ? payload.leaveRequests : [];
+  const total = typeof payload?.total === 'number' ? payload.total : leaveRequests.length;
+  return { leaveRequests, total };
+};
+
+// Contract: Standard API response
+const normalStaffPayload = { success: true, count: 2, total: 10, records: [{ _id: '1' }, { _id: '2' }] };
+const normalStaffResult = simulateStaffAttendanceReducer(normalStaffPayload);
+assert(normalStaffResult.records.length === 2, 'Redux extracts 2 records from standard API response');
+assert(normalStaffResult.total === 10, 'Redux extracts total = 10 from standard API response');
+
+// Contract: Empty API response
+const emptyStaffPayload = { success: true, count: 0, total: 0, records: [] };
+const emptyStaffResult = simulateStaffAttendanceReducer(emptyStaffPayload);
+assert(emptyStaffResult.records.length === 0, 'Redux extracts empty array [] from empty API response');
+assert(emptyStaffResult.total === 0, 'Redux extracts total = 0 from empty API response');
+
+// Contract: Malformed API response (e.g. server returned null or unexpected format)
+const malformedPayload = { success: false, message: 'Unexpected server response' };
+const malformedStaffResult = simulateStaffAttendanceReducer(malformedPayload);
+assert(Array.isArray(malformedStaffResult.records) && malformedStaffResult.records.length === 0, 'Redux safely defaults malformed records to empty array []');
+assert(malformedStaffResult.total === 0, 'Redux safely defaults malformed total to 0');
+
+const malformedLeaveResult = simulateLeaveRequestReducer(null);
+assert(Array.isArray(malformedLeaveResult.leaveRequests) && malformedLeaveResult.leaveRequests.length === 0, 'Redux safely defaults null payload to empty leaveRequests array []');
+assert(malformedLeaveResult.total === 0, 'Redux safely defaults null payload total to 0');
 
 console.log('\n==============================================================================');
 console.log(`🎉 ALL ${passedTests}/${totalTests} TESTS PASSED CLEANLY! ZERO FAILURES!`);

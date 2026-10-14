@@ -183,38 +183,74 @@ export const processMidnightHmClTransition = async () => {
         ? new Date(pendingRequest.startDate).toLocaleDateString('en-CA', { timeZone: PKT_TIMEZONE })
         : yesterdayPktString;
 
-      // 1. Transition LeaveRequest to SUPERSEDED with reason
-      await LeaveRequest.findByIdAndUpdate(pendingRequest._id, {
-        $set: {
-          status: LEAVE_STATUS.SUPERSEDED,
-          decisionReason: `Auto-superseded at midnight PKT: CL not approved before date rollover. HM attendance defaulted to ABSENT for ${requestDatePkt}.`,
-        },
-      });
-
-      // 2. Upsert StaffAttendanceRecord with REJECTED / ABSENT state (idempotent, no duplicates)
-      await StaffAttendanceRecord.findOneAndUpdate(
+      // 1. Atomic transition concurrency lock: only ONE concurrent worker can acquire this request
+      const transitionedRequest = await LeaveRequest.findOneAndUpdate(
+        { _id: pendingRequest._id, status: LEAVE_STATUS.PENDING },
         {
-          staffUserId: pendingRequest.staffUserId,
-          attendanceDate: pendingRequest.startDate,
-        },
-        {
-          $setOnInsert: {
-            schoolId: pendingRequest.schoolId,
-            townId: pendingRequest.townId,
-            staffUserId: pendingRequest.staffUserId,
-            staffRole: pendingRequest.staffRole,
-            staffCategory: pendingRequest.staffCategory || 'SCHOOL_STAFF',
-            submittedAt: pendingRequest.submittedAt || new Date(),
-            isHmSelfRecord: false,
-          },
           $set: {
-            approvalStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
-            rejectionReason: `Auto-defaulted to ABSENT at midnight PKT: Casual Leave was not approved by Supervisor/Admin before date rollover.`,
-            rejectedAt: new Date(),
+            status: LEAVE_STATUS.SUPERSEDED,
+            decisionReason: `Auto-superseded at midnight PKT: CL not approved before date rollover. HM attendance defaulted to ABSENT for ${requestDatePkt}.`,
           },
         },
-        { upsert: true, new: true }
+        { new: true }
       );
+
+      // If another concurrent worker already transitioned this request, skip cleanly
+      if (!transitionedRequest) {
+        continue;
+      }
+
+      // 2. Multi-day range expansion: process every elapsed day strictly on its own Asia/Karachi business date
+      const startTimestamp = new Date(pendingRequest.startDate).getTime();
+      const endBoundTimestamp = Math.min(
+        new Date(pendingRequest.endDate || pendingRequest.startDate).getTime(),
+        yesterdayStartUtc.getTime()
+      );
+      const oneDayMs = 24 * 60 * 60 * 1000;
+
+      for (let currentMs = startTimestamp; currentMs <= endBoundTimestamp; currentMs += oneDayMs) {
+        const currentDayUtc = new Date(currentMs);
+        const currentDayPkt = currentDayUtc.toLocaleDateString('en-CA', { timeZone: PKT_TIMEZONE });
+
+        // Upsert StaffAttendanceRecord with REJECTED / ABSENT state (idempotent, no duplicates)
+        await StaffAttendanceRecord.findOneAndUpdate(
+          {
+            staffUserId: pendingRequest.staffUserId,
+            attendanceDate: currentDayUtc,
+          },
+          {
+            $setOnInsert: {
+              schoolId: pendingRequest.schoolId,
+              townId: pendingRequest.townId,
+              staffUserId: pendingRequest.staffUserId,
+              staffRole: pendingRequest.staffRole,
+              staffCategory: pendingRequest.staffCategory || 'SCHOOL_STAFF',
+              submittedAt: pendingRequest.submittedAt || new Date(),
+              isHmSelfRecord: false,
+            },
+            $set: {
+              approvalStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+              rejectionReason: `Auto-defaulted to ABSENT at midnight PKT: Casual Leave was not approved by Supervisor/Admin before date rollover.`,
+              rejectedAt: new Date(),
+            },
+            $push: {
+              statusHistory: {
+                event: 'AUTO_ABSENT_MIDNIGHT',
+                previousStatus: STAFF_ATTENDANCE_STATUS.PENDING_APPROVAL,
+                newStatus: STAFF_ATTENDANCE_STATUS.REJECTED,
+                changedBy: null,
+                changedAt: new Date(),
+                reason: `Auto-defaulted to ABSENT at midnight PKT for business date ${currentDayPkt}.`,
+                snapshot: {
+                  leaveRequestId: pendingRequest._id,
+                  businessDate: currentDayPkt,
+                },
+              },
+            },
+          },
+          { upsert: true, new: true }
+        );
+      }
 
       // 3. Emit immutable AuditLog for the automated system transition
       await AuditLog.create({
@@ -236,7 +272,7 @@ export const processMidnightHmClTransition = async () => {
       });
 
       processedCount++;
-      logger.info(`[LeaveService Midnight] HM CL ${pendingRequest._id} superseded for ${requestDatePkt} and ABSENT record preserved.`);
+      logger.info(`[LeaveService Midnight] HM CL ${pendingRequest._id} superseded for ${requestDatePkt} and ABSENT record(s) preserved.`);
     } catch (transitionError) {
       errorCount++;
       logger.error(`[LeaveService Midnight] Failed to supersede HM CL ${pendingRequest._id}: ${transitionError.message}`);
