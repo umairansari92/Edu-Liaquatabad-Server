@@ -54,10 +54,11 @@ export const handleGetNotifications = asyncHandler(async (request, response) => 
 export const handleMarkNotificationRead = asyncHandler(async (request, response) => {
   const userId = request.user._id;
   const { id } = request.params;
+  const targetReadState = request.body?.isRead !== undefined ? Boolean(request.body.isRead) : true;
 
   const updatedNotification = await Notification.findOneAndUpdate(
     { _id: id, recipientUserId: userId },
-    { isRead: true },
+    { isRead: targetReadState },
     { new: true }
   );
 
@@ -67,10 +68,15 @@ export const handleMarkNotificationRead = asyncHandler(async (request, response)
 
   const unreadCount = await Notification.countDocuments({ recipientUserId: userId, isRead: false });
 
-  return sendSuccess(response, 200, 'Notification marked as read', {
-    notification: updatedNotification,
-    unreadCount,
-  });
+  return sendSuccess(
+    response,
+    200,
+    targetReadState ? 'Notification marked as read' : 'Notification marked as unread',
+    {
+      notification: updatedNotification,
+      unreadCount,
+    }
+  );
 });
 
 /**

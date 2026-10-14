@@ -18,6 +18,7 @@ import {
   ROLES,
 } from '../../config/constants.js';
 import logger from '../../config/logger.js';
+import { dispatchNotificationEvent } from './notificationDispatcher.js';
 
 const PKT_TIMEZONE = 'Asia/Karachi';
 
@@ -270,6 +271,26 @@ export const processMidnightHmClTransition = async () => {
         result: 'SUCCESS',
         reason: `Auto-superseded at midnight PKT: unapproved HM CL defaulted to ABSENT for ${requestDatePkt}.`,
       });
+
+      // Notify staff member that unapproved CL defaulted to absent per midnight policy
+      try {
+        await dispatchNotificationEvent({
+          eventType: 'ATTENDANCE',
+          category:  'ATTENDANCE',
+          title:     'Attendance Recorded as Absent (Midnight Rollover)',
+          message:   `Your unapproved CL for ${requestDatePkt} has transitioned to Absent per midnight cutoff policy. You may submit a late correction request if eligible.`,
+          actionLink: '/leave/my-requests',
+          rawMetadata: {
+            staffId:        String(pendingRequest.staffUserId),
+            staffName:      '',
+            attendanceDate: requestDatePkt,
+            status:         'ABSENT',
+          },
+          recipientUserIds: [String(pendingRequest.staffUserId)],
+        });
+      } catch (notificationError) {
+        logger.warn(`[LeaveService Midnight] Notification dispatch failed: ${notificationError.message}`);
+      }
 
       processedCount++;
       logger.info(`[LeaveService Midnight] HM CL ${pendingRequest._id} superseded for ${requestDatePkt} and ABSENT record(s) preserved.`);

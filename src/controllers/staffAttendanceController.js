@@ -395,6 +395,33 @@ export const handleApproveStaffAttendance = async (request, response) => {
     userAgent:  request.get?.('user-agent') || '',
   });
 
+  // Notify staff member of attendance approval
+  try {
+    const attendanceDateStr = existingRecord.attendanceDate
+      ? new Date(existingRecord.attendanceDate).toISOString().split('T')[0]
+      : 'today';
+
+    await dispatchNotificationEvent({
+      eventType: 'STAFF_ATTENDANCE_APPROVED',
+      category:  'ATTENDANCE',
+      title:     'Staff Attendance Approved',
+      message:   `Your attendance for ${attendanceDateStr} has been approved by ${requestingActor.fullName}.`,
+      actionLink: '/staff-attendance/my-record',
+      rawMetadata: {
+        staffId:        String(existingRecord.staffUserId),
+        staffName:      requestingActor.fullName,
+        designation:    requestingActor.designation || '',
+        schoolName:     '',
+        attendanceDate: attendanceDateStr,
+        recordId:       String(existingRecord._id),
+        status:         STAFF_ATTENDANCE_STATUS.APPROVED,
+      },
+      recipientUserIds: [String(existingRecord.staffUserId)],
+    });
+  } catch (notificationError) {
+    logger.warn(`[StaffAttendanceController] Approval notification failed: ${notificationError.message}`);
+  }
+
   return response.status(200).json({
     success: true,
     message: isLateApproval
@@ -506,6 +533,34 @@ export const handleRejectStaffAttendance = async (request, response) => {
     ipAddress:        request.ip || '',
     userAgent:        request.get?.('user-agent') || '',
   });
+
+  // Notify staff member of attendance rejection
+  try {
+    const attendanceDateStr = existingRecord.attendanceDate
+      ? new Date(existingRecord.attendanceDate).toISOString().split('T')[0]
+      : 'today';
+
+    await dispatchNotificationEvent({
+      eventType: 'STAFF_ATTENDANCE_REJECTED',
+      category:  'ATTENDANCE',
+      title:     'Staff Attendance Rejected',
+      message:   `Your attendance for ${attendanceDateStr} was rejected by ${requestingActor.fullName}. Reason: ${rejectionReason.trim()}`,
+      actionLink: '/staff-attendance/my-record',
+      rawMetadata: {
+        staffId:         String(existingRecord.staffUserId),
+        staffName:       requestingActor.fullName,
+        designation:     requestingActor.designation || '',
+        schoolName:      '',
+        attendanceDate:  attendanceDateStr,
+        recordId:        String(existingRecord._id),
+        status:          STAFF_ATTENDANCE_STATUS.REJECTED,
+        rejectionReason: rejectionReason.trim(),
+      },
+      recipientUserIds: [String(existingRecord.staffUserId)],
+    });
+  } catch (notificationError) {
+    logger.warn(`[StaffAttendanceController] Rejection notification failed: ${notificationError.message}`);
+  }
 
   return response.status(200).json({
     success: true,
