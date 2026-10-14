@@ -246,9 +246,11 @@ async function runAuditV3DeepVerificationSuite() {
       completeHandler = resolve;
     });
 
-    for (const inst of instances) {
+    for (let i = 0; i < instances.length; i++) {
+      const inst = instances[i];
       idempotencyGuard(inst.req, inst.res, () => {
         passedToNextCount++;
+        console.log(`   [Diagnostic] Request #${i} passed to next(), total passed: ${passedToNextCount}`);
         // Keep in flight until all concurrent race requests have been dispatched and locked
         handlerPromise.then(() => {
           inst.res.status(201).json({ success: true, message: 'Created school successfully', schoolId: 'sch_999' });
@@ -258,10 +260,10 @@ async function runAuditV3DeepVerificationSuite() {
       });
     }
 
-    // Allow all concurrent requests to hit the in-flight lock
-    for (let pollIndex = 0; pollIndex < 20; pollIndex++) {
-      if (passedToNextCount >= 1) {
-        await new Promise(r => setTimeout(r, 200));
+    // Allow all concurrent race requests to hit the in-flight lock before releasing the handler
+    for (let pollIndex = 0; pollIndex < 40; pollIndex++) {
+      const currentBlocked = instances.filter(inst => inst.getStatus() === 409).length;
+      if (passedToNextCount === 1 && currentBlocked === concurrentCount - 1) {
         break;
       }
       await new Promise(r => setTimeout(r, 50));
