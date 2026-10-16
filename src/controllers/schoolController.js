@@ -57,6 +57,71 @@ const writeSchoolAuditLog = async ({
   });
 };
 
+const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/**
+ * Validates and normalizes operational timings structure.
+ * Enforces:
+ * - Valid 24-hour HH:mm time string format.
+ * - Attendance window end must be strictly after attendance window start.
+ * - School end time must be strictly after school start time.
+ *
+ * @param {Object} timings
+ * @param {Object} [existingTimings={}]
+ * @returns {{ valid: boolean, error?: string, normalized?: Object }}
+ */
+export const validateAndNormalizeTimings = (timings, existingTimings = {}) => {
+  if (!timings || typeof timings !== 'object') {
+    return { valid: false, error: 'A valid timings configuration object is required.' };
+  }
+
+  const normalized = {
+    regular: {
+      startTime:             timings.regular?.startTime             || existingTimings.regular?.startTime             || '08:00',
+      endTime:               timings.regular?.endTime               || existingTimings.regular?.endTime               || '13:30',
+      attendanceWindowStart: timings.regular?.attendanceWindowStart || existingTimings.regular?.attendanceWindowStart || '07:45',
+      attendanceWindowEnd:   timings.regular?.attendanceWindowEnd   || existingTimings.regular?.attendanceWindowEnd   || '14:00',
+    },
+    friday: {
+      startTime:             timings.friday?.startTime             || existingTimings.friday?.startTime             || '07:30',
+      endTime:               timings.friday?.endTime               || existingTimings.friday?.endTime               || '12:00',
+      attendanceWindowStart: timings.friday?.attendanceWindowStart || existingTimings.friday?.attendanceWindowStart || '07:15',
+      attendanceWindowEnd:   timings.friday?.attendanceWindowEnd   || existingTimings.friday?.attendanceWindowEnd   || '12:30',
+    },
+    allowHmLateOverride: timings.allowHmLateOverride !== undefined
+      ? Boolean(timings.allowHmLateOverride)
+      : (existingTimings.allowHmLateOverride ?? true),
+  };
+
+  for (const dayType of ['regular', 'friday']) {
+    for (const key of ['startTime', 'endTime', 'attendanceWindowStart', 'attendanceWindowEnd']) {
+      const val = normalized[dayType][key];
+      if (!val || typeof val !== 'string' || !TIME_REGEX.test(val)) {
+        return {
+          valid: false,
+          error: `Invalid ${dayType} ${key} format: "${val}". Must be valid 24-hour time in HH:mm format.`,
+        };
+      }
+    }
+
+    if (normalized[dayType].attendanceWindowEnd <= normalized[dayType].attendanceWindowStart) {
+      return {
+        valid: false,
+        error: `For ${dayType} schedule, attendance window end time (${normalized[dayType].attendanceWindowEnd}) must be later than start time (${normalized[dayType].attendanceWindowStart}).`,
+      };
+    }
+
+    if (normalized[dayType].endTime <= normalized[dayType].startTime) {
+      return {
+        valid: false,
+        error: `For ${dayType} schedule, school closing time (${normalized[dayType].endTime}) must be later than opening time (${normalized[dayType].startTime}).`,
+      };
+    }
+  }
+
+  return { valid: true, normalized };
+};
+
 /**
  * POST /api/v1/schools
  * Register a new municipal school entity.
@@ -76,6 +141,7 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
     status = 'ACTIVE',
     lowestGrade,
     highestGrade,
+    timings,
   } = request.body;
 
   // 1. Resolve Town & Organization
@@ -125,6 +191,16 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
   const minGrade = Math.max(1, Number(lowestGrade) || defaultLowest);
   const maxGrade = Math.min(12, Math.max(minGrade, Number(highestGrade) || defaultHighest));
 
+  // 2c. Validate and normalize optional operational timings if provided
+  let initialTimings = undefined;
+  if (timings !== undefined) {
+    const timingValidation = validateAndNormalizeTimings(timings);
+    if (!timingValidation.valid) {
+      return sendError(response, 400, timingValidation.error);
+    }
+    initialTimings = timingValidation.normalized;
+  }
+
   // 3. Create Municipal School Entity
   const newSchool = await School.create({
     organizationId: targetOrganizationId,
@@ -144,6 +220,7 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
     contactPhone: contactPhone.trim(),
     contactEmail: contactEmail.trim().toLowerCase(),
     status,
+    ...(initialTimings ? { timings: initialTimings } : {}),
   });
 
   // 3b. Automatically provision standard classes and grade-appropriate curriculum subjects
@@ -167,6 +244,7 @@ export const handleCreateSchool = asyncHandler(async (request, response) => {
       schoolType: newSchool.schoolType,
       genderType: newSchool.genderType,
       status: newSchool.status,
+      timings: newSchool.timings,
     },
     result: 'SUCCESS',
     reason: `Municipal school institution registered by ${requestingActor.role} (${requestingActor.fullName}).`,
@@ -470,6 +548,14 @@ export const handleUpdateSchool = asyncHandler(async (request, response) => {
     await provisionSchoolClassesAndCurriculum(schoolRecord._id, updatedLowest, updatedHighest);
   }
 
+  if (request.body.timings !== undefined) {
+    const timingValidation = validateAndNormalizeTimings(request.body.timings, schoolRecord.timings);
+    if (!timingValidation.valid) {
+      return sendError(response, 400, timingValidation.error);
+    }
+    schoolRecord.timings = timingValidation.normalized;
+  }
+
   await schoolRecord.save();
 
   const newState = {
@@ -507,17 +593,19 @@ export const handleUpdateSchool = asyncHandler(async (request, response) => {
 
 /**
  * PATCH /api/v1/schools/:id/timings
- * Configure or adjust operational school timings & attendance windows
- * Restricted strictly to ROOT_ADMIN, SUPER_ADMIN, and ADMIN.
+ * Configure or adjust operational school timings & attendance windows.
+ * Authorized actors:
+ * - ROOT_ADMIN, SUPER_ADMIN, ADMIN (town-scoped)
+ * - HM (own assigned school strictly scoped, mandatory non-empty reason >= 5 characters)
  */
 export const handleUpdateSchoolTimings = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
   const { id: targetSchoolId } = request.params;
-  const { timings, reason = 'Seasonal or administrative timings adjustment' } = request.body;
+  const { timings, reason } = request.body;
 
-  const allowedRoles = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN];
+  const allowedRoles = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM];
   if (!allowedRoles.includes(requestingActor.role)) {
-    return sendError(response, 403, 'Access denied. Only municipal leadership (Admin, Super Admin, Root Admin) can configure school timings.');
+    return sendError(response, 403, 'Access denied. You do not have authority to configure school timings.');
   }
 
   if (!targetSchoolId || !/^[0-9a-fA-F]{24}$/.test(targetSchoolId)) {
@@ -540,27 +628,35 @@ export const handleUpdateSchoolTimings = asyncHandler(async (request, response) 
     }
   }
 
-  const previousState = { timings: school.timings };
+  // HM assigned school boundary check
+  if (requestingActor.role === ROLES.HM) {
+    const actorSchoolId = requestingActor.schoolId?._id || requestingActor.schoolId;
+    if (!actorSchoolId || String(actorSchoolId) !== String(school._id)) {
+      return sendError(response, 403, 'Access denied. You can only adjust attendance timings for your own assigned municipal school.');
+    }
 
-  school.timings = {
-    regular: {
-      startTime:             timings.regular?.startTime             || school.timings?.regular?.startTime             || '08:00',
-      endTime:               timings.regular?.endTime               || school.timings?.regular?.endTime               || '13:30',
-      attendanceWindowStart: timings.regular?.attendanceWindowStart || school.timings?.regular?.attendanceWindowStart || '07:45',
-      attendanceWindowEnd:   timings.regular?.attendanceWindowEnd   || school.timings?.regular?.attendanceWindowEnd   || '14:00',
-    },
-    friday: {
-      startTime:             timings.friday?.startTime             || school.timings?.friday?.startTime             || '07:30',
-      endTime:               timings.friday?.endTime               || school.timings?.friday?.endTime               || '12:00',
-      attendanceWindowStart: timings.friday?.attendanceWindowStart || school.timings?.friday?.attendanceWindowStart || '07:15',
-      attendanceWindowEnd:   timings.friday?.attendanceWindowEnd   || school.timings?.friday?.attendanceWindowEnd   || '12:30',
-    },
-    allowHmLateOverride: timings.allowHmLateOverride !== undefined
-      ? Boolean(timings.allowHmLateOverride)
-      : (school.timings?.allowHmLateOverride ?? true),
-  };
+    // Mandatory reason requirement for HM adjustments (Articles III & V accountability)
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+      return sendError(response, 400, 'A valid justification reason (minimum 5 characters) is mandatory for Head Master attendance timing adjustments.');
+    }
+  }
 
+  const validatedReason = reason && typeof reason === 'string' && reason.trim().length > 0
+    ? reason.trim()
+    : 'Administrative timings adjustment';
+
+  // Validate and normalize proposed timings structure
+  const timingValidation = validateAndNormalizeTimings(timings, school.timings);
+  if (!timingValidation.valid) {
+    return sendError(response, 400, timingValidation.error);
+  }
+
+  const previousState = { timings: JSON.parse(JSON.stringify(school.timings || {})) };
+  school.timings = timingValidation.normalized;
   await school.save();
+
+  const isActorHm = requestingActor.role === ROLES.HM;
+  const auditAction = isActorHm ? 'HM_SCHOOL_ATTENDANCE_WINDOW_UPDATED' : 'SCHOOL_TIMINGS_UPDATED';
 
   // AuditLog Generation (Constitution Article V.6)
   await writeSchoolAuditLog({
@@ -568,20 +664,20 @@ export const handleUpdateSchoolTimings = asyncHandler(async (request, response) 
     actorRole: requestingActor.role,
     actorDesignation: requestingActor.designation || '',
     actorName: requestingActor.fullName || '',
-    action: 'SCHOOL_TIMINGS_UPDATED',
+    action: auditAction,
     targetSchoolId: school._id,
     targetSchoolName: school.name,
     townId: school.townId,
     previousState,
     newState: { timings: school.timings },
     result: 'SUCCESS',
-    reason,
+    reason: validatedReason,
     ipAddress: request.ip || '',
     userAgent: request.headers['user-agent'] || '',
     requestId: request.headers['x-request-id'] || '',
   });
 
-  return sendSuccess(response, 200, 'School operational timings updated successfully.', {
+  return sendSuccess(response, 200, isActorHm ? 'School attendance window updated successfully.' : 'School operational timings updated successfully.', {
     schoolId: school._id,
     timings: school.timings,
   });

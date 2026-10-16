@@ -20,6 +20,75 @@ import {
 } from '../utils/karachiTime.js';
 import { ROLES } from '../../config/constants.js';
 
+export const DEFAULT_SCHOOL_TIMINGS = Object.freeze({
+  regular: {
+    startTime:             '08:00',
+    endTime:               '13:30',
+    attendanceWindowStart: '07:45',
+    attendanceWindowEnd:   '14:00',
+  },
+  friday: {
+    startTime:             '07:30',
+    endTime:               '12:00',
+    attendanceWindowStart: '07:15',
+    attendanceWindowEnd:   '12:30',
+  },
+  allowHmLateOverride: true,
+});
+
+const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/**
+ * Resolves safe, validated operational schedule and attendance window for a school.
+ * Backward-compatible: falls back safely to municipal default timings if legacy or missing.
+ *
+ * @param {Object} school
+ * @param {boolean} isFriday
+ * @returns {{ windowStart: string, windowEnd: string, startTime: string, endTime: string, allowHmLateOverride: boolean }}
+ */
+export const resolveSchoolSchedule = (school, isFriday) => {
+  const daySchedule = isFriday ? school?.timings?.friday : school?.timings?.regular;
+  const fallbackSchedule = isFriday ? DEFAULT_SCHOOL_TIMINGS.friday : DEFAULT_SCHOOL_TIMINGS.regular;
+
+  let windowStart = daySchedule?.attendanceWindowStart;
+  let windowEnd = daySchedule?.attendanceWindowEnd;
+
+  // Validate window format and validity
+  if (!windowStart || typeof windowStart !== 'string' || !TIME_REGEX.test(windowStart)) {
+    windowStart = fallbackSchedule.attendanceWindowStart;
+  }
+  if (!windowEnd || typeof windowEnd !== 'string' || !TIME_REGEX.test(windowEnd)) {
+    windowEnd = fallbackSchedule.attendanceWindowEnd;
+  }
+
+  // Ensure windowEnd > windowStart; if corrupted in legacy record, use safe fallback
+  if (windowEnd <= windowStart) {
+    windowStart = fallbackSchedule.attendanceWindowStart;
+    windowEnd = fallbackSchedule.attendanceWindowEnd;
+  }
+
+  let startTime = daySchedule?.startTime;
+  let endTime = daySchedule?.endTime;
+  if (!startTime || typeof startTime !== 'string' || !TIME_REGEX.test(startTime)) {
+    startTime = fallbackSchedule.startTime;
+  }
+  if (!endTime || typeof endTime !== 'string' || !TIME_REGEX.test(endTime)) {
+    endTime = fallbackSchedule.endTime;
+  }
+
+  const allowHmLateOverride = school?.timings?.allowHmLateOverride !== undefined
+    ? Boolean(school.timings.allowHmLateOverride)
+    : DEFAULT_SCHOOL_TIMINGS.allowHmLateOverride;
+
+  return {
+    windowStart,
+    windowEnd,
+    startTime,
+    endTime,
+    allowHmLateOverride,
+  };
+};
+
 /**
  * Checks if a school is officially closed on a given date due to
  * an active holiday, vacation, rain emergency, or weekly off day.
@@ -134,9 +203,7 @@ export const validateSubmissionWindow = async ({
   const currentDayOfWeek = getKarachiDayOfWeek(date);
   const isFriday = currentDayOfWeek === 5;
 
-  const schedule = isFriday ? school.timings?.friday : school.timings?.regular;
-  const windowStart = schedule?.attendanceWindowStart || (isFriday ? '07:15' : '07:45');
-  const windowEnd   = schedule?.attendanceWindowEnd   || (isFriday ? '12:30' : '14:00');
+  const { windowStart, windowEnd, allowHmLateOverride } = resolveSchoolSchedule(school, isFriday);
 
   const currentTimePkt = getKarachiTimeString(date);
 
@@ -154,6 +221,15 @@ export const validateSubmissionWindow = async ({
     const isActorHm = requestingActor.role === ROLES.HM || requestingActor.role === ROLES.ADMIN || requestingActor.role === ROLES.SUPER_ADMIN || requestingActor.role === ROLES.ROOT_ADMIN;
 
     if (isActorHm && isLateOverride) {
+      // If late override is administratively disabled for this school
+      if (!allowHmLateOverride && requestingActor.role === ROLES.HM) {
+        return {
+          allowed: false,
+          code: 'OVERRIDE_DISABLED',
+          reason: 'Emergency late override is administratively disabled for this school. Contact municipal education administration.',
+        };
+      }
+
       // Ground check: Late override is STRICTLY permitted on the same calendar day in PKT!
       const todayPktDate = getKarachiDateString(new Date());
       const submissionDatePkt = getKarachiDateString(date);

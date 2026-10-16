@@ -51,11 +51,11 @@ router.patch(
   handleUpdateSchool
 );
 
-// ─── Configure School Operational Timings (ROOT_ADMIN, SUPER_ADMIN, ADMIN) ──
+// ─── Configure School Operational Timings (ROOT_ADMIN, SUPER_ADMIN, ADMIN, HM) ──
 router.patch(
   '/:id/timings',
-  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN),
-  authorizePermissions(PERMISSIONS.SCHOOLS_UPDATE),
+  authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HM),
+  authorizePermissions(PERMISSIONS.SCHOOLS_TIMINGS_UPDATE),
   authorizeScope,
   handleUpdateSchoolTimings
 );

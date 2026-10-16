@@ -16,7 +16,7 @@ import {
   TEACHING_ASSIGNMENT_STATUS,
 } from "../../config/constants.js";
 import { processAttendanceDelta, computeRecordsHash } from "../services/attendanceRollupService.js";
-import { validateSubmissionWindow, checkIsSchoolClosed } from "../services/attendanceWindowService.js";
+import { validateSubmissionWindow, checkIsSchoolClosed, resolveSchoolSchedule } from "../services/attendanceWindowService.js";
 import {
   getKarachiTimeString,
   getKarachiDateString,
@@ -208,12 +208,12 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
   const closureCheck = school ? await checkIsSchoolClosed(school, queryDate) : { isClosed: false };
   const currentDayOfWeek = getKarachiDayOfWeek(queryDate);
   const isFriday = currentDayOfWeek === 5;
-  const schedule = isFriday ? school?.timings?.friday : school?.timings?.regular;
+  const resolved = resolveSchoolSchedule(school, isFriday);
   const currentTimePkt = getKarachiTimeString(queryDate);
   const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
   const todayPktDate = getKarachiDateString(new Date());
   const queryDatePkt = getKarachiDateString(queryDate);
-  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && school?.timings?.allowHmLateOverride !== false;
+  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && resolved.allowHmLateOverride !== false;
 
   return sendSuccess(response, 200, "Attendance sheet retrieved.", {
     section: { _id: section._id, name: section.name, roomNumber: section.roomNumber || "", class: section.classId },
@@ -232,12 +232,12 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
       currentDatePkt: queryDatePkt,
       isFriday,
       schedule: {
-        startTime: schedule?.startTime || (isFriday ? "07:30" : "08:00"),
-        endTime: schedule?.endTime || (isFriday ? "12:00" : "13:30"),
-        attendanceWindowStart: schedule?.attendanceWindowStart || (isFriday ? "07:15" : "07:45"),
-        attendanceWindowEnd: schedule?.attendanceWindowEnd || (isFriday ? "12:30" : "14:00"),
+        startTime: resolved.startTime,
+        endTime: resolved.endTime,
+        attendanceWindowStart: resolved.windowStart,
+        attendanceWindowEnd: resolved.windowEnd,
       },
-      allowHmLateOverride: school?.timings?.allowHmLateOverride ?? true,
+      allowHmLateOverride: resolved.allowHmLateOverride,
       canOverride,
     },
   });
@@ -277,13 +277,13 @@ export const handleGetAttendanceWindowStatus = asyncHandler(async (request, resp
 
   const currentDayOfWeek = getKarachiDayOfWeek(queryDate);
   const isFriday = currentDayOfWeek === 5;
-  const schedule = isFriday ? school.timings?.friday : school.timings?.regular;
+  const resolved = resolveSchoolSchedule(school, isFriday);
   const currentTimePkt = getKarachiTimeString(queryDate);
 
   const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
   const todayPktDate = getKarachiDateString(new Date());
   const queryDatePkt = getKarachiDateString(queryDate);
-  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && school.timings?.allowHmLateOverride !== false;
+  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && resolved.allowHmLateOverride !== false;
 
   return sendSuccess(response, 200, "Attendance window status retrieved.", {
     allowed: windowCheck.allowed,
@@ -296,12 +296,12 @@ export const handleGetAttendanceWindowStatus = asyncHandler(async (request, resp
     currentDatePkt: queryDatePkt,
     isFriday,
     schedule: {
-      startTime: schedule?.startTime || (isFriday ? "07:30" : "08:00"),
-      endTime: schedule?.endTime || (isFriday ? "12:00" : "13:30"),
-      attendanceWindowStart: schedule?.attendanceWindowStart || (isFriday ? "07:15" : "07:45"),
-      attendanceWindowEnd: schedule?.attendanceWindowEnd || (isFriday ? "12:30" : "14:00"),
+      startTime: resolved.startTime,
+      endTime: resolved.endTime,
+      attendanceWindowStart: resolved.windowStart,
+      attendanceWindowEnd: resolved.windowEnd,
     },
-    allowHmLateOverride: school.timings?.allowHmLateOverride ?? true,
+    allowHmLateOverride: resolved.allowHmLateOverride,
     canOverride,
   });
 });

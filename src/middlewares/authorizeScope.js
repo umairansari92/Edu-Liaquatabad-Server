@@ -36,7 +36,7 @@ export const authorizeScope = async (request, response, nextFunction) => {
     // This is separate from the "schoolId in body/query" check which is for user routes.
     const isSchoolMutationRoute = (
       request.method === 'PATCH' &&
-      request.route?.path === '/:id' &&
+      (request.route?.path === '/:id' || request.route?.path === '/:id/timings') &&
       request.baseUrl?.includes('/schools')
     );
 
