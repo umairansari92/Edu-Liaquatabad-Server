@@ -1,3 +1,4 @@
+
 /**
  * Municipal School Infrastructure Controller
  * Education Department Liaquatabad Town Centre (DMC)
@@ -129,6 +130,10 @@ export const validateAndNormalizeTimings = (timings, existingTimings = {}) => {
  */
 export const handleCreateSchool = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
+  const allowedRoles = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN];
+  if (!allowedRoles.includes(requestingActor?.role)) {
+    return sendError(response, 403, 'Access denied. You do not have authority to register municipal schools.');
+  }
   const {
     name,
     schoolCode,
@@ -416,6 +421,10 @@ export const handleGetSchoolById = asyncHandler(async (request, response) => {
  */
 export const handleUpdateSchool = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
+  const allowedRoles = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN];
+  if (!allowedRoles.includes(requestingActor?.role)) {
+    return sendError(response, 403, 'Access denied. You do not have authority to modify municipal school registration.');
+  }
   const { id: targetSchoolId } = request.params;
 
   // ── SEC-CRIT-02: ObjectId format validation ───────────────────────────────────

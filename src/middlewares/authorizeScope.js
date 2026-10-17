@@ -95,7 +95,7 @@ export const authorizeScope = async (request, response, nextFunction) => {
         return nextFunction();
       }
 
-      // SUPERVISOR actors can only modify schools from their assigned list
+      // SUPERVISOR actors cannot mutate school records (general or timings)
       if (requestingActor.role === ROLES.SUPERVISOR) {
         const isAssignedSupervisorSchool = (requestingActor.assignedSchools || []).some(
           (assignedSchoolId) => String(assignedSchoolId) === targetSchoolId
@@ -107,10 +107,14 @@ export const authorizeScope = async (request, response, nextFunction) => {
           });
           return sendError(response, 403, 'Access denied. This school is not in your supervisory assignment list.');
         }
-        return nextFunction();
+        await logScopeViolation(request, requestingActor, 'SUPERVISOR_SCHOOL_MUTATION_BLOCKED', {
+          attemptedSchoolId: targetSchoolId,
+          assignedSchools: (requestingActor.assignedSchools || []).map(String),
+        });
+        return sendError(response, 403, 'Access denied. Supervisors do not have authority to modify school records.');
       }
 
-      // HM can only update their own school record
+      // HM can only update timings for their own assigned school record; general school mutation is blocked
       if (requestingActor.role === ROLES.HM) {
         if (!requestingActor.schoolId || String(requestingActor.schoolId) !== targetSchoolId) {
           await logScopeViolation(request, requestingActor, 'HM_CROSS_SCHOOL_MUTATION_VIOLATION', {
@@ -119,6 +123,20 @@ export const authorizeScope = async (request, response, nextFunction) => {
           });
           return sendError(response, 403, 'Access denied. You can only update your own school\'s record.');
         }
+
+        // General school mutation (/:id) is restricted to Town Admin; HM only authorized for /:id/timings
+        if (request.route?.path === '/:id') {
+          await logScopeViolation(request, requestingActor, 'HM_GENERAL_SCHOOL_MUTATION_BLOCKED', {
+            attemptedSchoolId: targetSchoolId,
+            actorSchoolId: String(requestingActor.schoolId || 'none'),
+          });
+          return sendError(
+            response,
+            403,
+            'Access denied. Head Masters cannot modify general municipal school registration or identity. Only attendance windows may be adjusted via /timings.'
+          );
+        }
+
         return nextFunction();
       }
 

@@ -23,6 +23,7 @@ import {
   PERMISSIONS,
   ROLE_DEFAULT_PERMISSIONS,
   ROLE_PERMISSION_CEILING,
+  validatePermissionCeiling,
   getEffectivePermissions,
 } from '../src/config/permissions.js';
 import {
@@ -33,7 +34,10 @@ import {
 import {
   validateAndNormalizeTimings,
   handleUpdateSchoolTimings,
+  handleCreateSchool,
+  handleUpdateSchool,
 } from '../src/controllers/schoolController.js';
+import { authorizeScope } from '../src/middlewares/authorizeScope.js';
 import {
   getKarachiTimeString,
   getKarachiDateString,
@@ -78,9 +82,17 @@ const mockAuditLogsDb = [];
 School.findById = (id) => {
   const idStr = String(id);
   const found = mockSchoolsDb.get(idStr);
-  if (!found) return Promise.resolve(null);
+  if (!found) {
+    const emptyChain = {
+      select: () => emptyChain,
+      lean: () => Promise.resolve(null),
+      then: (fn) => Promise.resolve(null).then(fn),
+      catch: (fn) => Promise.resolve(null).catch(fn),
+    };
+    return emptyChain;
+  }
 
-  // Return a document-like object with save()
+  // Return a document-like object with save() and chainable select/lean
   const doc = {
     ...JSON.parse(JSON.stringify(found)),
     save: async function () {
@@ -88,7 +100,15 @@ School.findById = (id) => {
       return this;
     },
   };
-  return Promise.resolve(doc);
+
+  const chain = {
+    ...doc,
+    select: () => chain,
+    lean: () => Promise.resolve(JSON.parse(JSON.stringify(found))),
+    then: (fn) => Promise.resolve(doc).then(fn),
+    catch: (fn) => Promise.resolve(doc).catch(fn),
+  };
+  return chain;
 };
 
 AuditLog.create = async (auditEntry) => {
@@ -691,6 +711,214 @@ async function runTestSuite() {
     assert(school.name === 'Baba-e-Urdu Government Boys Secondary School', 'Test 48: School name preserved');
     assert(school.emisCode === '408010001', 'Test 49: EMIS code preserved');
     assert(school.status === 'ACTIVE', 'Test 50: Lifecycle status preserved');
+  }
+
+  // ─── 12. HM & SUPERVISOR SCHOOL MUTATION PROHIBITION (Priority 1) ───────────
+  console.log('\n--- 12. HM & Supervisor School Mutation Prohibition & Ceilings ---');
+  {
+    // Ceilings Verification
+    assert(
+      ROLE_PERMISSION_CEILING[ROLES.HM].includes(PERMISSIONS.SCHOOLS_CREATE),
+      'Test 51: ROLE_PERMISSION_CEILING[ROLES.HM] contains SCHOOLS_CREATE (strictly forbidden)'
+    );
+    assert(
+      ROLE_PERMISSION_CEILING[ROLES.HM].includes(PERMISSIONS.SCHOOLS_UPDATE),
+      'Test 52: ROLE_PERMISSION_CEILING[ROLES.HM] contains SCHOOLS_UPDATE (strictly forbidden)'
+    );
+
+    const ceilingCheckCreate = validatePermissionCeiling(ROLES.HM, [PERMISSIONS.SCHOOLS_CREATE]);
+    assert(
+      ceilingCheckCreate.valid === false && ceilingCheckCreate.forbiddenPermissions.includes(PERMISSIONS.SCHOOLS_CREATE),
+      'Test 53: validatePermissionCeiling flags SCHOOLS_CREATE as illegal for HM'
+    );
+
+    const ceilingCheckUpdate = validatePermissionCeiling(ROLES.HM, [PERMISSIONS.SCHOOLS_UPDATE]);
+    assert(
+      ceilingCheckUpdate.valid === false && ceilingCheckUpdate.forbiddenPermissions.includes(PERMISSIONS.SCHOOLS_UPDATE),
+      'Test 54: validatePermissionCeiling flags SCHOOLS_UPDATE as illegal for HM'
+    );
+
+    // Stripping via getEffectivePermissions
+    const effectivePerms = getEffectivePermissions({
+      role: ROLES.HM,
+      customPermissions: [
+        PERMISSIONS.SCHOOLS_CREATE,
+        PERMISSIONS.SCHOOLS_UPDATE,
+        PERMISSIONS.SCHOOLS_TIMINGS_UPDATE,
+      ],
+    });
+    assert(
+      !effectivePerms.includes(PERMISSIONS.SCHOOLS_CREATE),
+      'Test 55: getEffectivePermissions strips SCHOOLS_CREATE ceiling violation'
+    );
+    assert(
+      !effectivePerms.includes(PERMISSIONS.SCHOOLS_UPDATE),
+      'Test 56: getEffectivePermissions strips SCHOOLS_UPDATE ceiling violation'
+    );
+    assert(
+      effectivePerms.includes(PERMISSIONS.SCHOOLS_TIMINGS_UPDATE),
+      'Test 57: getEffectivePermissions retains legitimate SCHOOLS_TIMINGS_UPDATE'
+    );
+
+    // Controller Direct Invocation Rejections (Defense-in-Depth)
+    const resHmCreate = createMockRes();
+    await handleCreateSchool(
+      { user: { role: ROLES.HM, schoolId: schoolA_Id }, body: { name: 'Unauthorized HM School' } },
+      resHmCreate
+    );
+    assert(resHmCreate.statusCode === 403, 'Test 58: handleCreateSchool rejects HM direct call with 403');
+
+    const resSupervisorCreate = createMockRes();
+    await handleCreateSchool(
+      { user: { role: ROLES.SUPERVISOR, assignedSchools: [schoolA_Id] }, body: { name: 'Unauthorized Supervisor School' } },
+      resSupervisorCreate
+    );
+    assert(resSupervisorCreate.statusCode === 403, 'Test 59: handleCreateSchool rejects Supervisor direct call with 403');
+
+    const resHmUpdate = createMockRes();
+    await handleUpdateSchool(
+      {
+        user: { role: ROLES.HM, schoolId: schoolA_Id },
+        params: { id: schoolA_Id },
+        body: { name: 'HM Tampered Name' },
+      },
+      resHmUpdate
+    );
+    assert(resHmUpdate.statusCode === 403, 'Test 60: handleUpdateSchool rejects HM direct call with 403');
+
+    const resSupervisorUpdate = createMockRes();
+    await handleUpdateSchool(
+      {
+        user: { role: ROLES.SUPERVISOR, assignedSchools: [schoolA_Id] },
+        params: { id: schoolA_Id },
+        body: { name: 'Supervisor Tampered Name' },
+      },
+      resSupervisorUpdate
+    );
+    assert(resSupervisorUpdate.statusCode === 403, 'Test 61: handleUpdateSchool rejects Supervisor direct call with 403');
+
+    // authorizeScope Route Differentiation & Jurisdictional Enforcement
+    // HM attempting general mutation on own school: blocked by authorizeScope
+    let nextCalledHmGeneral = false;
+    const resScopeHmGeneral = createMockRes();
+    await authorizeScope(
+      {
+        method: 'PATCH',
+        baseUrl: '/api/v1/schools',
+        originalUrl: `/api/v1/schools/${schoolA_Id}`,
+        params: { id: schoolA_Id },
+        route: { path: '/:id' },
+        user: { _id: 'hm_user_1', role: ROLES.HM, schoolId: schoolA_Id },
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      resScopeHmGeneral,
+      () => { nextCalledHmGeneral = true; }
+    );
+    assert(nextCalledHmGeneral === false && resScopeHmGeneral.statusCode === 403, 'Test 62: authorizeScope blocks HM on general PATCH /:id (403)');
+    assert(
+      resScopeHmGeneral.body.message.includes('Head Masters cannot modify general municipal school registration'),
+      'Test 63: Returns clear message that HM cannot modify school identity'
+    );
+
+    // HM updating timings on own school: permitted by authorizeScope
+    let nextCalledHmTimings = false;
+    const resScopeHmTimings = createMockRes();
+    await authorizeScope(
+      {
+        method: 'PATCH',
+        baseUrl: '/api/v1/schools',
+        originalUrl: `/api/v1/schools/${schoolA_Id}/timings`,
+        params: { id: schoolA_Id },
+        route: { path: '/:id/timings' },
+        user: { _id: 'hm_user_1', role: ROLES.HM, schoolId: schoolA_Id },
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      resScopeHmTimings,
+      () => { nextCalledHmTimings = true; }
+    );
+    assert(nextCalledHmTimings === true, 'Test 64: authorizeScope permits HM on PATCH /:id/timings for own school');
+
+    // HM updating timings on another school (BOLA): blocked by authorizeScope
+    let nextCalledHmBola = false;
+    const resScopeHmBola = createMockRes();
+    await authorizeScope(
+      {
+        method: 'PATCH',
+        baseUrl: '/api/v1/schools',
+        originalUrl: `/api/v1/schools/${schoolB_Id}/timings`,
+        params: { id: schoolB_Id },
+        route: { path: '/:id/timings' },
+        user: { _id: 'hm_user_1', role: ROLES.HM, schoolId: schoolA_Id },
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      resScopeHmBola,
+      () => { nextCalledHmBola = true; }
+    );
+    assert(nextCalledHmBola === false && resScopeHmBola.statusCode === 403, 'Test 65: authorizeScope blocks cross-school timing modification by HM (BOLA 403)');
+    assert(
+      resScopeHmBola.body.message.includes("own school's record"),
+      'Test 66: Returns own school boundary error message'
+    );
+
+    // Supervisor attempting school mutation: blocked by authorizeScope
+    let nextCalledSupervisor = false;
+    const resScopeSupervisor = createMockRes();
+    await authorizeScope(
+      {
+        method: 'PATCH',
+        baseUrl: '/api/v1/schools',
+        originalUrl: `/api/v1/schools/${schoolA_Id}/timings`,
+        params: { id: schoolA_Id },
+        route: { path: '/:id/timings' },
+        user: { _id: 'supervisor_1', role: ROLES.SUPERVISOR, assignedSchools: [schoolA_Id] },
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      resScopeSupervisor,
+      () => { nextCalledSupervisor = true; }
+    );
+    assert(nextCalledSupervisor === false && resScopeSupervisor.statusCode === 403, 'Test 67: authorizeScope blocks Supervisor school mutation (403)');
+  }
+
+  // ─── 13. AUDIT PROVENANCE & IMMUTABLE HISTORY RECONSTRUCTION (Priority 2) ──
+  console.log('\n--- 13. Audit Provenance Reconstruction & Immutability ---');
+  {
+    // Query audit logs recorded for schoolA_Id
+    const schoolAAuditLogs = mockAuditLogsDb.filter(
+      (log) => String(log.targetId) === String(schoolA_Id) || String(log.schoolId) === String(schoolA_Id)
+    );
+
+    assert(schoolAAuditLogs.length >= 2, 'Test 68: School A has complete audit history trail recorded');
+
+    // Chronological reconstruction of provenance:
+    // Event 1: Admin timing configuration
+    const adminConfigLog = schoolAAuditLogs.find((l) => l.action === 'SCHOOL_TIMINGS_UPDATED');
+    assert(adminConfigLog !== undefined, 'Test 69: Admin initial timing update event is present');
+    assert(adminConfigLog.actorRole === ROLES.ADMIN, 'Test 70: Admin action correctly attributes actorRole ADMIN');
+    assert(adminConfigLog.createdAt instanceof Date, 'Test 71: Admin action has immutable server timestamp');
+    assert(adminConfigLog.newState?.timings?.regular?.startTime === '08:00', 'Test 72: Admin timing state captured in audit snapshot');
+
+    // Event 2: HM seasonal adjustment with justification
+    const hmAdjustmentLog = schoolAAuditLogs.find((l) => l.action === 'HM_SCHOOL_ATTENDANCE_WINDOW_UPDATED');
+    assert(hmAdjustmentLog !== undefined, 'Test 73: HM seasonal adjustment event is present');
+    assert(hmAdjustmentLog.actorRole === ROLES.HM, 'Test 74: HM action correctly attributes actorRole HM');
+    assert(hmAdjustmentLog.reason === 'Winter fog delay approved by Town Education Office directive', 'Test 75: Mandatory reason preserved in audit');
+    assert(hmAdjustmentLog.previousState?.timings?.regular?.startTime === '08:00', 'Test 76: Previous state preserved in audit snapshot');
+    assert(hmAdjustmentLog.newState?.timings?.regular?.startTime === '08:15', 'Test 77: New state preserved in audit snapshot');
+    assert(hmAdjustmentLog.result === 'SUCCESS', 'Test 78: Audit result records SUCCESS');
+
+    // Immutability: Verify rejected calls did NOT mutate school record
+    // In Test 18-20, an HM change with reason < 5 chars was rejected.
+    // In Test 29, an invalid schedule (window inverted) was rejected.
+    // Ensure schoolA timings reflect only successful updates (08:00 from Test 26)
+    const storedSchoolA = mockSchoolsDb.get(schoolA_Id);
+    assert(
+      storedSchoolA.timings.regular.startTime === '08:00',
+      'Test 79: Stored school reflects only successful mutation (no partial mutation from failed requests)'
+    );
   }
 
   console.log(`\n🎉 ALL ${passedTests}/${totalTests} SCHOOL ATTENDANCE WINDOW TESTS PASSED SUCCESSFULLY!`);
