@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LeaveRequest Model
  * Education Department Liaquatabad Town Centre (DMC)
  *
@@ -49,6 +49,11 @@ const LeaveRequestSchema = new mongoose.Schema({
   rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   rejectedAt: { type: Date },
   decisionReason: { type: String, trim: true },
+  // Two-Tier Earned Leave (EL) Forwarding & Endorsement Fields
+  forwardedByHm:        { type: Boolean, default: false, index: true },
+  hmForwardedBy:        { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  hmForwardedAt:        { type: Date },
+  hmRecommendationNote: { type: String, trim: true },
   notificationDispatched: {
     submissionNotification:   { type: Boolean, default: false },
     decisionNotificationSent: { type: Boolean, default: false },

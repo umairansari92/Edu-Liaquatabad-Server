@@ -19,6 +19,7 @@ import {
   handleGetPendingLeaveRequests,
   handleApproveLeaveRequest,
   handleRejectLeaveRequest,
+  handleForwardLeaveRequest,
   handleHmInitiateLeaveOrAbsent,
   handleGetSchoolLeaveSummary,
   handleLateCorrectionLeaveRequest,
@@ -70,6 +71,13 @@ leaveRouter.post(
   '/:id/reject',
   authorizePermissions(PERMISSIONS.LEAVE_APPROVE_CL),
   handleRejectLeaveRequest
+);
+
+// ── HM/Approver: Recommend & Forward EL request to Town Office ────────────────
+leaveRouter.post(
+  '/:id/forward',
+  authorizePermissions(PERMISSIONS.LEAVE_APPROVE_CL),
+  handleForwardLeaveRequest
 );
 
 // ── Approver: Late correction on superseded/rejected leave request ──────────

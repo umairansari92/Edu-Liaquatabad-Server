@@ -88,7 +88,7 @@ export const generateLeaveRequestFingerprint = (staffUserId, leaveType, startDat
   return crypto.createHash('sha256').update(fingerprintInput).digest('hex');
 };
 
-export const resolveLeaveApprovalAuthority = (requestingActor, leaveRecord) => {
+export const resolveLeaveApprovalAuthority = (requestingActor, leaveRecord, actionType = 'APPROVE') => {
   const actorRole = requestingActor.role;
   const actorSchoolId = String(requestingActor.schoolId || '');
   const leaveSchoolId = String(leaveRecord.schoolId || '');
@@ -97,7 +97,7 @@ export const resolveLeaveApprovalAuthority = (requestingActor, leaveRecord) => {
     ? String(leaveRecord.staffUserId._id || leaveRecord.staffUserId)
     : null;
 
-  // Self-approval is strictly prohibited across all roles
+  // Self-approval or self-rejection is strictly prohibited across all roles
   if (
     requestingActor._id &&
     leaveStaffUserId &&
@@ -113,6 +113,11 @@ export const resolveLeaveApprovalAuthority = (requestingActor, leaveRecord) => {
 
   if (leaveRecord.leaveType === LEAVE_TYPE.EARNED_LEAVE) {
     if (actorRole === ROLES.ADMIN) return { authorized: true };
+    // HM may reject an EL request at the school gate before forwarding if staff cannot be spared
+    if (actionType === 'REJECT' && actorRole === ROLES.HM) {
+      if (actorSchoolId && actorSchoolId === leaveSchoolId) return { authorized: true };
+      return { authorized: false, reason: 'HM can only reject EL for staff in their assigned school.' };
+    }
     return { authorized: false, reason: 'EL approval requires Admin-level (or higher) authority. HM and Supervisor cannot approve EL.' };
   }
 
@@ -137,6 +142,42 @@ export const resolveLeaveApprovalAuthority = (requestingActor, leaveRecord) => {
   }
 
   return { authorized: false, reason: 'Unknown leave type.' };
+};
+
+export const resolveLeaveForwardAuthority = (requestingActor, leaveRecord) => {
+  const actorRole = requestingActor.role;
+  const actorSchoolId = String(requestingActor.schoolId || '');
+  const leaveSchoolId = String(leaveRecord.schoolId || '');
+  const leaveStaffUserId = leaveRecord.staffUserId
+    ? String(leaveRecord.staffUserId._id || leaveRecord.staffUserId)
+    : null;
+
+  // Self-forwarding is strictly prohibited
+  if (
+    requestingActor._id &&
+    leaveStaffUserId &&
+    String(requestingActor._id) === leaveStaffUserId
+  ) {
+    return {
+      authorized: false,
+      reason: 'Self-forwarding of leave is strictly prohibited. An authorized Head Master must recommend and forward.',
+    };
+  }
+
+  if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(actorRole)) return { authorized: true };
+
+  if (actorRole === ROLES.HM) {
+    if (actorSchoolId && actorSchoolId === leaveSchoolId) return { authorized: true };
+    return { authorized: false, reason: 'HM can only recommend and forward EL for staff in their assigned school.' };
+  }
+
+  if (actorRole === ROLES.SUPERVISOR) {
+    const actorAssignedSchools = (requestingActor.assignedSchools || []).map(String);
+    if (actorAssignedSchools.includes(leaveSchoolId)) return { authorized: true };
+    return { authorized: false, reason: 'Supervisor can only forward EL for staff in their assigned school cluster.' };
+  }
+
+  return { authorized: false, reason: `${actorRole} does not have authority to recommend or forward Earned Leave.` };
 };
 
 export const performAnnualClReset = async (targetYear) => {

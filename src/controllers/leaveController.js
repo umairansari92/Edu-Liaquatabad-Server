@@ -40,6 +40,7 @@ import {
   getRemainingClBalance,
   generateLeaveRequestFingerprint,
   resolveLeaveApprovalAuthority,
+  resolveLeaveForwardAuthority,
 } from '../services/leaveService.js';
 import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
 import logger from '../../config/logger.js';
@@ -132,8 +133,17 @@ export const handleSubmitLeaveRequest = async (request, response) => {
 
   const leaveYear = getPktYearFromDate(startDate);
 
-  // CL balance check
+  // CL balance and consecutive days checks
   if (leaveType === LEAVE_TYPE.CASUAL_LEAVE) {
+    if (durationDays > CL_POLICY.MAX_CONSECUTIVE_DAYS) {
+      return response.status(400).json({
+        success: false,
+        message: `Casual Leave (CL) cannot exceed ${CL_POLICY.MAX_CONSECUTIVE_DAYS} consecutive calendar days per application under municipal regulations. For leaves exceeding 3 days, please apply for Earned Leave (EL).`,
+        requestedDays: durationDays,
+        maxAllowedDays: CL_POLICY.MAX_CONSECUTIVE_DAYS,
+      });
+    }
+
     const remainingBalance = await getRemainingClBalance(requestingActor._id, leaveYear);
     if (durationDays > remainingBalance) {
       return response.status(400).json({
@@ -238,14 +248,15 @@ export const handleSubmitLeaveRequest = async (request, response) => {
     success: true,
     message: `${leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'Casual Leave' : 'Earned Leave'} request submitted successfully. Pending approval.`,
     leaveRequest: {
-      _id:          newLeaveRequest._id,
-      leaveType:    newLeaveRequest.leaveType,
-      startDate:    startDateString,
-      endDate:      endDateString,
-      durationDays: newLeaveRequest.durationDays,
-      status:       newLeaveRequest.status,
-      source:       newLeaveRequest.source,
-      submittedAt:  newLeaveRequest.submittedAt,
+      _id:           newLeaveRequest._id,
+      leaveType:     newLeaveRequest.leaveType,
+      startDate:     startDateString,
+      endDate:       endDateString,
+      durationDays:  newLeaveRequest.durationDays,
+      status:        newLeaveRequest.status,
+      source:        newLeaveRequest.source,
+      submittedAt:   newLeaveRequest.submittedAt,
+      forwardedByHm: newLeaveRequest.forwardedByHm || false,
     },
   });
 };
@@ -344,6 +355,8 @@ export const handleGetPendingLeaveRequests = async (request, response) => {
   const [leaveRequests, totalCount] = await Promise.all([
     LeaveRequest.find(queryFilter)
       .populate('staffUserId', 'fullName designation role staffCategory')
+      .populate('hmForwardedBy', 'fullName designation role')
+      .populate('schoolId', 'name schoolCode')
       .sort({ submittedAt: 1 })
       .skip((pageNumber - 1) * limitNumber)
       .limit(limitNumber)
@@ -530,7 +543,7 @@ export const handleRejectLeaveRequest = async (request, response) => {
     });
   }
 
-  const authorityCheck = resolveLeaveApprovalAuthority(requestingActor, existingLeaveRequest);
+  const authorityCheck = resolveLeaveApprovalAuthority(requestingActor, existingLeaveRequest, 'REJECT');
   if (!authorityCheck.authorized) {
     await AuditLog.create({
       actorId:     requestingActor._id,
@@ -596,6 +609,138 @@ export const handleRejectLeaveRequest = async (request, response) => {
       rejectedBy:     requestingActor._id,
       rejectedAt:     nowTimestamp,
       decisionReason: rejectionReason.trim(),
+    },
+  });
+};
+
+// ─── POST /api/v1/leave/:id/forward ──────────────────────────────────────────
+/**
+ * Head Master (or Supervisor/Admin) reviews an Earned Leave (EL) request
+ * from school staff and forwards it with official recommendation remarks to Town Office.
+ */
+export const handleForwardLeaveRequest = async (request, response) => {
+  const requestingActor = request.user;
+  const { id: leaveRequestId } = request.params;
+  const recommendationNote = request.body.recommendationNote || request.body.reason || '';
+
+  if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
+    return response.status(400).json({ success: false, message: 'Invalid leave request ID.' });
+  }
+
+  const existingLeaveRequest = await LeaveRequest.findById(leaveRequestId).populate('staffUserId', 'fullName designation role schoolId');
+  if (!existingLeaveRequest) {
+    return response.status(404).json({ success: false, message: 'Leave request not found.' });
+  }
+
+  if (existingLeaveRequest.status !== LEAVE_STATUS.PENDING) {
+    return response.status(409).json({
+      success: false,
+      message: `Leave request is ${existingLeaveRequest.status}. Only PENDING requests can be forwarded.`,
+    });
+  }
+
+  if (existingLeaveRequest.leaveType !== LEAVE_TYPE.EARNED_LEAVE) {
+    return response.status(400).json({
+      success: false,
+      message: 'Only Earned Leave (EL) requests require Head Master recommendation and forwarding to Town Office. Casual Leave is approved directly by Head Master.',
+    });
+  }
+
+  if (existingLeaveRequest.forwardedByHm) {
+    return response.status(409).json({
+      success: false,
+      message: 'This Earned Leave request has already been recommended and forwarded to Town Office.',
+    });
+  }
+
+  const forwardAuthority = resolveLeaveForwardAuthority(requestingActor, existingLeaveRequest);
+  if (!forwardAuthority.authorized) {
+    await AuditLog.create({
+      actorId:     requestingActor._id,
+      actorRole:   requestingActor.role,
+      actorName:   requestingActor.fullName || '',
+      action:      'LEAVE_FORWARD_UNAUTHORIZED_ATTEMPT',
+      targetModel: 'LeaveRequest',
+      targetId:    existingLeaveRequest._id,
+      schoolId:    existingLeaveRequest.schoolId,
+      result:      'DENIED',
+      reason:      forwardAuthority.reason,
+      ipAddress:   request.ip || '',
+      userAgent:   request.get?.('user-agent') || '',
+    });
+    return response.status(403).json({ success: false, message: forwardAuthority.reason });
+  }
+
+  if (!recommendationNote.trim() || recommendationNote.trim().length < 3) {
+    return response.status(400).json({
+      success: false,
+      message: 'Recommendation note or institutional justification is required (minimum 3 characters).',
+    });
+  }
+
+  const previousStateSnapshot = existingLeaveRequest.toObject();
+  const nowTimestamp = new Date();
+
+  existingLeaveRequest.forwardedByHm        = true;
+  existingLeaveRequest.hmForwardedBy        = requestingActor._id;
+  existingLeaveRequest.hmForwardedAt        = nowTimestamp;
+  existingLeaveRequest.hmRecommendationNote = recommendationNote.trim();
+
+  await existingLeaveRequest.save();
+
+  // Audit Log
+  await emitLeaveAuditLog({
+    actorUser:          requestingActor,
+    action:             'LEAVE_REQUEST_FORWARDED_TO_OFFICE',
+    targetLeaveRequest: existingLeaveRequest,
+    previousState:      previousStateSnapshot,
+    newState: {
+      forwardedByHm:        true,
+      hmForwardedBy:        requestingActor._id,
+      hmForwardedAt:        nowTimestamp,
+      hmRecommendationNote: recommendationNote.trim(),
+    },
+    reason:  recommendationNote.trim(),
+    request,
+  });
+
+  // Notify Admins
+  try {
+    const adminUsers = await User.find({
+      role: { $in: [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN] },
+      status: 'ACTIVE',
+    }).select('_id').lean();
+
+    if (adminUsers.length > 0) {
+      await dispatchNotificationEvent({
+        eventType: 'APPROVAL_REQUIRED',
+        category:  'ATTENDANCE',
+        title:     `EL Forwarded for Sanction — ${existingLeaveRequest.staffUserId?.fullName || 'Teacher'}`,
+        message:   `HM ${requestingActor.fullName} has recommended and forwarded an Earned Leave request (${existingLeaveRequest.durationDays} day(s)) to Town Office for final sanction.`,
+        actionLink: '/approvals',
+        rawMetadata: {
+          leaveRequestId: String(existingLeaveRequest._id),
+          staffName:      existingLeaveRequest.staffUserId?.fullName || '',
+          hmName:         requestingActor.fullName,
+          durationDays:   existingLeaveRequest.durationDays,
+        },
+        recipientUserIds: adminUsers.map((u) => String(u._id)),
+      });
+    }
+  } catch (notifyErr) {
+    logger.warn(`[LeaveController] Notification dispatch failed on forward: ${notifyErr.message}`);
+  }
+
+  return response.status(200).json({
+    success: true,
+    message: 'Earned Leave request recommended and forwarded to Town Education Office successfully.',
+    leaveRequest: {
+      _id:                  existingLeaveRequest._id,
+      status:               existingLeaveRequest.status,
+      forwardedByHm:        existingLeaveRequest.forwardedByHm,
+      hmForwardedBy:        requestingActor._id,
+      hmForwardedAt:        nowTimestamp,
+      hmRecommendationNote: existingLeaveRequest.hmRecommendationNote,
     },
   });
 };

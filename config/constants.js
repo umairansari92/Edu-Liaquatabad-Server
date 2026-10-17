@@ -286,6 +286,7 @@ export const STAFF_ATTENDANCE_STATUS = Object.freeze({
 // ─── CL Annual Policy (Owner-Confirmed — DO NOT CHANGE without explicit owner authorization) ──
 export const CL_POLICY = Object.freeze({
   ANNUAL_ENTITLEMENT_DAYS: 24,   // Calendar year entitlement per staff member
+  MAX_CONSECUTIVE_DAYS:    3,    // Maximum consecutive calendar days per CL application (civil service regulation)
   CARRY_FORWARD_ALLOWED:   false, // Unused CL does NOT carry forward to next year
   RESET_MONTH:             1,     // January (1-indexed)
   RESET_DAY:               1,     // 1st of January
