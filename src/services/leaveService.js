@@ -111,6 +111,19 @@ export const resolveLeaveApprovalAuthority = (requestingActor, leaveRecord, acti
 
   if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actorRole)) return { authorized: true };
 
+  if (actorRole === ROLES.ADMIN) {
+    if (
+      requestingActor.townId &&
+      leaveRecord.townId &&
+      String(requestingActor.townId) !== String(leaveRecord.townId)
+    ) {
+      return {
+        authorized: false,
+        reason: 'Admin can only sanction leaves for schools within their assigned municipal town jurisdiction.',
+      };
+    }
+  }
+
   if (leaveRecord.leaveType === LEAVE_TYPE.EARNED_LEAVE) {
     if (actorRole === ROLES.ADMIN) return { authorized: true };
     // HM may reject an EL request at the school gate before forwarding if staff cannot be spared
@@ -164,7 +177,21 @@ export const resolveLeaveForwardAuthority = (requestingActor, leaveRecord) => {
     };
   }
 
-  if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(actorRole)) return { authorized: true };
+  if ([ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actorRole)) return { authorized: true };
+
+  if (actorRole === ROLES.ADMIN) {
+    if (
+      requestingActor.townId &&
+      leaveRecord.townId &&
+      String(requestingActor.townId) !== String(leaveRecord.townId)
+    ) {
+      return {
+        authorized: false,
+        reason: 'Admin can only forward leaves for schools within their assigned municipal town jurisdiction.',
+      };
+    }
+    return { authorized: true };
+  }
 
   if (actorRole === ROLES.HM) {
     if (actorSchoolId && actorSchoolId === leaveSchoolId) return { authorized: true };

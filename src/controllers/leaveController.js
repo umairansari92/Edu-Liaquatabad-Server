@@ -339,7 +339,10 @@ export const handleGetPendingLeaveRequests = async (request, response) => {
     }
     queryFilter.schoolId = requestingActor.schoolId;
   }
-  // ADMIN, SUPER_ADMIN, ROOT_ADMIN see all pending (or optionally filtered by townId)
+  // ADMIN sees pending requests for their assigned municipal town (if town-scoped)
+  if (requestingActor.role === ROLES.ADMIN && requestingActor.townId) {
+    queryFilter.townId = requestingActor.townId;
+  }
   // SUPERVISOR sees requests for assigned schools
   if (requestingActor.role === ROLES.SUPERVISOR) {
     const assignedSchoolIds = (requestingActor.assignedSchools || []).map(String);
@@ -439,8 +442,17 @@ export const handleApproveLeaveRequest = async (request, response) => {
     });
   }
 
-  // CL balance re-validation at approval time (prevent double-deduction races)
+  // CL balance and consecutive day re-validation at approval time (prevent regulatory violations & double-deduction races)
   if (existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE) {
+    if (existingLeaveRequest.durationDays > CL_POLICY.MAX_CONSECUTIVE_DAYS) {
+      return response.status(400).json({
+        success: false,
+        message: `Cannot approve: Casual Leave (CL) cannot exceed ${CL_POLICY.MAX_CONSECUTIVE_DAYS} consecutive calendar days under municipal regulations. Please reject this request and advise the applicant to apply for Earned Leave (EL).`,
+        requestedDays: existingLeaveRequest.durationDays,
+        maxAllowedDays: CL_POLICY.MAX_CONSECUTIVE_DAYS,
+      });
+    }
+
     const remainingBalance = await getRemainingClBalance(
       existingLeaveRequest.staffUserId,
       existingLeaveRequest.leaveYear
