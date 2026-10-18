@@ -216,7 +216,7 @@ export const handleSubmitLeaveRequest = async (request, response) => {
         category:  'ATTENDANCE',
         title:     `${leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Request — ${requestingActor.fullName}`,
         message:   `${requestingActor.fullName} has submitted a ${leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'Casual Leave' : 'Earned Leave'} request for ${startDateString} to ${endDateString} (${durationDays} day(s)).`,
-        actionLink: '/leave/pending',
+        actionLink: '/dashboard?tab=leaves',
         rawMetadata: {
           staffId:    String(requestingActor._id),
           staffName:  requestingActor.fullName,
@@ -484,7 +484,7 @@ export const handleApproveLeaveRequest = async (request, response) => {
       category:  'ATTENDANCE',
       title:     `${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Approved`,
       message:   `Your ${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'Casual Leave' : 'Earned Leave'} request has been approved by ${requestingActor.fullName}.`,
-      actionLink: '/leave/my-requests',
+      actionLink: '/dashboard?tab=service',
       rawMetadata: {
         staffId:   String(existingLeaveRequest.staffUserId),
         staffName: requestingActor.fullName,
@@ -589,7 +589,7 @@ export const handleRejectLeaveRequest = async (request, response) => {
       category:  'ATTENDANCE',
       title:     `${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Rejected`,
       message:   `Your ${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'Casual Leave' : 'Earned Leave'} request has been rejected by ${requestingActor.fullName}. Reason: ${rejectionReason.trim()}`,
-      actionLink: '/leave/my-requests',
+      actionLink: '/dashboard?tab=service',
       rawMetadata: {
         staffId:    String(existingLeaveRequest.staffUserId),
         staffName:  requestingActor.fullName,
@@ -1150,7 +1150,7 @@ export const handleLateCorrectionLeaveRequest = async (request, response) => {
       category: 'ATTENDANCE',
       title: `${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Late Correction Approved`,
       message: `Your leave request for ${existingLeaveRequest.startDatePkt} has been corrected and approved by ${requestingActor.fullName}. Reason: ${correctionReason.trim()}`,
-      actionLink: '/leave/my-requests',
+      actionLink: '/dashboard?tab=service',
       rawMetadata: {
         staffId: String(existingLeaveRequest.staffUserId),
         staffName: requestingActor.fullName,
