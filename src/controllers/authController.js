@@ -1373,7 +1373,7 @@ export const handleRefreshToken = asyncHandler(async (request, response) => {
     title: 'Security Alert: Token Reuse Detected',
     message: `A replayed refresh token was detected from ${compromisedDevice}. For your safety, all active sessions on all devices have been terminated. Please sign in again.`,
     notificationType: 'SECURITY_ALERT',
-    actionLink: '/login',
+    actionLink: '/dashboard',
   });
 
   // If high-privilege account (roleLevel >= 80), notify all active Super Admins

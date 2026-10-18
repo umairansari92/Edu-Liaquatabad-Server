@@ -103,7 +103,13 @@ const UserSchema = new mongoose.Schema({
   // Operational Jurisdictional Scope (GLOBAL, TOWN, ASSIGNED_SCHOOLS, SCHOOL, CLASS_SECTION, SELF, CHILD)
   scope: {
     type: String,
-    enum: Object.values(SCOPES),
+    enum: [...new Set([...Object.values(SCOPES), 'ADMINISTRATIVE'])],
+    set: function (candidateScope) {
+      if (candidateScope === 'ADMINISTRATIVE') {
+        return [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(this?.role) ? SCOPES.GLOBAL : SCOPES.TOWN;
+      }
+      return candidateScope;
+    },
     required: true,
   },
 
