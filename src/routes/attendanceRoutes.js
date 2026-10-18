@@ -11,6 +11,7 @@ import {
   handleGetTeacherDailyAttendance,
   handleSaveTeacherDailyAttendance,
   handleGetTeacherSelfAttendance,
+  handleClearMissedAttendance,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -79,6 +80,14 @@ router.post(
   "/submit",
   authorizePermissions(PERMISSIONS.ATTENDANCE_MARK),
   handleSubmitAttendance
+);
+
+// ─── POST Clear Missed Attendance (HM / Admin Authorized Exception) ────────────
+// Head Master or authorized Administrator clears missed attendance for a past working day.
+router.post(
+  "/clear-missed",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
+  handleClearMissedAttendance
 );
 
 // ─── PATCH Verify Attendance Record ───────────────────────────────────────────

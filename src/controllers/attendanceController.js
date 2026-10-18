@@ -8,6 +8,8 @@ import AuditLog from "../models/AuditLog.js";
 import School from "../models/School.js";
 import User from "../models/User.js";
 import TeacherProfile from "../models/TeacherProfile.js";
+import HolidayCalendar from "../models/HolidayCalendar.js";
+import WeeklyOffPattern from "../models/WeeklyOffPattern.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
@@ -418,6 +420,21 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   todayEnd.setHours(23, 59, 59, 999);
   if (queryDate > todayEnd) return sendError(response, 400, "Attendance cannot be submitted for a future date.");
 
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+
+  if (queryDatePkt > todayPktDate) {
+    return sendError(response, 400, "Attendance cannot be submitted for a future date.");
+  }
+
+  if (queryDatePkt < todayPktDate && requestingActor.role === ROLES.TEACHER) {
+    return sendError(
+      response,
+      403,
+      "Past-date attendance submission is strictly closed for teachers. Contact your Head Master for authorized clearance."
+    );
+  }
+
   const school = await School.findById(section.schoolId).lean();
   if (!school) {
     return sendError(response, 404, "Section school entity not found in municipal registry.");
@@ -709,10 +726,16 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
   const section = await resolveTeacherSection(requestingActor, sectionId, response);
   if (!section) return;
 
+  const school = await School.findById(section.schoolId).lean();
+  const daysInMonth = new Date(parsedYear, parsedMonth, 0).getDate();
+  const monthStartStr = `${parsedYear}-${String(parsedMonth).padStart(2, "0")}-01`;
+  const monthEndStr = `${parsedYear}-${String(parsedMonth).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+  const todayPktDate = getKarachiDateString(new Date());
+
   const rangeStart = new Date(parsedYear, parsedMonth - 1, 1, 0, 0, 0, 0);
   const rangeEnd   = new Date(parsedYear, parsedMonth, 0, 23, 59, 59, 999);
 
-  const [attendanceRecords, studentProfiles] = await Promise.all([
+  const [attendanceRecords, studentProfiles, activeHolidays, activeWeeklyOffs] = await Promise.all([
     Attendance.find({
       schoolId:      section.schoolId,
       sectionId:     section._id,
@@ -727,64 +750,456 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       .populate("userId", "fullName _id")
       .sort({ grNumber: 1 })
       .lean(),
+    HolidayCalendar.find({
+      status: "ACTIVE",
+      startDate: { $lte: monthEndStr },
+      endDate: { $gte: monthStartStr },
+      $or: [
+        { scopeType: "TOWN", townId: school?.townId },
+        { scopeType: "SCHOOL", schoolId: section.schoolId },
+      ],
+    }).sort({ scopeType: -1 }).lean(),
+    WeeklyOffPattern.find({
+      status: "ACTIVE",
+      effectiveFrom: { $lte: rangeEnd },
+      $or: [
+        { effectiveTo: null },
+        { effectiveTo: { $gte: rangeStart } },
+      ],
+      $or: [
+        { scopeType: "SCHOOL", schoolId: section.schoolId },
+        { scopeType: "TOWN", townId: school?.townId },
+      ],
+    }).sort({ scopeType: -1 }).lean(),
   ]);
 
-  // Build { dateString → { userId → status } }
+  // Build { dateString → { userId → status } } & document lookup
+  const dateAttendanceDocMap = {};
   const dateStatusMap = {};
   const workingDays   = [];
 
   for (const rec of attendanceRecords) {
-    const dateStr = new Date(rec.date).toISOString().split("T")[0];
+    const dateStr = getKarachiDateString(new Date(rec.date));
     workingDays.push(dateStr);
+    dateAttendanceDocMap[dateStr] = rec;
     dateStatusMap[dateStr] = {};
     for (const entry of rec.records) {
       dateStatusMap[dateStr][String(entry.userId)] = entry.status;
     }
   }
 
-  const students = studentProfiles.map((profile) => {
-    const uidStr     = String(profile.userId?._id);
-    const attendance = {};
-    const totals     = { P: 0, A: 0, L: 0 };
+  // Construct official month calendar metadata for all 1..daysInMonth days
+  const calendarDays = [];
+  let totalWorkingDaysInMonth = 0;
+  let recordedWorkingDaysCount = 0;
+  let missedWorkingDaysCount = 0;
+  let totalSundaysCount = 0;
+  let totalHolidaysCount = 0;
 
-    for (const dateStr of workingDays) {
-      const status = dateStatusMap[dateStr]?.[uidStr] || null;
-      attendance[dateStr] = status;
-      if (status === "PRESENT")     totals.P++;
-      else if (status === "ABSENT") totals.A++;
-      else if (status === "LEAVE")  totals.L++;
+  const dayNamesShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dayNamesFull = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
+    const dateStr = `${parsedYear}-${String(parsedMonth).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+    const dayDate = new Date(`${dateStr}T12:00:00.000Z`);
+    const dayOfWeek = getKarachiDayOfWeek(dayDate);
+
+    const isToday = dateStr === todayPktDate;
+    const isFutureDate = dateStr > todayPktDate;
+    const isPastDate = dateStr < todayPktDate;
+
+    // Check holiday match
+    const matchingHoliday = activeHolidays.find((holiday) => holiday.startDate <= dateStr && holiday.endDate >= dateStr);
+
+    // Check weekly off match
+    const matchingWeeklyOff = activeWeeklyOffs.find((weeklyOff) => {
+      const effectiveFromStr = getKarachiDateString(weeklyOff.effectiveFrom);
+      const effectiveToStr = weeklyOff.effectiveTo ? getKarachiDateString(weeklyOff.effectiveTo) : null;
+      if (effectiveFromStr > dateStr) return false;
+      if (effectiveToStr && effectiveToStr < dateStr) return false;
+      return Array.isArray(weeklyOff.offDays) && weeklyOff.offDays.includes(dayOfWeek);
+    });
+
+    const isSunday = dayOfWeek === 0;
+    const isSaturday = dayOfWeek === 6;
+
+    let dayType = "WORKING_DAY";
+    let isClosed = false;
+    let closureLabel = "";
+    let status = "PENDING";
+
+    if (matchingHoliday) {
+      dayType = "HOLIDAY";
+      isClosed = true;
+      closureLabel = matchingHoliday.title || matchingHoliday.reason || "Public Holiday";
+      status = "HOLIDAY";
+      totalHolidaysCount++;
+    } else if (matchingWeeklyOff || isSunday) {
+      dayType = "WEEKLY_OFF";
+      isClosed = true;
+      closureLabel = matchingWeeklyOff?.reason || (isSunday ? "Sunday" : isSaturday ? "Saturday" : dayNamesFull[dayOfWeek]);
+      status = "WEEKLY_OFF";
+      if (isSunday) totalSundaysCount++;
+    } else {
+      totalWorkingDaysInMonth++;
+      const hasAttendance = Boolean(dateAttendanceDocMap[dateStr]);
+
+      if (hasAttendance) {
+        status = "ATTENDANCE_TAKEN";
+        recordedWorkingDaysCount++;
+      } else if (isFutureDate) {
+        status = "FUTURE_DATE";
+      } else if (isToday) {
+        status = "TODAY_PENDING";
+      } else {
+        status = "NOT_TAKEN";
+        closureLabel = "Attendance Not Taken";
+        missedWorkingDaysCount++;
+      }
     }
 
+    calendarDays.push({
+      date: dateStr,
+      dayNumber: dayNum,
+      dayOfWeek,
+      dayName: dayNamesShort[dayOfWeek],
+      dayNameFull: dayNamesFull[dayOfWeek],
+      dayType,
+      isClosed,
+      closureLabel,
+      isAttendanceTaken: Boolean(dateAttendanceDocMap[dateStr]),
+      isPastDate,
+      isToday,
+      isFutureDate,
+      status,
+      verificationStatus: dateAttendanceDocMap[dateStr]?.verificationStatus || null,
+      submittedAt: dateAttendanceDocMap[dateStr]?.updatedAt || null,
+    });
+  }
+
+  // Construct authoritative student list with daily statuses
+  const students = studentProfiles.map((profile, index) => {
+    const uidStr     = String(profile.userId?._id || profile.userId);
+    const attendance = {};
+    const dailyStatus = {};
+    const totals     = { P: 0, A: 0, L: 0 };
+
+    for (const calDay of calendarDays) {
+      const dateStr = calDay.date;
+      const statusValue = dateStatusMap[dateStr]?.[uidStr] || null;
+      attendance[dateStr] = statusValue;
+
+      if (statusValue === ATTENDANCE_STATUS.PRESENT)     totals.P++;
+      else if (statusValue === ATTENDANCE_STATUS.ABSENT) totals.A++;
+      else if (statusValue === ATTENDANCE_STATUS.LEAVE)  totals.L++;
+
+      dailyStatus[dateStr] = {
+        status: statusValue,
+        dayType: calDay.dayType,
+        dayStatus: calDay.status,
+        label: statusValue
+          ? (statusValue === "PRESENT" ? "P" : statusValue === "ABSENT" ? "A" : "L")
+          : (calDay.isClosed ? calDay.closureLabel : (calDay.status === "NOT_TAKEN" ? "Not Taken" : "—")),
+      };
+    }
+
+    const recordedDaysForStudent = recordedWorkingDaysCount;
+    const attendancePercentage = recordedDaysForStudent > 0
+      ? ((totals.P / recordedDaysForStudent) * 100).toFixed(1) + "%"
+      : "N/A";
+
     return {
-      userId:           profile.userId?._id,
+      srNo:             String(index + 1).padStart(2, "0"),
+      userId:           profile.userId?._id || profile.userId,
       fullName:         profile.userId?.fullName || "Student",
       grNumber:         profile.grNumber,
+      rollNumber:       profile.rollNumber || index + 1,
       globalStudentId:  profile.globalStudentId || `GR-${profile.grNumber}`,
       gender:           profile.gender || "UNSPECIFIED",
       attendance,
+      dailyStatus,
       totals,
-      workingDaysRecorded: workingDays.length,
-      attendancePercentage: workingDays.length > 0
-        ? ((totals.P / workingDays.length) * 100).toFixed(1) + "%"
-        : "N/A",
+      workingDaysRecorded: recordedDaysForStudent,
+      attendancePercentage,
     };
   });
 
-  // Class aggregate: Total Present / (Total Students × Working Days) × 100
+  // Class aggregate: Total Present / (Total Students × Recorded Working Days) × 100
   const totalPresent      = students.reduce((sum, s) => sum + s.totals.P, 0);
-  const classAggregatePct = students.length > 0 && workingDays.length > 0
-    ? ((totalPresent / (students.length * workingDays.length)) * 100).toFixed(1) + "%"
+  const classAggregatePct = students.length > 0 && recordedWorkingDaysCount > 0
+    ? ((totalPresent / (students.length * recordedWorkingDaysCount)) * 100).toFixed(1) + "%"
     : "N/A";
 
   return sendSuccess(response, 200, "Monthly attendance register retrieved.", {
-    section: { _id: section._id, name: section.name, class: section.classId, schoolId: section.schoolId },
-    month:            parsedMonth,
-    year:             parsedYear,
+    section: {
+      _id: section._id,
+      name: section.name,
+      class: section.classId,
+      schoolId: section.schoolId,
+    },
+    school: school ? {
+      _id: school._id,
+      name: school.name,
+      schoolCode: school.schoolCode,
+      emisCode: school.emisCode,
+      timings: school.timings,
+    } : null,
+    month:               parsedMonth,
+    year:                parsedYear,
+    daysInMonth,
+    calendarDays,
     workingDays,
-    totalWorkingDays: workingDays.length,
-    totalStudents:    students.length,
+    totalCalendarDays:   daysInMonth,
+    totalWorkingDays:    totalWorkingDaysInMonth,
+    recordedWorkingDays: recordedWorkingDaysCount,
+    missedWorkingDays:   missedWorkingDaysCount,
+    totalSundays:        totalSundaysCount,
+    totalHolidays:       totalHolidaysCount,
+    totalStudents:       students.length,
     classAggregatePct,
     students,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /attendance/clear-missed — HM / Admin Authorized Missed-Attendance Clearance
+//
+// Narrowly authorized exception workflow allowing HM or central Administrator
+// to clear missed attendance ("Attendance Not Taken") for an unrecorded past
+// working day with a mandatory recorded reason (>= 10 chars) and audit logging.
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleClearMissedAttendance = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const {
+    sectionId,
+    date,
+    absentStudentProfileIds = [],
+    leaveStudentProfileIds  = [],
+    records = [],
+    reason = "",
+  } = request.body;
+
+  // Strict role check: Teacher role is strictly blocked
+  const isAuthorizedRole = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
+  if (!isAuthorizedRole) {
+    return sendError(response, 403, "Access denied. Only Head Masters and authorized Administrators can clear missed attendance.");
+  }
+
+  if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, "A valid sectionId is required.");
+  }
+
+  if (!reason || typeof reason !== "string" || reason.trim().length < 10) {
+    return sendError(
+      response,
+      400,
+      "A mandatory justification reason (minimum 10 characters) is required to clear missed attendance."
+    );
+  }
+
+  const section = await resolveTeacherSection(requestingActor, sectionId, response);
+  if (!section) return;
+
+  const queryDate = date ? new Date(date) : new Date();
+  if (isNaN(queryDate.getTime())) return sendError(response, 400, "Invalid date format.");
+
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+
+  if (queryDatePkt >= todayPktDate) {
+    return sendError(
+      response,
+      400,
+      "Missed-attendance clearance is strictly for past working days. For today, use the standard attendance submission workflow."
+    );
+  }
+
+  const school = await School.findById(section.schoolId).lean();
+  if (!school) {
+    return sendError(response, 404, "School entity not found in municipal registry.");
+  }
+
+  // Verify that the school was not officially closed on this date
+  const closureStatus = await checkIsSchoolClosed(school, queryDate);
+  if (closureStatus.isClosed) {
+    return sendError(
+      response,
+      400,
+      `Cannot clear attendance for an official non-working day or holiday: ${closureStatus.reason}`
+    );
+  }
+
+  const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
+  const dayEnd   = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
+
+  // Check if attendance already exists — missed clearance cannot overwrite existing records
+  const existingRecord = await Attendance.findOne({
+    schoolId: section.schoolId,
+    sectionId: section._id,
+    attendanceType: "STUDENT",
+    date: { $gte: dayStart, $lte: dayEnd },
+  }).lean();
+
+  if (existingRecord) {
+    return sendError(
+      response,
+      409,
+      "Attendance for this date has already been recorded. Missed-attendance clearance cannot overwrite existing records. Use official attendance correction."
+    );
+  }
+
+  // Format and validate exception lists
+  let effectiveAbsentIds = Array.isArray(absentStudentProfileIds) ? [...absentStudentProfileIds] : [];
+  let effectiveLeaveIds  = Array.isArray(leaveStudentProfileIds)  ? [...leaveStudentProfileIds]  : [];
+
+  if (effectiveAbsentIds.length === 0 && effectiveLeaveIds.length === 0 && Array.isArray(records) && records.length > 0) {
+    effectiveAbsentIds = records
+      .filter((rec) => rec.status === ATTENDANCE_STATUS.ABSENT || rec.currentStatus === ATTENDANCE_STATUS.ABSENT)
+      .map((rec) => rec.studentProfileId || rec.userId);
+    effectiveLeaveIds = records
+      .filter((rec) => rec.status === ATTENDANCE_STATUS.LEAVE || rec.currentStatus === ATTENDANCE_STATUS.LEAVE)
+      .map((rec) => rec.studentProfileId || rec.userId);
+  }
+
+  // Load authoritative roster — cross-section injection rejected
+  const authorizedStudents = await StudentProfile.find({
+    sectionId: section._id,
+    schoolId:  section.schoolId,
+    lifecycleStatus: STUDENT_STATUS.ACTIVE,
+  })
+    .populate("userId", "fullName _id")
+    .lean();
+
+  const authorizedProfileIds = new Set(authorizedStudents.map((sp) => String(sp._id)));
+  const userToProfileId = new Map(authorizedStudents.map((sp) => [
+    String(sp.userId?._id || sp.userId || ""),
+    String(sp._id),
+  ]));
+  const profileToUserId = Object.fromEntries(authorizedStudents.map((sp) => [
+    String(sp._id),
+    sp.userId?._id || sp.userId || sp._id,
+  ]));
+
+  const normalizedAbsentSet = new Set();
+  for (const id of effectiveAbsentIds) {
+    const sId = String(id);
+    if (authorizedProfileIds.has(sId)) normalizedAbsentSet.add(sId);
+    else if (userToProfileId.has(sId)) normalizedAbsentSet.add(userToProfileId.get(sId));
+    else return sendError(response, 400, `Student profile ${sId} does not belong to this section.`);
+  }
+
+  const normalizedLeaveSet = new Set();
+  for (const id of effectiveLeaveIds) {
+    const sId = String(id);
+    if (authorizedProfileIds.has(sId)) normalizedLeaveSet.add(sId);
+    else if (userToProfileId.has(sId)) normalizedLeaveSet.add(userToProfileId.get(sId));
+    else return sendError(response, 400, `Student profile ${sId} does not belong to this section.`);
+  }
+
+  // Check overlap
+  for (const absentId of normalizedAbsentSet) {
+    if (normalizedLeaveSet.has(absentId)) {
+      return sendError(response, 400, "A student cannot be marked both Absent and Leave simultaneously.");
+    }
+  }
+
+  const remarksMap = new Map();
+  if (Array.isArray(records)) {
+    for (const r of records) {
+      const k = String(r.studentProfileId || r.userId || "");
+      if (k && r.remarks) remarksMap.set(k, String(r.remarks).trim());
+    }
+  }
+
+  const sanitizedRecords = authorizedStudents.map((studentProfile) => {
+    const pId = String(studentProfile._id);
+    const uId = String(studentProfile.userId?._id || profileToUserId[pId]);
+    let status = ATTENDANCE_STATUS.PRESENT;
+    if (normalizedAbsentSet.has(pId))      status = ATTENDANCE_STATUS.ABSENT;
+    else if (normalizedLeaveSet.has(pId))  status = ATTENDANCE_STATUS.LEAVE;
+    const studentRemark = remarksMap.get(pId) || remarksMap.get(uId) || "";
+    return {
+      userId:  profileToUserId[pId],
+      status,
+      remarks: studentRemark,
+    };
+  });
+
+  const actorId = requestingActor._id || requestingActor.userId;
+  const schoolId = String(section.schoolId);
+  const newHash = computeRecordsHash(sanitizedRecords);
+
+  const attendanceRecord = await Attendance.create({
+    schoolId,
+    sectionId: section._id,
+    attendanceType: "STUDENT",
+    date: dayStart,
+    records: sanitizedRecords,
+    entryMode: "MANUAL_PORTAL",
+    recordedBy: actorId,
+    verifiedBy: actorId,
+    verificationStatus: "VERIFIED",
+    contentHash: newHash,
+    lastRollupAt: new Date(),
+  });
+
+  await processAttendanceDelta({
+    schoolId,
+    sectionId: section._id,
+    classId: section.classId?._id || section.classId,
+    date: dayStart,
+    previousRecords: [],
+    newRecords: sanitizedRecords,
+  });
+
+  const presentCount = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.PRESENT).length;
+  const absentCount  = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.ABSENT).length;
+  const leaveCount   = sanitizedRecords.filter((r) => r.status === ATTENDANCE_STATUS.LEAVE).length;
+
+  await AuditLog.create({
+    actorId,
+    actorRole:        requestingActor.role,
+    actorDesignation: requestingActor.designation || "",
+    actorName:        requestingActor.fullName || "",
+    action:           "ATTENDANCE_MISSED_DAY_CLEARED",
+    targetModel:      "Attendance",
+    targetId:         attendanceRecord._id,
+    targetName:       `${section.classId?.name || "Class"} — ${section.name}`,
+    schoolId,
+    previousState:    null,
+    newState: {
+      sectionId:         String(section._id),
+      date:              dayStart.toISOString().split("T")[0],
+      totalRecords:      sanitizedRecords.length,
+      presentCount,
+      absentCount,
+      leaveCount,
+      isMissedClearance: true,
+      reason:            reason.trim(),
+    },
+    result:    "SUCCESS",
+    reason:    `HM cleared missed attendance for past date (${queryDatePkt}): ${reason.trim()}`,
+    ipAddress: request.ip || "",
+    userAgent: request.headers?.["user-agent"] || "",
+    requestId: request.headers?.["x-request-id"] || "",
+  });
+
+  return sendSuccess(response, 201, "Missed attendance cleared and verified successfully.", {
+    attendanceId:       attendanceRecord._id,
+    section:            { _id: section._id, name: section.name, class: section.classId },
+    date:               dayStart.toISOString().split("T")[0],
+    totalRecords:       sanitizedRecords.length,
+    presentCount,
+    absentCount,
+    leaveCount,
+    verificationStatus: "VERIFIED",
+    submittedAt:        attendanceRecord.createdAt,
+    clearedBy: {
+      actorId,
+      name:   requestingActor.fullName,
+      role:   requestingActor.role,
+      reason: reason.trim(),
+    },
   });
 });
 
