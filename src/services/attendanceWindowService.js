@@ -121,7 +121,7 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
       { scopeType: 'TOWN', townId: school.townId },
       { scopeType: 'SCHOOL', schoolId: school._id },
     ],
-  }).sort({ scopeType: -1 }).lean(); // SCHOOL scope matches first if both exist
+  }).sort({ scopeType: 1 }).lean(); // SCHOOL scope ('S') matches before TOWN ('T') if both exist
 
   if (activeHoliday) {
     const result = {
@@ -135,6 +135,7 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
   }
 
   // ── Stage 2: Check WeeklyOffPattern (Recurring weekend rules) ───────────────
+  // Precedence: SCHOOL-scoped pattern ('S') overrides TOWN-scoped pattern ('T') via .sort({ scopeType: 1 })
   const activeWeeklyOff = await WeeklyOffPattern.findOne({
     status: 'ACTIVE',
     effectiveFrom: { $lte: date },
@@ -152,28 +153,34 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
         ],
       },
     ],
-    offDays: targetDayOfWeek,
-  }).sort({ scopeType: -1 }).lean();
+  }).sort({ scopeType: 1 }).lean();
 
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   if (activeWeeklyOff) {
-    const result = {
-      isClosed: true,
-      type: 'WEEKLY_OFF',
-      reason: `Official Weekly Off Day: ${dayNames[targetDayOfWeek]} (${activeWeeklyOff.reason})`,
-      weeklyOff: activeWeeklyOff,
-    };
+    if (Array.isArray(activeWeeklyOff.offDays) && activeWeeklyOff.offDays.includes(targetDayOfWeek)) {
+      const result = {
+        isClosed: true,
+        type: 'WEEKLY_OFF',
+        reason: `Official Weekly Off Day: ${dayNames[targetDayOfWeek]} (${activeWeeklyOff.reason})`,
+        weeklyOff: activeWeeklyOff,
+      };
+      cache.set(cacheKey, result, 60);
+      return result;
+    }
+    // Pattern exists but does NOT include targetDayOfWeek (e.g. Admin explicitly declared Saturday a working day)
+    const result = { isClosed: false };
     cache.set(cacheKey, result, 60);
     return result;
   }
 
-  // Statutory baseline fallback: Sunday (0) is always a non-working day unless specifically overridden
-  if (targetDayOfWeek === 0) {
+  // Statutory baseline fallback (when NO database pattern exists):
+  // Under Sindh Government Notification (5-day week), Saturday (6) and Sunday (0) are official weekly off days
+  if (targetDayOfWeek === 0 || targetDayOfWeek === 6) {
     const result = {
       isClosed: true,
       type: 'WEEKLY_OFF',
-      reason: 'Official Weekly Off Day: Sunday (Statutory Government Weekly Off)',
+      reason: `Official Weekly Off Day: ${dayNames[targetDayOfWeek]} (Statutory Sindh Government 2-Day Weekend)`,
     };
     cache.set(cacheKey, result, 60);
     return result;

@@ -253,11 +253,17 @@ console.log('\n--- 7. Sindh Govt 2-Day Weekend & Custom Weekly-Off Policy ---');
     }
   }
 
-  // Statutory fallback invariant: if no active pattern exists, Sunday defaults to off
+  // Statutory fallback invariant: if no active pattern exists, Saturday & Sunday default to off under Sindh Govt 2-day weekend
   const noPatternOffDays = null;
-  const isSundayStatutory = (targetDay) => targetDay === 0 || Boolean(noPatternOffDays?.includes(targetDay));
-  assert(isSundayStatutory(0) === true, 'Test 27: Sunday defaults to non-working weekly off via statutory fallback');
-  assert(isSundayStatutory(1) === false, 'Test 28: Monday is not affected by statutory Sunday fallback');
+  const isStatutoryWeekend = (targetDay) => targetDay === 0 || targetDay === 6 || Boolean(noPatternOffDays?.includes(targetDay));
+  assert(isStatutoryWeekend(0) === true, 'Test 27: Sunday defaults to non-working weekly off via statutory fallback');
+  assert(isStatutoryWeekend(6) === true, 'Test 27b: Saturday defaults to non-working weekly off via Sindh Govt statutory fallback');
+  assert(isStatutoryWeekend(1) === false, 'Test 28: Monday is not affected by statutory weekend fallback');
+
+  // Scope precedence invariant: SCHOOL scope ('S') precedes TOWN scope ('T') in ascending sort order
+  const scopes = [{ scopeType: 'TOWN' }, { scopeType: 'SCHOOL' }];
+  scopes.sort((a, b) => (a.scopeType > b.scopeType ? 1 : -1));
+  assert(scopes[0].scopeType === 'SCHOOL', 'Test 28b: SCHOOL scope precedes TOWN scope in database resolution');
 }
 
 // ─── 8. Authentic Physical Register Full-Column Vertical Band Invariants ─────

@@ -791,10 +791,10 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       startDate: { $lte: monthEndStr },
       endDate: { $gte: monthStartStr },
       $or: [
-        { scopeType: "TOWN", townId: school?.townId },
         { scopeType: "SCHOOL", schoolId: section.schoolId },
+        { scopeType: "TOWN", townId: school?.townId },
       ],
-    }).sort({ scopeType: -1 }).lean(),
+    }).sort({ scopeType: 1 }).lean(), // SCHOOL scope ('S') matches before TOWN ('T')
     WeeklyOffPattern.find({
       status: "ACTIVE",
       effectiveFrom: { $lte: rangeEnd },
@@ -812,7 +812,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
           ],
         },
       ],
-    }).sort({ scopeType: -1 }).lean(),
+    }).sort({ scopeType: 1 }).lean(), // SCHOOL scope ('S') matches before TOWN ('T')
   ]);
 
   // Build { dateString → { userId → status } } & document lookup
@@ -853,18 +853,32 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
     // Check holiday match
     const matchingHoliday = activeHolidays.find((holiday) => holiday.startDate <= dateStr && holiday.endDate >= dateStr);
 
-    // Check weekly off match
+    // Check weekly off match (SCHOOL scope matches before TOWN because activeWeeklyOffs was sorted with scopeType: 1)
     const matchingWeeklyOff = activeWeeklyOffs.find((weeklyOff) => {
       const effectiveFromStr = getKarachiDateString(weeklyOff.effectiveFrom);
       const effectiveToStr = weeklyOff.effectiveTo ? getKarachiDateString(weeklyOff.effectiveTo) : null;
       if (effectiveFromStr > dateStr) return false;
       if (effectiveToStr && effectiveToStr < dateStr) return false;
-      return Array.isArray(weeklyOff.offDays) && weeklyOff.offDays.includes(dayOfWeek);
+      return true;
     });
 
     const isSunday = dayOfWeek === 0;
     const isSaturday = dayOfWeek === 6;
-    const isConfiguredWeeklyOff = Boolean(matchingWeeklyOff) || isSunday;
+
+    let isConfiguredWeeklyOff = false;
+    let matchingWeeklyOffForDay = null;
+
+    if (matchingWeeklyOff) {
+      if (Array.isArray(matchingWeeklyOff.offDays) && matchingWeeklyOff.offDays.includes(dayOfWeek)) {
+        isConfiguredWeeklyOff = true;
+        matchingWeeklyOffForDay = matchingWeeklyOff;
+      }
+    } else {
+      // Statutory Sindh Government fallback (5-day week): Saturday (6) and Sunday (0) are official off days
+      if (isSunday || isSaturday) {
+        isConfiguredWeeklyOff = true;
+      }
+    }
 
     let dayType = "WORKING_DAY";
     let isClosed = false;
@@ -890,7 +904,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       isClosed = true;
       isWeeklyOff = true;
       closureLabel = dayNamesFull[dayOfWeek];
-      closureReason = matchingWeeklyOff?.reason || `Official Weekly Off Day: ${dayNamesFull[dayOfWeek]}`;
+      closureReason = matchingWeeklyOffForDay?.reason || `Official Weekly Off Day: ${dayNamesFull[dayOfWeek]} (Statutory Sindh Weekend)`;
       status = "WEEKLY_OFF";
       if (isSunday) totalSundaysCount++;
     } else {
