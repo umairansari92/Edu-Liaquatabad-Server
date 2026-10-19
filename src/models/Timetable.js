@@ -98,6 +98,10 @@ const TimetableSchema = new mongoose.Schema({
     type: [PeriodSlotSchema],
     default: [],
   },
+  fridayPeriodSlots: {
+    type: [PeriodSlotSchema],
+    default: [],
+  },
   schedule: {
     type: [ScheduleEntrySchema],
     default: [],

@@ -1075,6 +1075,183 @@ async function executeTestSuite() {
     assert.strictEqual(res.body.message, 'Invalid school ID format.');
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // GROUP 7: Friday Slots, Weekly-Off Patterns & Multi-Schedule Synchronizations
+  // ───────────────────────────────────────────────────────────────────────────
+
+  await runAsyncTest('Test 36: manageTimetableSchema accepts valid fridayPeriodSlots and rejects overlapping Friday slots', () => {
+    const validPayload = {
+      schoolId: schoolA_Id.toString(),
+      academicYear: '2025-2026',
+      periodSlots: standardPeriodSlots,
+      fridayPeriodSlots: [
+        { periodNumber: 1, slotType: 'TEACHING', label: 'Friday Period 1', startTime: '07:30', endTime: '08:15' },
+        { periodNumber: 2, slotType: 'TEACHING', label: 'Friday Period 2', startTime: '08:15', endTime: '09:00' },
+        { periodNumber: 0, slotType: 'RECESS', label: 'Short Break', startTime: '09:00', endTime: '09:20' },
+        { periodNumber: 3, slotType: 'TEACHING', label: 'Friday Period 3', startTime: '09:20', endTime: '10:05' },
+        { periodNumber: 4, slotType: 'TEACHING', label: 'Friday Period 4', startTime: '10:05', endTime: '10:50' },
+        { periodNumber: 5, slotType: 'TEACHING', label: 'Friday Period 5', startTime: '10:50', endTime: '11:35' },
+      ],
+      schedule: [],
+    };
+    const validResult = manageTimetableSchema.safeParse(validPayload);
+    assert.strictEqual(validResult.success, true);
+
+    const overlappingFridayPayload = {
+      ...validPayload,
+      fridayPeriodSlots: [
+        { periodNumber: 1, slotType: 'TEACHING', label: 'Friday Period 1', startTime: '07:30', endTime: '08:30' },
+        { periodNumber: 2, slotType: 'TEACHING', label: 'Friday Period 2', startTime: '08:15', endTime: '09:00' }, // Overlap!
+      ],
+    };
+    const invalidResult = manageTimetableSchema.safeParse(overlappingFridayPayload);
+    assert.strictEqual(invalidResult.success, false);
+    assert.match(invalidResult.error.issues[0].message, /overlaps with/i);
+  });
+
+  await runAsyncTest('Test 37: calculateLivePeriod uses fridayPeriodSlots on Friday with early dismissal', () => {
+    const fridaySlots = [
+      { periodNumber: 1, slotType: 'TEACHING', label: 'Friday 1st', startTime: '07:30', endTime: '08:15' },
+      { periodNumber: 2, slotType: 'TEACHING', label: 'Friday 2nd', startTime: '08:15', endTime: '09:00' },
+      { periodNumber: 3, slotType: 'TEACHING', label: 'Friday 3rd', startTime: '09:00', endTime: '10:00' },
+      { periodNumber: 4, slotType: 'TEACHING', label: 'Friday 4th', startTime: '10:00', endTime: '11:00' },
+      { periodNumber: 5, slotType: 'TEACHING', label: 'Friday 5th', startTime: '11:00', endTime: '12:00' },
+    ];
+
+    // On Friday at 07:45 (Day 5): Inside Friday Period 1
+    const activeFridayPeriod = calculateLivePeriod(standardPeriodSlots, '07:45', 5, fridaySlots);
+    assert.strictEqual(activeFridayPeriod.status, 'ACTIVE_TEACHING');
+    assert.strictEqual(activeFridayPeriod.activeSlot.periodNumber, 1);
+    assert.strictEqual(activeFridayPeriod.currentDay, 'FRIDAY');
+
+    // On Friday at 12:05 (Day 5): After Friday early dismissal (12:00)
+    const afterFridayDismissal = calculateLivePeriod(standardPeriodSlots, '12:05', 5, fridaySlots);
+    assert.strictEqual(afterFridayDismissal.status, 'AFTER_SCHOOL');
+    assert.match(afterFridayDismissal.message, /School concluded for today at 12:00/i);
+
+    // On Monday at 12:05 (Day 1): Regular schedule continues (regular slots end later)
+    const regularDayOngoing = calculateLivePeriod(standardPeriodSlots, '11:30', 1, fridaySlots);
+    assert.strictEqual(regularDayOngoing.status, 'ACTIVE_TEACHING');
+  });
+
+  await runAsyncTest('Test 38: calculateLivePeriod marks Saturday as OFF_DAY when weeklyOffDays includes 6', () => {
+    // 2-day weekend configuration: Sunday (0) and Saturday (6)
+    const twoDayOffPattern = [0, 6];
+
+    // Saturday at 09:00 (Day 6) with 2-day weekend: must report OFF_DAY
+    const saturdayOffResult = calculateLivePeriod(standardPeriodSlots, '09:00', 6, [], twoDayOffPattern);
+    assert.strictEqual(saturdayOffResult.status, 'OFF_DAY');
+    assert.strictEqual(saturdayOffResult.currentDay, 'SATURDAY');
+    assert.match(saturdayOffResult.message, /School is closed today/i);
+
+    // Saturday at 09:00 with default 1-day weekend ([0]): must report working day
+    const saturdayWorkResult = calculateLivePeriod(standardPeriodSlots, '08:30', 6, [], [0]);
+    assert.strictEqual(saturdayWorkResult.status, 'ACTIVE_TEACHING');
+  });
+
+  await runAsyncTest('Test 39: validateTimetableConflicts accurately maps Friday schedule entries to fridayPeriodSlots', async () => {
+    const fridaySlots = [
+      { periodNumber: 1, slotType: 'TEACHING', label: 'Friday 1st', startTime: '07:30', endTime: '08:30' },
+      { periodNumber: 2, slotType: 'TEACHING', label: 'Friday 2nd', startTime: '08:30', endTime: '09:30' },
+    ];
+
+    // Valid Friday schedule referencing Period 1 of Friday slots
+    const conflictResult = await validateTimetableConflicts({
+      schoolId: schoolA_Id.toString(),
+      academicYear: '2025-2026',
+      periodSlots: standardPeriodSlots,
+      fridayPeriodSlots: fridaySlots,
+      schedule: [
+        {
+          dayOfWeek: 'FRIDAY',
+          periodNumber: 1,
+          classId: class1_Id.toString(),
+          sectionId: section1_Id.toString(),
+          subjectId: subject1_Id.toString(),
+          teacherId: teacher1_Id.toString(),
+        },
+      ],
+    });
+    assert.strictEqual(conflictResult.isValid, true);
+
+    // Invalid Friday schedule referencing Period 99 (non-existent in Friday slots)
+    await assert.rejects(
+      async () => {
+        await validateTimetableConflicts({
+          schoolId: schoolA_Id.toString(),
+          academicYear: '2025-2026',
+          periodSlots: standardPeriodSlots,
+          fridayPeriodSlots: fridaySlots,
+          schedule: [
+            {
+              dayOfWeek: 'FRIDAY',
+              periodNumber: 99,
+              classId: class1_Id.toString(),
+              sectionId: section1_Id.toString(),
+              subjectId: subject1_Id.toString(),
+              teacherId: teacher1_Id.toString(),
+            },
+          ],
+        });
+      },
+      (err) => {
+        assert(err instanceof TimetableValidationError);
+        assert.strictEqual(err.errorType, 'INVALID_PERIOD_SLOT');
+        return true;
+      }
+    );
+  });
+
+  await runAsyncTest('Test 40: handleManageTimetable persists fridayPeriodSlots and increments version with audit logging', async () => {
+    const fridaySlots = [
+      { periodNumber: 1, slotType: 'TEACHING', label: 'Friday 1st', startTime: '07:30', endTime: '08:30' },
+      { periodNumber: 2, slotType: 'TEACHING', label: 'Friday 2nd', startTime: '08:30', endTime: '09:30' },
+    ];
+
+    let savedFridaySlots = null;
+    let savedVersion = null;
+    Timetable.findOne = () =>
+      Promise.resolve({
+        _id: new mongoose.Types.ObjectId(),
+        schoolId: schoolA_Id,
+        academicYear: '2025-2026',
+        version: 3,
+        periodSlots: standardPeriodSlots,
+        fridayPeriodSlots: [],
+        schedule: [],
+        save: function () {
+          savedFridaySlots = this.fridayPeriodSlots;
+          savedVersion = this.version;
+          return Promise.resolve(this);
+        },
+      });
+
+    const req = {
+      user: {
+        _id: hmA_Id,
+        role: ROLES.HM,
+        schoolId: schoolA_Id,
+        fullName: 'Head Master A',
+        designation: 'Head Master',
+      },
+      body: {
+        schoolId: schoolA_Id.toString(),
+        academicYear: '2025-2026',
+        version: 3,
+        periodSlots: standardPeriodSlots,
+        fridayPeriodSlots: fridaySlots,
+        schedule: [],
+      },
+    };
+    const res = createMockResponse();
+
+    await handleManageTimetable(req, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(savedVersion, 4);
+    assert.strictEqual(savedFridaySlots.length, 2);
+  });
+
   console.log('\n======================================================================');
   console.log(`🎉 ALL ${passedTests}/${totalTests} TIMETABLE ENGINE ASSERTIONS PASSED (100%)`);
   console.log('======================================================================\n');

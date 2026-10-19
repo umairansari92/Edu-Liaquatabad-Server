@@ -8,6 +8,7 @@ import ParentStudentLink from '../models/ParentStudentLink.js';
 import Section from '../models/Section.js';
 import TeachingAssignment from '../models/TeachingAssignment.js';
 import AuditLog from '../models/AuditLog.js';
+import WeeklyOffPattern from '../models/WeeklyOffPattern.js';
 import {
   ROLES,
   TIMETABLE_STATUS,
@@ -54,8 +55,23 @@ export const handleGetSchoolTimetable = asyncHandler(async (request, response) =
 
   let schoolDetails = null;
   if (typeof School.findById === 'function') {
-    const query = School.findById(schoolId).select('name schoolCode emisCode townId');
+    const query = School.findById(schoolId).select('name schoolCode emisCode townId timings');
     schoolDetails = query && typeof query.lean === 'function' ? await query.lean() : await query;
+  }
+
+  // Query applicable recurring weekly off configuration (defaults to Sunday=0 if unconfigured)
+  let weeklyOffDays = [0];
+  if (mongoose.connection?.readyState === 1 && typeof WeeklyOffPattern?.findOne === 'function' && schoolDetails?.townId) {
+    const activePattern = await WeeklyOffPattern.findOne({
+      status: 'ACTIVE',
+      $or: [
+        { scopeType: 'SCHOOL', schoolId },
+        { scopeType: 'TOWN', townId: schoolDetails.townId },
+      ],
+    }).sort({ scopeType: 1 }).lean();
+    if (activePattern && Array.isArray(activePattern.offDays) && activePattern.offDays.length > 0) {
+      weeklyOffDays = activePattern.offDays;
+    }
   }
 
   let schoolFaculty = [];
@@ -104,10 +120,18 @@ export const handleGetSchoolTimetable = asyncHandler(async (request, response) =
     });
   }
 
-  const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
+  const liveStatus = calculateLivePeriod(
+    activeTimetable.periodSlots,
+    null,
+    null,
+    activeTimetable.fridayPeriodSlots || [],
+    weeklyOffDays
+  );
 
   return sendSuccess(response, 200, 'School timetable retrieved successfully.', {
     ...activeTimetable,
+    fridayPeriodSlots: activeTimetable.fridayPeriodSlots || [],
+    weeklyOffDays,
     schoolDetails,
     teacherFreePeriods,
     liveStatus,
@@ -127,6 +151,7 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
     status = TIMETABLE_STATUS.ACTIVE,
     version,
     periodSlots,
+    fridayPeriodSlots = [],
     schedule,
   } = request.body;
 
@@ -205,6 +230,7 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
       schoolId,
       academicYear,
       periodSlots,
+      fridayPeriodSlots,
       schedule,
     });
   } catch (validationError) {
@@ -243,11 +269,13 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
     previousStateSnapshot = {
       version: existingTimetable.version,
       periodSlotsCount: existingTimetable.periodSlots.length,
+      fridayPeriodSlotsCount: existingTimetable.fridayPeriodSlots?.length || 0,
       scheduleCount: existingTimetable.schedule.length,
       updatedAt: existingTimetable.updatedAt,
     };
 
     existingTimetable.periodSlots = periodSlots;
+    existingTimetable.fridayPeriodSlots = fridayPeriodSlots || [];
     existingTimetable.schedule = schedule;
     existingTimetable.status = status;
     existingTimetable.version = (existingTimetable.version || 1) + 1;
@@ -262,6 +290,7 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
       status,
       version: 1,
       periodSlots,
+      fridayPeriodSlots: fridayPeriodSlots || [],
       schedule,
       createdBy: requestingActor._id,
     });
@@ -284,6 +313,7 @@ export const handleManageTimetable = asyncHandler(async (request, response) => {
       version: savedTimetable.version,
       academicYear: savedTimetable.academicYear,
       periodSlotsCount: savedTimetable.periodSlots.length,
+      fridayPeriodSlotsCount: savedTimetable.fridayPeriodSlots?.length || 0,
       scheduleEntriesCount: savedTimetable.schedule.length,
     },
     result: 'SUCCESS',
@@ -342,7 +372,12 @@ export const handleGetTownLiveMonitor = asyncHandler(async (request, response) =
         };
       }
 
-      const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
+      const liveStatus = calculateLivePeriod(
+        activeTimetable.periodSlots,
+        null,
+        null,
+        activeTimetable.fridayPeriodSlots || []
+      );
       let activePeriodsSummary = null;
 
       if (liveStatus.status === 'ACTIVE_TEACHING' && liveStatus.activeSlot) {
@@ -416,7 +451,12 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       (entry) => String(entry.teacherId) === String(requestingActor._id)
     );
 
-    const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
+    const liveStatus = calculateLivePeriod(
+      activeTimetable.periodSlots,
+      null,
+      null,
+      activeTimetable.fridayPeriodSlots || []
+    );
     let currentTeacherActivity = null;
     let nextTeacherActivity = null;
 
@@ -457,6 +497,7 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       schoolId: teacherSchoolId,
       academicYear: activeTimetable.academicYear,
       periodSlots: activeTimetable.periodSlots,
+      fridayPeriodSlots: activeTimetable.fridayPeriodSlots || [],
       mySchedule: teacherAllocations,
       myFreePeriodsToday,
       liveStatus,
@@ -496,7 +537,12 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       return true;
     });
 
-    const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
+    const liveStatus = calculateLivePeriod(
+      activeTimetable.periodSlots,
+      null,
+      null,
+      activeTimetable.fridayPeriodSlots || []
+    );
     let currentClassActivity = null;
 
     if (liveStatus.status === 'ACTIVE_TEACHING' && liveStatus.activeSlot) {
@@ -513,6 +559,7 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       sectionId: studentProfile.sectionId,
       academicYear: activeTimetable.academicYear,
       periodSlots: activeTimetable.periodSlots,
+      fridayPeriodSlots: activeTimetable.fridayPeriodSlots || [],
       mySchedule: studentClassSchedule,
       liveStatus,
       currentClassActivity,
@@ -573,7 +620,12 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       return true;
     });
 
-    const liveStatus = calculateLivePeriod(activeTimetable.periodSlots);
+    const liveStatus = calculateLivePeriod(
+      activeTimetable.periodSlots,
+      null,
+      null,
+      activeTimetable.fridayPeriodSlots || []
+    );
 
     return sendSuccess(response, 200, 'Ward timetable retrieved successfully.', {
       studentId: studentProfile._id,
@@ -582,6 +634,7 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       sectionId: studentProfile.sectionId,
       academicYear: activeTimetable.academicYear,
       periodSlots: activeTimetable.periodSlots,
+      fridayPeriodSlots: activeTimetable.fridayPeriodSlots || [],
       wardSchedule,
       liveStatus,
     });

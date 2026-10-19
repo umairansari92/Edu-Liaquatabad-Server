@@ -22,7 +22,13 @@ export class TimetableValidationError extends Error {
  * Deterministically computes the current active period status without any background timers.
  * Purely functional: current time + day in PKT + configured period slots.
  */
-export const calculateLivePeriod = (periodSlots = [], targetTime = null, targetDayNumber = null) => {
+export const calculateLivePeriod = (
+  periodSlots = [],
+  targetTime = null,
+  targetDayNumber = null,
+  fridayPeriodSlots = [],
+  weeklyOffDays = [0]
+) => {
   const currentKarachiTime = targetTime || getKarachiTimeString();
   const currentDayOfWeekNumber = targetDayNumber !== null && targetDayNumber !== undefined
     ? targetDayNumber
@@ -40,30 +46,40 @@ export const calculateLivePeriod = (periodSlots = [], targetTime = null, targetD
 
   const dayName = DAY_NAMES[currentDayOfWeekNumber] || 'MONDAY';
 
-  // Sunday is official weekly off
-  if (currentDayOfWeekNumber === 0) {
+  // Configured weekly off check (defaults to Sunday = 0, or Saturday + Sunday if 2-day pattern)
+  const normalizedWeeklyOffDays = Array.isArray(weeklyOffDays) && weeklyOffDays.length > 0
+    ? weeklyOffDays
+    : [0];
+
+  if (normalizedWeeklyOffDays.includes(currentDayOfWeekNumber)) {
     return {
       status: 'OFF_DAY',
-      currentDay: 'SUNDAY',
+      currentDay: dayName,
       currentTime: currentKarachiTime,
       activeSlot: null,
       nextSlot: null,
-      message: 'School is closed today (Sunday).',
+      message: `School is closed today (${dayName}).`,
     };
   }
 
-  if (!periodSlots || periodSlots.length === 0) {
+  // Resolve active slots: Friday uses dedicated fridayPeriodSlots if configured
+  const isFriday = currentDayOfWeekNumber === 5;
+  const activeSlots = isFriday && Array.isArray(fridayPeriodSlots) && fridayPeriodSlots.length > 0
+    ? fridayPeriodSlots
+    : periodSlots;
+
+  if (!activeSlots || activeSlots.length === 0) {
     return {
       status: 'UNCONFIGURED',
       currentDay: dayName,
       currentTime: currentKarachiTime,
       activeSlot: null,
       nextSlot: null,
-      message: 'No period slots configured for this timetable.',
+      message: `No period slots configured for ${isFriday ? 'Friday' : 'regular school schedule'}.`,
     };
   }
 
-  const sortedSlots = [...periodSlots].sort((slotA, slotB) =>
+  const sortedSlots = [...activeSlots].sort((slotA, slotB) =>
     slotA.startTime.localeCompare(slotB.startTime)
   );
 
@@ -151,6 +167,7 @@ export const validateTimetableConflicts = async ({
   schoolId,
   academicYear,
   periodSlots = [],
+  fridayPeriodSlots = [],
   schedule = [],
 }) => {
   const normalizedSchoolId = String(schoolId);
@@ -170,6 +187,7 @@ export const validateTimetableConflicts = async ({
 
   // ── 2. Slot Resolution & Mapping ─────────────────────────────────────────────
   const slotMapByNumber = new Map(periodSlots.map((slot) => [slot.periodNumber, slot]));
+  const fridaySlotMapByNumber = new Map((fridayPeriodSlots || []).map((slot) => [slot.periodNumber, slot]));
 
   // ── 3. Internal In-Memory Collision Detection ────────────────────────────────
   const classSectionAssignedKeys = new Set();
@@ -177,11 +195,15 @@ export const validateTimetableConflicts = async ({
 
   for (let entryIndex = 0; entryIndex < schedule.length; entryIndex++) {
     const entry = schedule[entryIndex];
-    const slot = slotMapByNumber.get(entry.periodNumber);
+    const isFriday = entry.dayOfWeek === 'FRIDAY';
+    const usesFridaySlots = isFriday && fridaySlotMapByNumber.size > 0;
+    const slot = usesFridaySlots
+      ? fridaySlotMapByNumber.get(entry.periodNumber)
+      : slotMapByNumber.get(entry.periodNumber);
 
     if (!slot) {
       throw new TimetableValidationError(
-        `Schedule entry ${entryIndex + 1} references non-existent periodNumber ${entry.periodNumber}.`,
+        `Schedule entry ${entryIndex + 1} (${entry.dayOfWeek}) references non-existent periodNumber ${entry.periodNumber}.`,
         422,
         'INVALID_PERIOD_SLOT'
       );
@@ -334,7 +356,11 @@ export const validateTimetableConflicts = async ({
   // For every TEACHING schedule entry, verify an active TeachingAssignment exists.
   for (let entryIndex = 0; entryIndex < schedule.length; entryIndex++) {
     const entry = schedule[entryIndex];
-    const slot = slotMapByNumber.get(entry.periodNumber);
+    const isFriday = entry.dayOfWeek === 'FRIDAY';
+    const usesFridaySlots = isFriday && fridaySlotMapByNumber.size > 0;
+    const slot = usesFridaySlots
+      ? fridaySlotMapByNumber.get(entry.periodNumber)
+      : slotMapByNumber.get(entry.periodNumber);
 
     if (slot && slot.slotType === TIMETABLE_SLOT_TYPE.TEACHING) {
       if (!entry.teacherId) {

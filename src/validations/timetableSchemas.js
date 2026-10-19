@@ -44,6 +44,7 @@ export const manageTimetableSchema = z.object({
   status: z.enum(Object.values(TIMETABLE_STATUS)).optional().default(TIMETABLE_STATUS.ACTIVE),
   version: z.number().int().min(1).optional(),
   periodSlots: z.array(periodSlotSchema).min(1, 'At least one period slot is required.'),
+  fridayPeriodSlots: z.array(periodSlotSchema).optional().default([]),
   schedule: z.array(scheduleEntrySchema).default([]),
 }).strict().superRefine((data, refinementContext) => {
   // 1. Verify periodSlots uniqueness by periodNumber
@@ -77,16 +78,54 @@ export const manageTimetableSchema = z.object({
     }
   }
 
-  // 3. Verify every schedule entry periodNumber exists in periodSlots
-  const slotMapByNumber = new Map(data.periodSlots.map((slot) => [slot.periodNumber, slot]));
+  // 2b. If fridayPeriodSlots provided, verify uniqueness and non-overlapping times
+  const fridaySlotMapByNumber = new Map();
+  if (Array.isArray(data.fridayPeriodSlots) && data.fridayPeriodSlots.length > 0) {
+    const registeredFridayNumbers = new Set();
+    for (const fridaySlot of data.fridayPeriodSlots) {
+      if (registeredFridayNumbers.has(fridaySlot.periodNumber)) {
+        refinementContext.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate periodNumber (${fridaySlot.periodNumber}) found in fridayPeriodSlots.`,
+          path: ['fridayPeriodSlots'],
+        });
+        return;
+      }
+      registeredFridayNumbers.add(fridaySlot.periodNumber);
+      fridaySlotMapByNumber.set(fridaySlot.periodNumber, fridaySlot);
+    }
+
+    const sortedFridaySlots = [...data.fridayPeriodSlots].sort((slotA, slotB) =>
+      slotA.startTime.localeCompare(slotB.startTime)
+    );
+    for (let index = 0; index < sortedFridaySlots.length - 1; index++) {
+      const currentSlot = sortedFridaySlots[index];
+      const nextSlot = sortedFridaySlots[index + 1];
+      if (currentSlot.endTime > nextSlot.startTime) {
+        refinementContext.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Friday period slot '${currentSlot.label}' (${currentSlot.startTime}-${currentSlot.endTime}) overlaps with '${nextSlot.label}' (${nextSlot.startTime}-${nextSlot.endTime}).`,
+          path: ['fridayPeriodSlots'],
+        });
+        return;
+      }
+    }
+  }
+
+  // 3. Verify every schedule entry periodNumber exists in corresponding periodSlots
+  const regularSlotMapByNumber = new Map(data.periodSlots.map((slot) => [slot.periodNumber, slot]));
   for (let entryIndex = 0; entryIndex < data.schedule.length; entryIndex++) {
     const entry = data.schedule[entryIndex];
-    const correspondingSlot = slotMapByNumber.get(entry.periodNumber);
+    const isFriday = entry.dayOfWeek === 'FRIDAY';
+    const usesFridaySlots = isFriday && fridaySlotMapByNumber.size > 0;
+    const correspondingSlot = usesFridaySlots
+      ? fridaySlotMapByNumber.get(entry.periodNumber)
+      : regularSlotMapByNumber.get(entry.periodNumber);
 
     if (!correspondingSlot) {
       refinementContext.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Schedule entry references non-existent periodNumber ${entry.periodNumber}.`,
+        message: `Schedule entry on ${entry.dayOfWeek} references non-existent periodNumber ${entry.periodNumber}.`,
         path: ['schedule', entryIndex, 'periodNumber'],
       });
       return;
