@@ -138,24 +138,42 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
   const activeWeeklyOff = await WeeklyOffPattern.findOne({
     status: 'ACTIVE',
     effectiveFrom: { $lte: date },
-    $or: [
-      { effectiveTo: null },
-      { effectiveTo: { $gte: date } },
+    $and: [
+      {
+        $or: [
+          { effectiveTo: null },
+          { effectiveTo: { $gte: date } },
+        ],
+      },
+      {
+        $or: [
+          { scopeType: 'SCHOOL', schoolId: school._id },
+          { scopeType: 'TOWN', townId: school.townId },
+        ],
+      },
     ],
     offDays: targetDayOfWeek,
-    $or: [
-      { scopeType: 'SCHOOL', schoolId: school._id },
-      { scopeType: 'TOWN', townId: school.townId },
-    ],
   }).sort({ scopeType: -1 }).lean();
 
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
   if (activeWeeklyOff) {
-    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const result = {
       isClosed: true,
       type: 'WEEKLY_OFF',
       reason: `Official Weekly Off Day: ${dayNames[targetDayOfWeek]} (${activeWeeklyOff.reason})`,
       weeklyOff: activeWeeklyOff,
+    };
+    cache.set(cacheKey, result, 60);
+    return result;
+  }
+
+  // Statutory baseline fallback: Sunday (0) is always a non-working day unless specifically overridden
+  if (targetDayOfWeek === 0) {
+    const result = {
+      isClosed: true,
+      type: 'WEEKLY_OFF',
+      reason: 'Official Weekly Off Day: Sunday (Statutory Government Weekly Off)',
     };
     cache.set(cacheKey, result, 60);
     return result;
@@ -174,6 +192,7 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
  * @param {Object} params.school
  * @param {Object} params.requestingActor
  * @param {Date} [params.date=new Date()]
+ * @param {Date} [params.currentTime]
  * @param {boolean} [params.isLateOverride=false]
  * @param {string} [params.lateReason='']
  * @returns {Promise<{ allowed: boolean, code?: string, reason?: string, isLateOverride?: boolean, lateReason?: string }>}
@@ -182,6 +201,7 @@ export const validateSubmissionWindow = async ({
   school,
   requestingActor,
   date = new Date(),
+  currentTime,
   isLateOverride = false,
   lateReason = '',
 }) => {
@@ -205,7 +225,30 @@ export const validateSubmissionWindow = async ({
 
   const { windowStart, windowEnd, allowHmLateOverride } = resolveSchoolSchedule(school, isFriday);
 
-  const currentTimePkt = getKarachiTimeString(date);
+  const todayPktDate = getKarachiDateString(new Date());
+  const submissionDatePkt = getKarachiDateString(date);
+
+  // Determine effective clock time:
+  // 1. Explicit currentTime parameter takes precedence.
+  // 2. If date is a date-only Date (UTC midnight 00:00:00.000) representing today in PKT,
+  //    evaluate against the current real-world clock time (new Date()).
+  // 3. Otherwise (e.g. unit tests passing simulated hours or specific timestamps), use date.
+  let effectiveTimeDate = currentTime;
+  if (!effectiveTimeDate) {
+    const isUtcMidnight = date instanceof Date &&
+      date.getUTCHours() === 0 &&
+      date.getUTCMinutes() === 0 &&
+      date.getUTCSeconds() === 0 &&
+      date.getUTCMilliseconds() === 0;
+
+    if (isUtcMidnight && submissionDatePkt === todayPktDate) {
+      effectiveTimeDate = new Date();
+    } else {
+      effectiveTimeDate = date;
+    }
+  }
+
+  const currentTimePkt = getKarachiTimeString(effectiveTimeDate);
 
   // Early gate
   if (currentTimePkt < windowStart) {
@@ -218,11 +261,11 @@ export const validateSubmissionWindow = async ({
 
   // Late gate
   if (currentTimePkt > windowEnd) {
-    const isActorHm = requestingActor.role === ROLES.HM || requestingActor.role === ROLES.ADMIN || requestingActor.role === ROLES.SUPER_ADMIN || requestingActor.role === ROLES.ROOT_ADMIN;
+    const isActorHm = requestingActor?.role === ROLES.HM || requestingActor?.role === ROLES.ADMIN || requestingActor?.role === ROLES.SUPER_ADMIN || requestingActor?.role === ROLES.ROOT_ADMIN;
 
     if (isActorHm && isLateOverride) {
       // If late override is administratively disabled for this school
-      if (!allowHmLateOverride && requestingActor.role === ROLES.HM) {
+      if (!allowHmLateOverride && requestingActor?.role === ROLES.HM) {
         return {
           allowed: false,
           code: 'OVERRIDE_DISABLED',
@@ -231,9 +274,6 @@ export const validateSubmissionWindow = async ({
       }
 
       // Ground check: Late override is STRICTLY permitted on the same calendar day in PKT!
-      const todayPktDate = getKarachiDateString(new Date());
-      const submissionDatePkt = getKarachiDateString(date);
-
       if (submissionDatePkt !== todayPktDate) {
         return {
           allowed: false,

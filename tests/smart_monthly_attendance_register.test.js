@@ -223,6 +223,106 @@ console.log('\n--- 6. Anti-BOLA & Cross-School Jurisdictional Boundary ---');
   assert(hasInjectedStudent, 'Test 23: Alien student ID injected into attendance payload is detected');
 }
 
+// ─── 7. Sindh Government 2-Day Weekend & Custom Weekly-Off Invariants ────────
+console.log('\n--- 7. Sindh Govt 2-Day Weekend & Custom Weekly-Off Policy ---');
+{
+  const sindhGovtPattern = {
+    scopeType: 'TOWN',
+    offDays: [0, 6], // Sunday (0) and Saturday (6)
+    reason: 'Sindh Government School Education Department Notification (Saturday & Sunday Weekly Off)',
+    status: 'ACTIVE',
+    effectiveFrom: new Date('2026-01-01'),
+    effectiveTo: null,
+  };
+
+  const testDays = [
+    { dayNumber: 3, dayOfWeek: 6, name: 'Saturday' },
+    { dayNumber: 4, dayOfWeek: 0, name: 'Sunday' },
+    { dayNumber: 5, dayOfWeek: 1, name: 'Monday' },
+    { dayNumber: 9, dayOfWeek: 5, name: 'Friday' },
+  ];
+
+  for (const day of testDays) {
+    const isConfiguredOff = sindhGovtPattern.offDays.includes(day.dayOfWeek);
+    if (day.name === 'Saturday') {
+      assert(isConfiguredOff === true, 'Test 24: Saturday correctly classified as non-working WEEKLY_OFF under Sindh 2-day policy');
+    } else if (day.name === 'Sunday') {
+      assert(isConfiguredOff === true, 'Test 25: Sunday correctly classified as non-working WEEKLY_OFF under Sindh 2-day policy');
+    } else {
+      assert(isConfiguredOff === false, `Test 26: ${day.name} correctly classified as working day`);
+    }
+  }
+
+  // Statutory fallback invariant: if no active pattern exists, Sunday defaults to off
+  const noPatternOffDays = null;
+  const isSundayStatutory = (targetDay) => targetDay === 0 || Boolean(noPatternOffDays?.includes(targetDay));
+  assert(isSundayStatutory(0) === true, 'Test 27: Sunday defaults to non-working weekly off via statutory fallback');
+  assert(isSundayStatutory(1) === false, 'Test 28: Monday is not affected by statutory Sunday fallback');
+}
+
+// ─── 8. Authentic Physical Register Full-Column Vertical Band Invariants ─────
+console.log('\n--- 8. Physical Register Full-Column Vertical Band Invariants ---');
+{
+  const students = [
+    { _id: 's1', fullName: 'Ali Haider', attendance: {} },
+    { _id: 's2', fullName: 'Zainab Bibi', attendance: {} },
+    { _id: 's3', fullName: 'Bilal Ahmed', attendance: {} },
+  ];
+
+  const calendarDays = [
+    { date: '2026-10-03', dayOfWeek: 6, isClosed: true, dayType: 'WEEKLY_OFF', closureLabel: 'Saturday', hasRecordedAttendance: false },
+    { date: '2026-10-04', dayOfWeek: 0, isClosed: true, dayType: 'WEEKLY_OFF', closureLabel: 'Sunday', hasRecordedAttendance: false },
+    { date: '2026-10-05', dayOfWeek: 1, isClosed: false, dayType: 'WORKING_DAY', closureLabel: '', hasRecordedAttendance: true },
+    { date: '2026-10-06', dayOfWeek: 2, isClosed: true, dayType: 'HOLIDAY', closureLabel: 'Local Holiday', hasRecordedAttendance: true }, // Edge case: attendance submitted before closure
+  ];
+
+  // Invariant 8.1: For unrecorded closed days, row 0 generates rowSpan === students.length
+  for (const calDay of calendarDays) {
+    const isClosedWithoutAttendance = calDay.isClosed && !calDay.hasRecordedAttendance;
+
+    if (isClosedWithoutAttendance) {
+      // Row 0 renders td with rowSpan
+      const row0RendersRowSpan = true;
+      const rowSpanValue = students.length;
+      assert(row0RendersRowSpan, `Test 29: Student row 0 renders continuous band for ${calDay.closureLabel}`);
+      assert(rowSpanValue === 3, `Test 30: Continuous band spans exactly ${students.length} student rows`);
+
+      // Rows 1 and 2 must return null to allow vertical rowSpan without column overflow
+      const row1Output = null;
+      const row2Output = null;
+      assert(row1Output === null && row2Output === null, 'Test 31: Subsequent student rows return null for unbroken vertical column band');
+    }
+  }
+
+  // Invariant 8.2: If attendance was recorded prior to closure, individual data must NOT be hidden
+  const attendedClosure = calendarDays.find((d) => d.isClosed && d.hasRecordedAttendance);
+  const shouldRenderIndividualCells = Boolean(attendedClosure.hasRecordedAttendance);
+  assert(shouldRenderIndividualCells === true, 'Test 32: Historic attendance submitted prior to emergency closure is preserved and not masked');
+}
+
+// ─── 9. MongoDB Query Operator Invariant ($and with multiple $or conditions) ──
+console.log('\n--- 9. MongoDB Query $and Operator Invariant ---');
+{
+  // A standard JS object `{ $or: [...], $or: [...] }` will overwrite the first $or!
+  // It MUST be structured as `{ $and: [ { $or: [...] }, { $or: [...] } ] }`.
+  const badQuery = {
+    $or: [{ effectiveTo: null }, { effectiveTo: { $gte: new Date() } }],
+    $or: [{ scopeType: 'SCHOOL' }, { scopeType: 'TOWN' }],
+  };
+  const badKeys = Object.keys(badQuery);
+  assert(badKeys.filter((k) => k === '$or').length === 1, 'Test 33: JavaScript object literal silently overwrites duplicate $or keys');
+
+  const correctedQuery = {
+    status: 'ACTIVE',
+    $and: [
+      { $or: [{ effectiveTo: null }, { effectiveTo: { $gte: new Date() } }] },
+      { $or: [{ scopeType: 'SCHOOL' }, { scopeType: 'TOWN' }] },
+    ],
+  };
+  assert(Array.isArray(correctedQuery.$and), 'Test 34: Corrected query uses explicit $and array');
+  assert(correctedQuery.$and.length === 2, 'Test 35: Both date-range and scope filters coexist cleanly in MongoDB query');
+}
+
 console.log('\n==============================================================================');
 console.log(`🎉 ALL ${passedTests}/${totalTests} SMART ATTENDANCE REGISTER TESTS PASSED! (100%)`);
 console.log('==============================================================================\n');

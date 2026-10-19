@@ -175,6 +175,9 @@ console.log('===================================================================
   // Case C: HM submitting late for a PAST DATE (yesterday at 15:30 PKT) -> Backdating Blocked!
   const yesterdayDate = new Date();
   yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  while (getKarachiDayOfWeek(yesterdayDate) === 0) {
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  }
   const yesterdayStr = getKarachiDateString(yesterdayDate);
   const yesterdayLate = new Date(`${yesterdayStr}T10:30:00.000Z`);
 

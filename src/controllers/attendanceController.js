@@ -199,23 +199,41 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
 
   // Calculate real-time submission window and closure status for UI
   const school = await School.findById(section.schoolId).lean();
-  const windowCheck = school
-    ? await validateSubmissionWindow({
-        school,
-        requestingActor,
-        date: queryDate,
-      })
-    : { allowed: true };
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+  const isToday = queryDatePkt === todayPktDate;
+  const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
+
+  let windowCheck;
+  if (!school) {
+    windowCheck = { allowed: true };
+  } else if (queryDatePkt < todayPktDate && requestingActor.role === ROLES.TEACHER) {
+    windowCheck = {
+      allowed: false,
+      code: 'PAST_DATE_CLOSED',
+      reason: 'Past-date attendance submission is strictly closed for teachers. Contact your Head Master for authorized clearance.',
+    };
+  } else if (queryDatePkt > todayPktDate) {
+    windowCheck = {
+      allowed: false,
+      code: 'FUTURE_DATE_BLOCKED',
+      reason: 'Future-date attendance submission is not permitted.',
+    };
+  } else {
+    windowCheck = await validateSubmissionWindow({
+      school,
+      requestingActor,
+      date: queryDate,
+      currentTime: isToday ? new Date() : undefined,
+    });
+  }
 
   const closureCheck = school ? await checkIsSchoolClosed(school, queryDate) : { isClosed: false };
   const currentDayOfWeek = getKarachiDayOfWeek(queryDate);
   const isFriday = currentDayOfWeek === 5;
   const resolved = resolveSchoolSchedule(school, isFriday);
-  const currentTimePkt = getKarachiTimeString(queryDate);
-  const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
-  const todayPktDate = getKarachiDateString(new Date());
-  const queryDatePkt = getKarachiDateString(queryDate);
-  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && resolved.allowHmLateOverride !== false;
+  const currentTimePkt = getKarachiTimeString(isToday ? new Date() : queryDate);
+  const canOverride = isActorHmOrAdmin && isToday && resolved.allowHmLateOverride !== false;
 
   return sendSuccess(response, 200, "Attendance sheet retrieved.", {
     section: { _id: section._id, name: section.name, roomNumber: section.roomNumber || "", class: section.classId },
@@ -269,23 +287,40 @@ export const handleGetAttendanceWindowStatus = asyncHandler(async (request, resp
   const queryDate = date ? new Date(date) : new Date();
   if (isNaN(queryDate.getTime())) return sendError(response, 400, "Invalid date format.");
 
-  const windowCheck = await validateSubmissionWindow({
-    school,
-    requestingActor,
-    date: queryDate,
-  });
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+  const isToday = queryDatePkt === todayPktDate;
+  const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
+
+  let windowCheck;
+  if (queryDatePkt < todayPktDate && requestingActor.role === ROLES.TEACHER) {
+    windowCheck = {
+      allowed: false,
+      code: 'PAST_DATE_CLOSED',
+      reason: 'Past-date attendance submission is strictly closed for teachers. Contact your Head Master for authorized clearance.',
+    };
+  } else if (queryDatePkt > todayPktDate) {
+    windowCheck = {
+      allowed: false,
+      code: 'FUTURE_DATE_BLOCKED',
+      reason: 'Future-date attendance submission is not permitted.',
+    };
+  } else {
+    windowCheck = await validateSubmissionWindow({
+      school,
+      requestingActor,
+      date: queryDate,
+      currentTime: isToday ? new Date() : undefined,
+    });
+  }
 
   const closureCheck = await checkIsSchoolClosed(school, queryDate);
 
   const currentDayOfWeek = getKarachiDayOfWeek(queryDate);
   const isFriday = currentDayOfWeek === 5;
   const resolved = resolveSchoolSchedule(school, isFriday);
-  const currentTimePkt = getKarachiTimeString(queryDate);
-
-  const isActorHmOrAdmin = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(requestingActor.role);
-  const todayPktDate = getKarachiDateString(new Date());
-  const queryDatePkt = getKarachiDateString(queryDate);
-  const canOverride = isActorHmOrAdmin && queryDatePkt === todayPktDate && resolved.allowHmLateOverride !== false;
+  const currentTimePkt = getKarachiTimeString(isToday ? new Date() : queryDate);
+  const canOverride = isActorHmOrAdmin && isToday && resolved.allowHmLateOverride !== false;
 
   return sendSuccess(response, 200, "Attendance window status retrieved.", {
     allowed: windowCheck.allowed,
@@ -445,6 +480,7 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     school,
     requestingActor,
     date: queryDate,
+    currentTime: queryDatePkt === todayPktDate ? new Date() : undefined,
     isLateOverride: Boolean(isLateOverride),
     lateReason: typeof lateReason === 'string' ? lateReason : '',
   });
@@ -762,13 +798,19 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
     WeeklyOffPattern.find({
       status: "ACTIVE",
       effectiveFrom: { $lte: rangeEnd },
-      $or: [
-        { effectiveTo: null },
-        { effectiveTo: { $gte: rangeStart } },
-      ],
-      $or: [
-        { scopeType: "SCHOOL", schoolId: section.schoolId },
-        { scopeType: "TOWN", townId: school?.townId },
+      $and: [
+        {
+          $or: [
+            { effectiveTo: null },
+            { effectiveTo: { $gte: rangeStart } },
+          ],
+        },
+        {
+          $or: [
+            { scopeType: "SCHOOL", schoolId: section.schoolId },
+            { scopeType: "TOWN", townId: school?.townId },
+          ],
+        },
       ],
     }).sort({ scopeType: -1 }).lean(),
   ]);
@@ -822,22 +864,33 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
 
     const isSunday = dayOfWeek === 0;
     const isSaturday = dayOfWeek === 6;
+    const isConfiguredWeeklyOff = Boolean(matchingWeeklyOff) || isSunday;
 
     let dayType = "WORKING_DAY";
     let isClosed = false;
+    let isWeeklyOff = false;
+    let overlapNote = null;
     let closureLabel = "";
+    let closureReason = "";
     let status = "PENDING";
 
     if (matchingHoliday) {
       dayType = "HOLIDAY";
       isClosed = true;
       closureLabel = matchingHoliday.title || matchingHoliday.reason || "Public Holiday";
+      closureReason = matchingHoliday.reason || matchingHoliday.title || "Official Public Holiday";
       status = "HOLIDAY";
       totalHolidaysCount++;
-    } else if (matchingWeeklyOff || isSunday) {
+      if (isConfiguredWeeklyOff) {
+        isWeeklyOff = true;
+        overlapNote = `Gazetted holiday falls on ${dayNamesFull[dayOfWeek]} weekly off`;
+      }
+    } else if (isConfiguredWeeklyOff) {
       dayType = "WEEKLY_OFF";
       isClosed = true;
-      closureLabel = matchingWeeklyOff?.reason || (isSunday ? "Sunday" : isSaturday ? "Saturday" : dayNamesFull[dayOfWeek]);
+      isWeeklyOff = true;
+      closureLabel = dayNamesFull[dayOfWeek];
+      closureReason = matchingWeeklyOff?.reason || `Official Weekly Off Day: ${dayNamesFull[dayOfWeek]}`;
       status = "WEEKLY_OFF";
       if (isSunday) totalSundaysCount++;
     } else {
@@ -854,9 +907,12 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       } else {
         status = "NOT_TAKEN";
         closureLabel = "Attendance Not Taken";
+        closureReason = "School working day with no attendance recorded during permitted window";
         missedWorkingDaysCount++;
       }
     }
+
+    const hasAttendance = Boolean(dateAttendanceDocMap[dateStr]);
 
     calendarDays.push({
       date: dateStr,
@@ -866,8 +922,12 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       dayNameFull: dayNamesFull[dayOfWeek],
       dayType,
       isClosed,
+      isWeeklyOff,
+      overlapNote,
       closureLabel,
-      isAttendanceTaken: Boolean(dateAttendanceDocMap[dateStr]),
+      closureReason,
+      isAttendanceTaken: hasAttendance,
+      hasRecordedAttendance: hasAttendance,
       isPastDate,
       isToday,
       isFutureDate,
