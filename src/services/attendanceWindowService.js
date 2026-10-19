@@ -114,7 +114,7 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
 
   // ── Stage 1: Check HolidayCalendar (Town scope OR School scope) ──────────────
   const activeHoliday = await HolidayCalendar.findOne({
-    status: 'ACTIVE',
+    status: { $ne: 'CANCELLED' }, // Non-cancelled holidays close school on designated dates
     startDate: { $lte: targetDatePkt },
     endDate: { $gte: targetDatePkt },
     $or: [

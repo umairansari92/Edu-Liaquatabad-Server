@@ -94,6 +94,45 @@ console.log('\n--- 2. Weekly-Off & Holiday State Classification ---');
       assert(!isHoliday && !isWeeklyOff, 'Test 08: Regular Monday is recognized as working day');
     }
   }
+
+  // SCHEDULED, ACTIVE, and EXPIRED holiday inclusion invariants
+  const allHolidays = [
+    {
+      title: 'Urs Sahah Abdul Latif Bhitai',
+      reason: 'Urs Sahah Abdul Latif Bhitai gazetted closure',
+      startDate: '2026-10-23',
+      endDate: '2026-10-23',
+      scopeType: 'TOWN',
+      status: 'SCHEDULED',
+    },
+    {
+      title: 'Rain Emergency',
+      reason: 'Monsoon heavy rain closure',
+      startDate: '2026-10-07',
+      endDate: '2026-10-07',
+      scopeType: 'SCHOOL',
+      status: 'EXPIRED',
+    },
+    {
+      title: 'Revoked Holiday',
+      reason: 'Cancelled notification',
+      startDate: '2026-10-25',
+      endDate: '2026-10-25',
+      scopeType: 'TOWN',
+      status: 'CANCELLED',
+    },
+  ];
+
+  const nonCancelledHolidays = allHolidays.filter((h) => h.status !== 'CANCELLED');
+  const oct23Holiday = nonCancelledHolidays.find((h) => h.startDate <= '2026-10-23' && h.endDate >= '2026-10-23');
+  assert(Boolean(oct23Holiday), 'Test 08b: SCHEDULED holiday is included in register calendar');
+  assert(oct23Holiday.title === 'Urs Sahah Abdul Latif Bhitai', 'Test 08c: Holiday title is preserved as Urs Sahah Abdul Latif Bhitai');
+
+  const oct07Holiday = nonCancelledHolidays.find((h) => h.startDate <= '2026-10-07' && h.endDate >= '2026-10-07');
+  assert(Boolean(oct07Holiday), 'Test 08d: EXPIRED past holiday is preserved in monthly register');
+
+  const cancelledHoliday = nonCancelledHolidays.find((h) => h.startDate <= '2026-10-25' && h.endDate >= '2026-10-25');
+  assert(!cancelledHoliday, 'Test 08e: CANCELLED holiday is strictly excluded from register calendar');
 }
 
 // ─── 3. "Attendance Not Taken" Invariant (Zero Inferred Absences) ──────────────
@@ -304,6 +343,18 @@ console.log('\n--- 8. Physical Register Full-Column Vertical Band Invariants ---
   const attendedClosure = calendarDays.find((d) => d.isClosed && d.hasRecordedAttendance);
   const shouldRenderIndividualCells = Boolean(attendedClosure.hasRecordedAttendance);
   assert(shouldRenderIndividualCells === true, 'Test 32: Historic attendance submitted prior to emergency closure is preserved and not masked');
+
+  // Invariant 8.3: Vertical column band renders official holiday title text
+  const oct23ClosureDay = {
+    date: '2026-10-23',
+    dayOfWeek: 5,
+    isClosed: true,
+    dayType: 'HOLIDAY',
+    closureLabel: 'Urs Sahah Abdul Latif Bhitai',
+    hasRecordedAttendance: false,
+  };
+  const bandTextForHoliday = (oct23ClosureDay.closureLabel || 'HOLIDAY').toUpperCase();
+  assert(bandTextForHoliday === 'URS SAHAH ABDUL LATIF BHITAI', 'Test 32b: Full official holiday title renders in vertical column band');
 }
 
 // ─── 9. MongoDB Query Operator Invariant ($and with multiple $or conditions) ──

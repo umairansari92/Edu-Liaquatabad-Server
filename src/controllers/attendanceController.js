@@ -787,7 +787,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       .sort({ grNumber: 1 })
       .lean(),
     HolidayCalendar.find({
-      status: "ACTIVE",
+      status: { $ne: "CANCELLED" }, // Includes SCHEDULED, ACTIVE, and EXPIRED holidays for complete monthly register fidelity
       startDate: { $lte: monthEndStr },
       endDate: { $gte: monthStartStr },
       $or: [
@@ -940,6 +940,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       overlapNote,
       closureLabel,
       closureReason,
+      holidayTitle: matchingHoliday?.title || null,
       isAttendanceTaken: hasAttendance,
       hasRecordedAttendance: hasAttendance,
       isPastDate,
