@@ -235,11 +235,12 @@ export const validateSubmissionWindow = async ({
   // 3. Otherwise (e.g. unit tests passing simulated hours or specific timestamps), use date.
   let effectiveTimeDate = currentTime;
   if (!effectiveTimeDate) {
-    const isUtcMidnight = date instanceof Date &&
+    const isDateOnlyString = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim());
+    const isUtcMidnight = (date instanceof Date &&
       date.getUTCHours() === 0 &&
       date.getUTCMinutes() === 0 &&
       date.getUTCSeconds() === 0 &&
-      date.getUTCMilliseconds() === 0;
+      date.getUTCMilliseconds() === 0) || isDateOnlyString;
 
     if (isUtcMidnight && submissionDatePkt === todayPktDate) {
       effectiveTimeDate = new Date();
