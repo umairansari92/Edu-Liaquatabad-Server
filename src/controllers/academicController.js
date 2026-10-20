@@ -669,6 +669,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     status: { $ne: 'ARCHIVED' },
   })
     .populate('classId', 'name numericGrade code')
+    .populate('classTeacherId', 'fullName designation email')
     .lean();
 
   // 2. Fetch active TeachingAssignment records (Subject Teacher duties)
@@ -678,7 +679,11 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
   })
     .populate('classId', 'name numericGrade code')
-    .populate('sectionId', 'name roomNumber capacity schoolId status classTeacherId')
+    .populate({
+      path: 'sectionId',
+      select: 'name roomNumber capacity schoolId status classTeacherId',
+      populate: { path: 'classTeacherId', select: 'fullName designation email' },
+    })
     .populate('subjectId', 'name code isElective totalMarks passingMarks')
     .lean();
 
@@ -694,6 +699,11 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
       capacity: section.capacity,
       class: section.classId,
       isClassTeacher: true,
+      classTeacher: section.classTeacherId ? {
+        _id: section.classTeacherId._id || section.classTeacherId,
+        fullName: section.classTeacherId.fullName || 'Class Teacher',
+        designation: section.classTeacherId.designation || '',
+      } : null,
       assignedSubjects: [],
     });
   }
@@ -708,7 +718,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
       sectionEntry = sectionMap.get(sectionIdStr);
 
       if (!sectionEntry) {
-        const isClassTeacher = sectionDoc.classTeacherId && String(sectionDoc.classTeacherId) === teacherId;
+        const isClassTeacher = sectionDoc.classTeacherId && String(sectionDoc.classTeacherId._id || sectionDoc.classTeacherId) === teacherId;
         sectionEntry = {
           _id: sectionDoc._id,
           name: sectionDoc.name,
@@ -716,6 +726,11 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
           capacity: sectionDoc.capacity,
           class: assignment.classId,
           isClassTeacher: Boolean(isClassTeacher),
+          classTeacher: sectionDoc.classTeacherId ? {
+            _id: sectionDoc.classTeacherId._id || sectionDoc.classTeacherId,
+            fullName: sectionDoc.classTeacherId.fullName || 'Class Teacher',
+            designation: sectionDoc.classTeacherId.designation || '',
+          } : null,
           assignedSubjects: [],
         };
         sectionMap.set(sectionIdStr, sectionEntry);
@@ -734,6 +749,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
           capacity: 50,
           class: classDoc,
           isClassTeacher: false,
+          classTeacher: null,
           assignedSubjects: [],
         };
         sectionMap.set(sectionIdStr, sectionEntry);
@@ -758,10 +774,34 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
     }
   }
 
+  // Calculate distinct subjects count and total assignment allocations
+  const uniqueSubjectIds = new Set();
+  for (const assignment of subjectAssignments) {
+    const candidateSubId = assignment.subjectId?._id || assignment.subjectId;
+    if (candidateSubId) {
+      uniqueSubjectIds.add(String(candidateSubId));
+    }
+  }
+  const uniqueSubjectsCount = uniqueSubjectIds.size;
+  const totalAssignmentsCount = subjectAssignments.length;
+
   // 4. Enrich sections with student counts and attendance status
   const unifiedSections = Array.from(sectionMap.values());
   const sectionSummaries = await Promise.all(
     unifiedSections.map(async (section) => {
+      let siblingSectionsCount = 0;
+      if (section._id && !String(section._id).startsWith('class_')) {
+        try {
+          siblingSectionsCount = await Section.countDocuments({
+            classId: section.class?._id,
+            schoolId: teacherSchoolId,
+            status: { $ne: 'ARCHIVED' },
+          });
+        } catch {
+          siblingSectionsCount = 0;
+        }
+      }
+
       const studentCountFilter = {
         schoolId: teacherSchoolId,
         lifecycleStatus: STUDENT_STATUS.ACTIVE,
@@ -770,10 +810,15 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         studentCountFilter.classId = section.class._id;
       }
       if (section._id && !String(section._id).startsWith('class_')) {
-        studentCountFilter.$or = [
-          { sectionId: section._id },
-          { classId: section.class?._id }
-        ];
+        // Enforce exact section scoping: sibling sections must never double count
+        if (siblingSectionsCount <= 1) {
+          studentCountFilter.$or = [
+            { sectionId: section._id },
+            { classId: section.class?._id, sectionId: { $in: [null, undefined] } },
+          ];
+        } else {
+          studentCountFilter.sectionId = section._id;
+        }
       }
 
       const attendanceQuery = {
@@ -813,6 +858,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         capacity: section.capacity,
         class: section.class,
         isClassTeacher: section.isClassTeacher,
+        classTeacher: section.classTeacher || null,
         assignedSubjects: section.assignedSubjects,
         studentCount,
         todayAttendance: {
@@ -861,6 +907,9 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
       totalAssignedStudents,
       pendingAttendanceCount: pendingAttendanceSections.length,
       activeHomeworkCount,
+      uniqueSubjectsCount,
+      totalAssignmentsCount,
+      activeAssignmentsCount: uniqueSubjectsCount, // Contract alignment: exposes nonzero unique subjects count
     },
     sections: sectionSummaries,
     homework: {

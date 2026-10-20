@@ -42,6 +42,7 @@ import {
   TEACHING_ASSIGNMENT_STATUS,
   STUDENT_STATUS,
 } from '../config/constants.js';
+import { getKarachiDateString } from '../src/utils/karachiTime.js';
 
 // Production controllers
 import { handleGetTeacherSummary } from '../src/controllers/academicController.js';
@@ -189,6 +190,7 @@ Result.findOne = () => makeChainable(null);
 Result.create = (docs) => Promise.resolve(Array.isArray(docs) ? docs : [docs]);
 StudentProfile.find = () => makeChainable([]);
 StudentProfile.countDocuments = () => Promise.resolve(0);
+Section.countDocuments = () => Promise.resolve(1);
 Subject.findById = (id) => makeChainable({
   _id: id || subjectEnglish_Id,
   schoolId: schoolA_Id,
@@ -436,7 +438,7 @@ await runAsyncTest('Scenario 06: Authorized attendance submission succeeds and p
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: '2026-09-23',
+      date: getKarachiDateString(new Date()),
       records: [
         { studentProfileId: student1_Id, status: 'PRESENT', remarks: 'On time' },
         { studentProfileId: student2_Id, status: 'LEAVE', remarks: 'Medical appointment' },
@@ -496,7 +498,7 @@ await runAsyncTest('Scenario 07: Mark All Present behavior processes and records
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: '2026-09-23',
+      date: getKarachiDateString(new Date()),
       records: [
         { studentProfileId: student1_Id, status: 'PRESENT' },
         { studentProfileId: student2_Id, status: 'PRESENT' },
@@ -540,7 +542,7 @@ await runAsyncTest('Scenario 08: Attendance student ownership validation rejects
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: '2026-09-23',
+      date: getKarachiDateString(new Date()),
       records: [
         { studentProfileId: studentForeign_Id, status: 'PRESENT' },
       ],
@@ -1613,6 +1615,136 @@ await runAsyncTest('Scenario 29: Invalid Drawing letter grade is rejected with 4
   TeachingAssignment.findOne = origTeachingAssignmentFindOne;
   StudentProfile.find = origStudentFind;
   Subject.findById = origSubjectFindById;
+});
+
+await runAsyncTest('Scenario 30: Contract verification: uniqueSubjectsCount and totalAssignmentsCount are accurately resolved', async () => {
+  const origSectionFind = Section.find;
+  const origTeachingAssignmentFind = TeachingAssignment.find;
+  const origStudentCount = StudentProfile.countDocuments;
+  const origAttendanceFindOne = Attendance.findOne;
+
+  Section.find = () => makeChainable([]);
+  TeachingAssignment.find = () => makeChainable([
+    {
+      _id: '507f1f77bcf86cd799439081',
+      teacherId: teacherA_Id,
+      sectionId: { _id: sectionA_Id, name: 'A', classId: { _id: classA_Id, name: 'Class 1' } },
+      subjectId: { _id: subjectEnglish_Id, name: 'English', code: 'ENG-1' },
+      status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+    },
+    {
+      _id: '507f1f77bcf86cd799439082',
+      teacherId: teacherA_Id,
+      sectionId: { _id: sectionB_Id, name: 'B', classId: { _id: classA_Id, name: 'Class 2' } },
+      subjectId: { _id: subjectEnglish_Id, name: 'English', code: 'ENG-2' }, // Same subject in another class
+      status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+    },
+    {
+      _id: '507f1f77bcf86cd799439083',
+      teacherId: teacherA_Id,
+      sectionId: { _id: sectionA_Id, name: 'A', classId: { _id: classA_Id, name: 'Class 1' } },
+      subjectId: { _id: subjectMath_Id, name: 'Math', code: 'MTH-1' },
+      status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+    },
+  ]);
+  StudentProfile.countDocuments = () => Promise.resolve(20);
+  Attendance.findOne = () => makeChainable(null);
+
+  const req = { user: teacherA_User };
+  const res = createMockRes();
+
+  await handleGetTeacherSummary(req, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.data.summary.totalAssignmentsCount, 3);
+  assert.strictEqual(res.body.data.summary.uniqueSubjectsCount, 2); // English + Math
+  assert.strictEqual(res.body.data.summary.activeAssignmentsCount, 2); // Backward compatibility check
+
+  Section.find = origSectionFind;
+  TeachingAssignment.find = origTeachingAssignmentFind;
+  StudentProfile.countDocuments = origStudentCount;
+  Attendance.findOne = origAttendanceFindOne;
+});
+
+await runAsyncTest('Scenario 31: Multi-section sibling student scoping prevents double counting', async () => {
+  const origSectionFind = Section.find;
+  const origSectionCount = Section.countDocuments;
+  const origTeachingAssignmentFind = TeachingAssignment.find;
+  const origStudentCount = StudentProfile.countDocuments;
+  const origAttendanceFindOne = Attendance.findOne;
+
+  // Class 1 has 2 sections: Section A and Section B
+  Section.find = () => makeChainable([
+    { _id: sectionA_Id, name: 'A', classId: { _id: classA_Id, name: 'Class 1' }, schoolId: schoolA_Id, classTeacherId: teacherA_Id },
+  ]);
+  Section.countDocuments = () => Promise.resolve(2); // Sibling sections exist!
+  TeachingAssignment.find = () => makeChainable([]);
+
+  let capturedQuery = null;
+  StudentProfile.countDocuments = (query) => {
+    capturedQuery = query;
+    return Promise.resolve(15);
+  };
+  Attendance.findOne = () => makeChainable(null);
+
+  const req = { user: teacherA_User };
+  const res = createMockRes();
+
+  await handleGetTeacherSummary(req, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(capturedQuery);
+  // When sibling sections > 1, must strictly query sectionId, NOT class-wide $or
+  assert.strictEqual(String(capturedQuery.sectionId), sectionA_Id);
+  assert.strictEqual(capturedQuery.$or, undefined);
+
+  Section.find = origSectionFind;
+  Section.countDocuments = origSectionCount;
+  TeachingAssignment.find = origTeachingAssignmentFind;
+  StudentProfile.countDocuments = origStudentCount;
+  Attendance.findOne = origAttendanceFindOne;
+});
+
+await runAsyncTest('Scenario 32: Subject Teacher section summary exposes classTeacher metadata', async () => {
+  const origSectionFind = Section.find;
+  const origTeachingAssignmentFind = TeachingAssignment.find;
+  const origStudentCount = StudentProfile.countDocuments;
+  const origAttendanceFindOne = Attendance.findOne;
+
+  Section.find = () => makeChainable([]);
+  TeachingAssignment.find = () => makeChainable([
+    {
+      _id: '507f1f77bcf86cd799439084',
+      teacherId: teacherA_Id,
+      sectionId: {
+        _id: sectionB_Id,
+        name: 'B',
+        classId: { _id: classA_Id, name: 'Class 1' },
+        classTeacherId: { _id: teacherB_Id, fullName: 'Sir Tariq Qureshi', designation: 'Head Master' },
+      },
+      subjectId: { _id: subjectEnglish_Id, name: 'English', code: 'ENG-1' },
+      status: TEACHING_ASSIGNMENT_STATUS.ACTIVE,
+    },
+  ]);
+  StudentProfile.countDocuments = () => Promise.resolve(25);
+  Attendance.findOne = () => makeChainable(null);
+
+  const req = { user: teacherA_User };
+  const res = createMockRes();
+
+  await handleGetTeacherSummary(req, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  const sections = res.body.data.sections;
+  assert.strictEqual(sections.length, 1);
+  assert.strictEqual(sections[0].isClassTeacher, false);
+  assert.ok(sections[0].classTeacher);
+  assert.strictEqual(sections[0].classTeacher.fullName, 'Sir Tariq Qureshi');
+
+  Section.find = origSectionFind;
+  TeachingAssignment.find = origTeachingAssignmentFind;
+  StudentProfile.countDocuments = origStudentCount;
+  Attendance.findOne = origAttendanceFindOne;
 });
 
 console.log('\n======================================================================');
