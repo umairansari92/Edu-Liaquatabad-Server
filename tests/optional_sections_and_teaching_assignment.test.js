@@ -330,11 +330,11 @@ async function runAllTests() {
     const originalAttendanceFindOne = mongoose.models.Attendance?.findOne;
 
     try {
-      Section.find = () => ({
-        populate: () => ({
-          lean: () => Promise.resolve([]),
-        }),
-      });
+      const sectionQueryMock = {
+        populate: () => sectionQueryMock,
+        lean: () => Promise.resolve([]),
+      };
+      Section.find = () => sectionQueryMock;
 
       TeachingAssignment.find = () => ({
         populate: () => ({

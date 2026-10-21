@@ -217,6 +217,38 @@ export const NOTIFICATION_METADATA_ALLOWLIST = {
     'schoolId',
     'schoolName',
   ],
+  LATE_ATTENDANCE_REQUEST: [
+    'requestId',
+    'sectionId',
+    'classId',
+    'className',
+    'sectionName',
+    'attendanceDate',
+    'teacherId',
+    'teacherName',
+    'reason',
+    'status',
+  ],
+  LATE_ATTENDANCE_APPROVED: [
+    'requestId',
+    'sectionId',
+    'className',
+    'sectionName',
+    'attendanceDate',
+    'hmName',
+    'unlockedUntil',
+    'status',
+  ],
+  LATE_ATTENDANCE_REJECTED: [
+    'requestId',
+    'sectionId',
+    'className',
+    'sectionName',
+    'attendanceDate',
+    'hmName',
+    'rejectionReason',
+    'status',
+  ],
 };
 
 /**

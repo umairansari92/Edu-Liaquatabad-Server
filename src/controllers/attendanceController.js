@@ -10,6 +10,7 @@ import User from "../models/User.js";
 import TeacherProfile from "../models/TeacherProfile.js";
 import HolidayCalendar from "../models/HolidayCalendar.js";
 import WeeklyOffPattern from "../models/WeeklyOffPattern.js";
+import LateAttendanceRequest from "../models/LateAttendanceRequest.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
@@ -23,7 +24,9 @@ import {
   getKarachiTimeString,
   getKarachiDateString,
   getKarachiDayOfWeek,
+  getKarachiEndOfDayDate,
 } from "../utils/karachiTime.js";
+import { dispatchNotificationEvent } from "../services/notificationDispatcher.js";
 import cache from "../utils/cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +226,7 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
     windowCheck = await validateSubmissionWindow({
       school,
       requestingActor,
+      sectionId: section._id,
       date: queryDate,
       currentTime: isToday ? new Date() : undefined,
     });
@@ -235,6 +239,15 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
   const currentTimePkt = getKarachiTimeString(isToday ? new Date() : queryDate);
   const canOverride = isActorHmOrAdmin && isToday && resolved.allowHmLateOverride !== false;
 
+  let latestClearance = null;
+  if (requestingActor.role === ROLES.TEACHER) {
+    latestClearance = await LateAttendanceRequest.findOne({
+      sectionId: section._id,
+      datePkt: queryDatePkt,
+      teacherUserId: requestingActor._id,
+    }).sort({ createdAt: -1 }).lean();
+  }
+
   return sendSuccess(response, 200, "Attendance sheet retrieved.", {
     section: { _id: section._id, name: section.name, roomNumber: section.roomNumber || "", class: section.classId },
     date: queryDate.toISOString().split("T")[0],
@@ -245,6 +258,16 @@ export const handleGetAttendanceSheet = asyncHandler(async (request, response) =
       allowed: windowCheck.allowed,
       code: windowCheck.code || (windowCheck.allowed ? "WINDOW_OPEN" : "UNKNOWN"),
       reason: windowCheck.reason || "",
+      isLateClearanceApproved: Boolean(windowCheck.clearanceId),
+      clearance: latestClearance ? {
+        id: latestClearance._id,
+        status: latestClearance.status,
+        reason: latestClearance.reason,
+        unlockedUntil: latestClearance.unlockedUntil,
+        decisionRemarks: latestClearance.decisionRemarks,
+        decisionByName: latestClearance.decisionByName,
+        isExpired: latestClearance.unlockedUntil ? new Date() > new Date(latestClearance.unlockedUntil) : false,
+      } : null,
       isClosed: closureCheck.isClosed,
       closureType: closureCheck.type || null,
       closureReason: closureCheck.reason || null,
@@ -479,6 +502,7 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   const windowCheck = await validateSubmissionWindow({
     school,
     requestingActor,
+    sectionId: section._id,
     date: queryDate,
     currentTime: queryDatePkt === todayPktDate ? new Date() : undefined,
     isLateOverride: Boolean(isLateOverride),
@@ -674,8 +698,10 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
       `'${proxyTeacherRecord.fullName}' (${proxyTeacherId}) who is on Casual Leave. ` +
       `Proxy reason: ${proxyReason.trim()}`;
   } else if (windowCheck.isLateOverride) {
-    auditAction = "ATTENDANCE_LATE_OVERRIDE_SUBMITTED";
-    auditReason = `HM Emergency Late Clearance: ${windowCheck.lateReason}`;
+    auditAction = windowCheck.clearanceId ? "ATTENDANCE_LATE_CLEARANCE_SUBMITTED" : "ATTENDANCE_LATE_OVERRIDE_SUBMITTED";
+    auditReason = windowCheck.clearanceId
+      ? `HM Approved Late Clearance: ${windowCheck.lateReason}`
+      : `HM Emergency Late Clearance: ${windowCheck.lateReason}`;
   } else {
     auditAction = "ATTENDANCE_SUBMITTED";
     auditReason = "Teacher submitted daily attendance (A/L exceptions; P server-derived from enrollment).";
@@ -701,6 +727,7 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
       leaveCount,
       isLateOverride:  Boolean(windowCheck.isLateOverride),
       lateReason:      windowCheck.lateReason || null,
+      clearanceId:     windowCheck.clearanceId || null,
       // CL Proxy fields — present only when HM is acting on behalf of a CL teacher
       isClProxy:       isHmClProxy,
       proxyTeacherId:  isHmClProxy ? proxyTeacherId : null,
@@ -1938,5 +1965,408 @@ export const handleGetTeacherSelfAttendance = asyncHandler(async (request, respo
       attendancePercentage,
     },
     history,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /attendance/late-clearance/request
+// Teacher requests late attendance clearance from Head Master
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleRequestLateAttendanceClearance = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { sectionId, date, reason } = request.body;
+
+  if (requestingActor.role !== ROLES.TEACHER) {
+    return sendError(response, 403, "Forbidden: Only designated teachers may request late attendance clearance.");
+  }
+
+  if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, "A valid sectionId is required.");
+  }
+
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+    return sendError(response, 400, "A meaningful justification reason of at least 5 characters is mandatory.");
+  }
+
+  if (reason.trim().length > 500) {
+    return sendError(response, 400, "Justification reason cannot exceed 500 characters.");
+  }
+
+  const queryDate = date ? new Date(date) : new Date();
+  if (isNaN(queryDate.getTime())) {
+    return sendError(response, 400, "Invalid attendance date format.");
+  }
+
+  const section = await resolveTeacherSection(requestingActor, sectionId, response);
+  if (!section) return;
+
+  const school = await School.findById(section.schoolId).lean();
+  if (!school) {
+    return sendError(response, 404, "Section school entity not found in municipal registry.");
+  }
+
+  const todayPktDate = getKarachiDateString(new Date());
+  const queryDatePkt = getKarachiDateString(queryDate);
+
+  if (queryDatePkt > todayPktDate) {
+    return sendError(response, 400, "Cannot request late clearance for future dates.");
+  }
+  if (queryDatePkt < todayPktDate) {
+    return sendError(response, 400, "Late attendance clearance is restricted strictly to the same calendar day. Historical attendance adjustments require formal administrative review.");
+  }
+
+  // Verify that the attendance window is actually closed (no clearance needed while open)
+  const windowCheck = await validateSubmissionWindow({
+    school,
+    requestingActor,
+    sectionId: section._id,
+    date: queryDate,
+    currentTime: new Date(),
+  });
+
+  if (windowCheck.allowed) {
+    return sendError(
+      response,
+      400,
+      "Attendance window is currently open for this school. You can submit attendance directly without late clearance."
+    );
+  }
+
+  // Check if a PENDING clearance request already exists
+  const existingPending = await LateAttendanceRequest.findOne({
+    sectionId: section._id,
+    datePkt: queryDatePkt,
+    teacherUserId: requestingActor._id,
+    status: 'PENDING',
+  });
+
+  if (existingPending) {
+    return sendError(
+      response,
+      409,
+      "A late attendance clearance request is already pending review by your Head Master."
+    );
+  }
+
+  // Check if an active APPROVED clearance already exists
+  const existingApproved = await LateAttendanceRequest.findOne({
+    sectionId: section._id,
+    datePkt: queryDatePkt,
+    teacherUserId: requestingActor._id,
+    status: 'APPROVED',
+    unlockedUntil: { $gte: new Date() },
+  });
+
+  if (existingApproved) {
+    return sendError(
+      response,
+      409,
+      "Late attendance clearance is already approved and active for this section today."
+    );
+  }
+
+  const trimmedReason = reason.trim();
+  const newRequest = await LateAttendanceRequest.create({
+    schoolId: section.schoolId,
+    classId: section.classId?._id || section.classId,
+    sectionId: section._id,
+    teacherUserId: requestingActor._id,
+    teacherName: requestingActor.fullName || 'Teacher',
+    date: queryDate,
+    datePkt: queryDatePkt,
+    reason: trimmedReason,
+    status: 'PENDING',
+  });
+
+  const className = section.classId?.name || 'Class';
+  const sectionName = section.name && section.name !== 'null' && section.name.toLowerCase() !== 'default'
+    ? `Section ${section.name}`
+    : 'Default';
+
+  // Dispatch in-app notification to all active HMs of this school
+  await dispatchNotificationEvent({
+    eventType: 'LATE_ATTENDANCE_REQUEST',
+    category: 'ATTENDANCE',
+    title: 'Late Attendance Clearance Requested',
+    message: `Teacher ${requestingActor.fullName} requested late attendance clearance for ${className} - ${sectionName} (${queryDatePkt}). Reason: "${trimmedReason}"`,
+    actionLink: '/dashboard?tab=attendance',
+    rawMetadata: {
+      requestId: String(newRequest._id),
+      sectionId: String(section._id),
+      classId: String(section.classId?._id || section.classId),
+      className,
+      sectionName,
+      attendanceDate: queryDatePkt,
+      teacherId: String(requestingActor._id),
+      teacherName: requestingActor.fullName,
+      reason: trimmedReason,
+      status: 'PENDING',
+    },
+    audienceCriteria: {
+      type: 'SCHOOL_STAFF',
+      schoolId: section.schoolId,
+      roles: [ROLES.HM],
+    },
+  });
+
+  // Audit Log
+  await AuditLog.create({
+    actorId: requestingActor._id,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName || '',
+    action: 'LATE_ATTENDANCE_CLEARANCE_REQUESTED',
+    targetModel: 'LateAttendanceRequest',
+    targetId: newRequest._id,
+    targetName: `${className} — ${sectionName} (${queryDatePkt})`,
+    schoolId: section.schoolId,
+    previousState: null,
+    newState: {
+      requestId: String(newRequest._id),
+      sectionId: String(section._id),
+      datePkt: queryDatePkt,
+      reason: trimmedReason,
+      status: 'PENDING',
+    },
+    result: 'SUCCESS',
+    reason: trimmedReason,
+    ipAddress: request.ip || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 201, "Late attendance clearance request submitted to Head Master.", {
+    request: newRequest,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /attendance/late-clearance/:requestId/decision
+// Head Master / Administrator approves or rejects late clearance request
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleDecideLateAttendanceClearance = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { requestId } = request.params;
+  const { decision, remarks = '' } = request.body;
+
+  const allowedRoles = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN];
+  if (!allowedRoles.includes(requestingActor.role)) {
+    return sendError(response, 403, "Forbidden: Only Head Masters and Municipal Administrators may decide late clearance requests.");
+  }
+
+  if (!requestId || !/^[0-9a-fA-F]{24}$/.test(requestId)) {
+    return sendError(response, 400, "A valid requestId is required.");
+  }
+
+  if (!['APPROVE', 'REJECT'].includes(decision)) {
+    return sendError(response, 400, "Decision must be either 'APPROVE' or 'REJECT'.");
+  }
+
+  const trimmedRemarks = typeof remarks === 'string' ? remarks.trim() : '';
+  if (decision === 'REJECT' && trimmedRemarks.length < 5) {
+    return sendError(response, 400, "Rejection remarks of at least 5 characters are mandatory.");
+  }
+
+  const existingRequest = await LateAttendanceRequest.findById(requestId)
+    .populate('classId', 'name')
+    .populate('sectionId', 'name')
+    .lean();
+
+  if (!existingRequest) {
+    return sendError(response, 404, "Late attendance clearance request not found.");
+  }
+
+  // School scope validation for HM
+  if (requestingActor.role === ROLES.HM) {
+    const hmSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+    if (!hmSchoolId || hmSchoolId !== String(existingRequest.schoolId)) {
+      return sendError(response, 403, "Forbidden: You are only authorized to decide clearance requests for your assigned school.");
+    }
+  }
+
+  // Expiry calculation: Option A — end of attendance day in PKT (23:59:59.999 PKT)
+  const unlockedUntil = decision === 'APPROVE'
+    ? getKarachiEndOfDayDate(existingRequest.datePkt || existingRequest.date)
+    : null;
+
+  const updateFields = {
+    status: decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+    decisionBy: requestingActor._id,
+    decisionByName: requestingActor.fullName || 'Official',
+    decisionAt: new Date(),
+    decisionRemarks: trimmedRemarks || (decision === 'APPROVE' ? 'Approved by Head Master' : ''),
+  };
+  if (unlockedUntil) {
+    updateFields.unlockedUntil = unlockedUntil;
+  }
+
+  // Atomic state transition: strictly transitions from PENDING
+  const updatedRequest = await LateAttendanceRequest.findOneAndUpdate(
+    { _id: requestId, schoolId: existingRequest.schoolId, status: 'PENDING' },
+    { $set: updateFields },
+    { new: true }
+  ).lean();
+
+  if (!updatedRequest) {
+    return sendError(
+      response,
+      409,
+      "This clearance request has already been decided or is no longer pending."
+    );
+  }
+
+  const className = existingRequest.classId?.name || 'Class';
+  const sectionName = existingRequest.sectionId?.name && existingRequest.sectionId.name !== 'null' && existingRequest.sectionId.name.toLowerCase() !== 'default'
+    ? `Section ${existingRequest.sectionId.name}`
+    : 'Default';
+  const queryDatePkt = existingRequest.datePkt || getKarachiDateString(existingRequest.date);
+
+  // Dispatch notification to requesting teacher
+  if (decision === 'APPROVE') {
+    await dispatchNotificationEvent({
+      eventType: 'LATE_ATTENDANCE_APPROVED',
+      category: 'ATTENDANCE',
+      title: 'Late Attendance Clearance Granted',
+      message: `Head Master ${requestingActor.fullName} approved late attendance clearance for ${className} - ${sectionName} (${queryDatePkt}). Attendance is unlocked until 23:59 PKT today.`,
+      actionLink: '/dashboard?tab=attendance',
+      recipientUserIds: [existingRequest.teacherUserId],
+      rawMetadata: {
+        requestId: String(updatedRequest._id),
+        sectionId: String(existingRequest.sectionId?._id || existingRequest.sectionId),
+        className,
+        sectionName,
+        attendanceDate: queryDatePkt,
+        hmName: requestingActor.fullName,
+        unlockedUntil: updatedRequest.unlockedUntil ? (typeof updatedRequest.unlockedUntil.toISOString === 'function' ? updatedRequest.unlockedUntil.toISOString() : new Date(updatedRequest.unlockedUntil).toISOString()) : '',
+        status: 'APPROVED',
+      },
+    });
+  } else {
+    await dispatchNotificationEvent({
+      eventType: 'LATE_ATTENDANCE_REJECTED',
+      category: 'ATTENDANCE',
+      title: 'Late Attendance Request Rejected',
+      message: `Head Master ${requestingActor.fullName} rejected your late attendance request for ${className} - ${sectionName}. Remarks: "${trimmedRemarks}"`,
+      actionLink: '/dashboard?tab=attendance',
+      recipientUserIds: [existingRequest.teacherUserId],
+      rawMetadata: {
+        requestId: String(updatedRequest._id),
+        sectionId: String(existingRequest.sectionId?._id || existingRequest.sectionId),
+        className,
+        sectionName,
+        attendanceDate: queryDatePkt,
+        hmName: requestingActor.fullName,
+        rejectionReason: trimmedRemarks,
+        status: 'REJECTED',
+      },
+    });
+  }
+
+  // Audit Log
+  await AuditLog.create({
+    actorId: requestingActor._id,
+    actorRole: requestingActor.role,
+    actorDesignation: requestingActor.designation || '',
+    actorName: requestingActor.fullName || '',
+    action: decision === 'APPROVE' ? 'LATE_ATTENDANCE_CLEARANCE_APPROVED' : 'LATE_ATTENDANCE_CLEARANCE_REJECTED',
+    targetModel: 'LateAttendanceRequest',
+    targetId: updatedRequest._id,
+    targetName: `${className} — ${sectionName} (${queryDatePkt})`,
+    schoolId: existingRequest.schoolId,
+    previousState: { status: 'PENDING' },
+    newState: {
+      status: updatedRequest.status,
+      decisionBy: String(requestingActor._id),
+      decisionRemarks: updateFields.decisionRemarks,
+      unlockedUntil: updatedRequest.unlockedUntil || null,
+    },
+    result: 'SUCCESS',
+    reason: updateFields.decisionRemarks,
+    ipAddress: request.ip || '',
+    userAgent: request.headers?.['user-agent'] || '',
+    requestId: request.headers?.['x-request-id'] || '',
+  });
+
+  return sendSuccess(
+    response,
+    200,
+    decision === 'APPROVE'
+      ? "Late attendance clearance granted successfully."
+      : "Late attendance request rejected.",
+    { request: updatedRequest }
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /attendance/late-clearance/pending
+// Head Master queries pending clearance requests for their school
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleGetPendingLateAttendanceClearances = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const allowedRoles = [ROLES.HM, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN];
+  if (!allowedRoles.includes(requestingActor.role)) {
+    return sendError(response, 403, "Forbidden: Only Head Masters and Municipal Administrators can view pending clearances.");
+  }
+
+  let schoolQuery = {};
+  if (requestingActor.role === ROLES.HM) {
+    const hmSchoolId = requestingActor.schoolId?._id || requestingActor.schoolId;
+    if (!hmSchoolId) {
+      return sendError(response, 400, "User is not assigned to any school.");
+    }
+    schoolQuery.schoolId = hmSchoolId;
+  } else if (request.query.schoolId) {
+    schoolQuery.schoolId = request.query.schoolId;
+  }
+
+  const pendingRequests = await LateAttendanceRequest.find({
+    ...schoolQuery,
+    status: 'PENDING',
+  })
+    .populate('classId', 'name numericGrade')
+    .populate('sectionId', 'name')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return sendSuccess(response, 200, "Pending late attendance clearance requests retrieved.", {
+    items: pendingRequests,
+    total: pendingRequests.length,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /attendance/late-clearance/status
+// Teacher queries clearance status for a section and date
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleGetLateAttendanceClearanceStatus = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { sectionId, date } = request.query;
+
+  if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
+    return sendError(response, 400, "A valid sectionId query parameter is required.");
+  }
+
+  const queryDate = date ? new Date(date) : new Date();
+  const queryDatePkt = getKarachiDateString(queryDate);
+
+  const clearance = await LateAttendanceRequest.findOne({
+    sectionId,
+    datePkt: queryDatePkt,
+    teacherUserId: requestingActor._id,
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return sendSuccess(response, 200, "Late attendance clearance status retrieved.", {
+    clearance: clearance ? {
+      id: clearance._id,
+      status: clearance.status,
+      reason: clearance.reason,
+      unlockedUntil: clearance.unlockedUntil,
+      decisionRemarks: clearance.decisionRemarks,
+      decisionByName: clearance.decisionByName,
+      isExpired: clearance.unlockedUntil ? new Date() > new Date(clearance.unlockedUntil) : false,
+      createdAt: clearance.createdAt,
+    } : null,
   });
 });

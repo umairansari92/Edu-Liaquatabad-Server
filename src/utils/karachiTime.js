@@ -65,3 +65,13 @@ export const normalizeToKarachiDate = (dateValue) => {
   }
   return getKarachiDateString(new Date(dateValue));
 };
+
+/**
+ * Returns the exact end-of-day Date instance in Asia/Karachi (23:59:59.999 PKT)
+ * @param {string|Date} [dateValue] - "YYYY-MM-DD" or Date object
+ * @returns {Date}
+ */
+export const getKarachiEndOfDayDate = (dateValue) => {
+  const datePkt = normalizeToKarachiDate(dateValue);
+  return new Date(`${datePkt}T23:59:59.999+05:00`);
+};

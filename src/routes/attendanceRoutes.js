@@ -12,6 +12,10 @@ import {
   handleSaveTeacherDailyAttendance,
   handleGetTeacherSelfAttendance,
   handleClearMissedAttendance,
+  handleRequestLateAttendanceClearance,
+  handleDecideLateAttendanceClearance,
+  handleGetPendingLateAttendanceClearances,
+  handleGetLateAttendanceClearanceStatus,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -80,6 +84,35 @@ router.post(
   "/submit",
   authorizePermissions(PERMISSIONS.ATTENDANCE_MARK),
   handleSubmitAttendance
+);
+
+// ─── Late Attendance Clearance Lifecycle ───────────────────────────────────────
+// Teacher requests late attendance clearance after submission window closes
+router.post(
+  "/late-clearance/request",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_MARK),
+  handleRequestLateAttendanceClearance
+);
+
+// Head Master / Administrator approves or rejects clearance request
+router.post(
+  "/late-clearance/:requestId/decision",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
+  handleDecideLateAttendanceClearance
+);
+
+// Head Master / Administrator views pending clearance requests
+router.get(
+  "/late-clearance/pending",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VERIFY),
+  handleGetPendingLateAttendanceClearances
+);
+
+// Teacher views clearance status for section and date
+router.get(
+  "/late-clearance/status",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetLateAttendanceClearanceStatus
 );
 
 // ─── POST Clear Missed Attendance (HM / Admin Authorized Exception) ────────────

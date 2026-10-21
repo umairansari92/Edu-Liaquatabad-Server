@@ -12,6 +12,7 @@
 import mongoose from 'mongoose';
 import HolidayCalendar from '../models/HolidayCalendar.js';
 import WeeklyOffPattern from '../models/WeeklyOffPattern.js';
+import LateAttendanceRequest from '../models/LateAttendanceRequest.js';
 import cache from '../utils/cache.js';
 import {
   getKarachiTimeString,
@@ -207,6 +208,7 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
 export const validateSubmissionWindow = async ({
   school,
   requestingActor,
+  sectionId = null,
   date = new Date(),
   currentTime,
   isLateOverride = false,
@@ -303,6 +305,35 @@ export const validateSubmissionWindow = async ({
         isLateOverride: true,
         lateReason: lateReason.trim(),
       };
+    }
+
+    // Check if Teacher has an approved Late Attendance Clearance for this section and date
+    if (requestingActor?.role === ROLES.TEACHER && sectionId) {
+      const existingClearance = await LateAttendanceRequest.findOne({
+        schoolId: school._id,
+        sectionId,
+        teacherUserId: requestingActor._id,
+        datePkt: submissionDatePkt,
+        status: 'APPROVED',
+      }).sort({ createdAt: -1 }).lean();
+
+      if (existingClearance) {
+        if (existingClearance.unlockedUntil && new Date() <= new Date(existingClearance.unlockedUntil)) {
+          return {
+            allowed: true,
+            isLateOverride: true,
+            lateReason: existingClearance.reason,
+            clearanceId: existingClearance._id,
+            unlockedUntil: existingClearance.unlockedUntil,
+          };
+        } else {
+          return {
+            allowed: false,
+            code: 'CLEARANCE_EXPIRED',
+            reason: `Head Master's late attendance clearance expired at ${getKarachiTimeString(new Date(existingClearance.unlockedUntil))} PKT. A new clearance is required.`,
+          };
+        }
+      }
     }
 
     return {
