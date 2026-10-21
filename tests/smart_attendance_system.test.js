@@ -55,6 +55,7 @@ import Attendance from '../src/models/Attendance.js';
 import StudentProfile from '../src/models/StudentProfile.js';
 import School from '../src/models/School.js';
 import AuditLog from '../src/models/AuditLog.js';
+import { getKarachiDateString } from '../src/utils/karachiTime.js';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -195,7 +196,7 @@ await runAsyncTest('Scenario 01: Authorized Class Teacher can submit attendance'
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [mock40StudentProfiles[0]._id],
       leaveStudentProfileIds: [],
     },
@@ -238,7 +239,7 @@ await runAsyncTest('Scenario 02: Authorized Subject Teacher with active Teaching
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [],
       leaveStudentProfileIds: [],
     },
@@ -273,7 +274,7 @@ await runAsyncTest('Scenario 03: Unauthorized section rejected with 403 Forbidde
     user: teacherA_User,
     body: {
       sectionId: sectionB_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [],
     },
   };
@@ -302,7 +303,7 @@ await runAsyncTest('Scenario 04: Cross-school section rejected with 403 Forbidde
     user: teacherA_User, // Teacher posted at School A
     body: {
       sectionId: '507f1f77bcf86cd799439033',
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
     },
   };
   const mockResponse = createMockResponse();
@@ -361,7 +362,7 @@ await runAsyncTest('Scenario 06: 40-student roster with zero exceptions produces
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [],
       leaveStudentProfileIds: [],
     },
@@ -411,7 +412,7 @@ await runAsyncTest('Scenario 07: 40 students + 2 Absent produces 38 Present + 2 
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: absentIds,
       leaveStudentProfileIds: [],
     },
@@ -464,7 +465,7 @@ await runAsyncTest('Scenario 08: 40 students + 2 Absent + 1 Leave produces 37 Pr
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: absentIds,
       leaveStudentProfileIds: leaveIds,
     },
@@ -518,7 +519,7 @@ await runAsyncTest('Scenario 09: Student omitted from exception payload automati
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [mock40StudentProfiles[0]._id],
       leaveStudentProfileIds: [],
     },
@@ -559,7 +560,7 @@ await runAsyncTest('Scenario 10: Inactive student profile rejected if submitted 
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [inactiveStudentProfileId],
     },
   };
@@ -593,7 +594,7 @@ await runAsyncTest('Scenario 11: Foreign student ID rejected with 400 Bad Reques
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [foreignStudentProfile_Id],
     },
   };
@@ -629,7 +630,7 @@ await runAsyncTest('Scenario 12: Cross-school student ID rejected with 400 Bad R
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       leaveStudentProfileIds: [crossSchoolStudentId],
     },
   };
@@ -661,7 +662,7 @@ await runAsyncTest('Scenario 13: Duplicate student ID in exceptions rejected wit
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [dupStudentId, dupStudentId], // duplicate ID!
     },
   };
@@ -691,7 +692,7 @@ await runAsyncTest('Scenario 14: Same student in both Absent and Leave rejected 
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [conflictingId],
       leaveStudentProfileIds: [conflictingId], // overlap!
     },
@@ -720,7 +721,7 @@ await runAsyncTest('Scenario 15: Invalid attendance status in records rejected w
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       records: [
         { studentProfileId: mock40StudentProfiles[0]._id, status: 'INVALID_STATUS_XYZ' },
       ],
@@ -741,7 +742,7 @@ await runAsyncTest('Scenario 16: Malformed / non-hex student ID rejected with 40
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: ['not-a-valid-24-hex-id'],
     },
   };
@@ -811,7 +812,7 @@ await runAsyncTest('Scenario 18: Duplicate submission handles idempotency with c
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [],
     },
   };
@@ -863,7 +864,7 @@ await runAsyncTest('Scenario 19: Full records array payload compatibility (legac
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       records: legacyRecords,
     },
   };
@@ -915,7 +916,7 @@ await runAsyncTest('Scenario 20: Attendance window closure / holiday rules enfor
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: '2026-09-20', // Sunday (Weekly Off)
+      date: getKarachiDateString(),
       absentStudentProfileIds: [],
     },
   };
@@ -957,7 +958,7 @@ await runAsyncTest('Scenario 21: Individual student remarks persistence alongsid
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [mock40StudentProfiles[0]._id],
       records: [
         { studentProfileId: mock40StudentProfiles[0]._id, remarks: 'Severe viral fever' },
@@ -1014,7 +1015,7 @@ await runAsyncTest('Scenario 22: AuditLog creation with detailed before/after co
     user: teacherA_User,
     body: {
       sectionId: sectionA_Id,
-      date: new Date().toISOString().split('T')[0],
+      date: getKarachiDateString(),
       absentStudentProfileIds: [mock40StudentProfiles[0]._id],
       leaveStudentProfileIds: [mock40StudentProfiles[1]._id],
     },
