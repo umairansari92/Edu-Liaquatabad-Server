@@ -50,8 +50,6 @@ async function testClientInterceptorAndNetworkPayload() {
       requestUrlString.includes('/auth/logout') ||
       requestUrlString.includes('/auth/mfa/verify-login') ||
       requestUrlString.includes('/auth/mfa/recovery-login') ||
-      requestUrlString.includes('/auth/mfa/setup') ||
-      requestUrlString.includes('/auth/mfa/confirm') ||
       requestUrlString.includes('/auth/captcha') ||
       requestUrlString.includes('/auth/register') ||
       requestUrlString.includes('/auth/forgot-password') ||
