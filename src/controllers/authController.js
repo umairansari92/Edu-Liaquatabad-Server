@@ -1634,3 +1634,77 @@ export const handleTerminateSession = asyncHandler(async (request, response) => 
   return sendSuccess(response, 200, 'Remote session terminated successfully.');
 });
 
+/**
+ * Authenticated Password Change
+ * PATCH /api/v1/auth/change-password
+ * Requires authenticated session, validates current password using Argon2id,
+ * updates to new password hash, and optionally terminates other active sessions.
+ */
+export const handleChangePassword = asyncHandler(async (request, response) => {
+  const targetUserId = request.user?.userId || request.user?._id;
+  const { currentPassword, newPassword, terminateOtherSessions = true } = request.body;
+
+  const user = await User.findById(targetUserId).select('+passwordHash +activeSessions');
+  if (!user) {
+    return sendError(response, 404, 'User account not found.');
+  }
+
+  // 1. Verify current password with Argon2id
+  const isMatch = await verifyPassword(currentPassword, user.passwordHash);
+  if (!isMatch) {
+    return sendError(response, 400, 'The current password you entered is incorrect.');
+  }
+
+  // 2. Hash new password
+  user.passwordHash = await hashPassword(newPassword);
+
+  // 3. Multi-Device session handling
+  if (terminateOtherSessions) {
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // Invalidate all prior access tokens
+
+    // Identify current active session if possible
+    const currentToken = request.cookies?.refreshToken || request.body?.refreshToken;
+    let currentSessionId = null;
+    if (currentToken) {
+      try {
+        const decoded = verifyRefreshToken(currentToken);
+        currentSessionId = decoded.sessionId || null;
+      } catch {
+        // Ignore unverified or expired token
+      }
+    }
+
+    if (currentSessionId && Array.isArray(user.activeSessions)) {
+      user.activeSessions = user.activeSessions.filter((sessionItem) => sessionItem.sessionId === currentSessionId);
+    } else {
+      user.activeSessions = [];
+    }
+  }
+
+  await user.save();
+
+  // 4. Audit Log
+  await AuditLog.create({
+    actorId: targetUserId,
+    actorRole: request.user.role,
+    actorDesignation: request.user.designation || '',
+    actorName: request.user.fullName || '',
+    action: 'PASSWORD_CHANGED',
+    targetModel: 'User',
+    targetId: targetUserId,
+    targetName: request.user.fullName || '',
+    townId: request.user.townId,
+    schoolId: request.user.schoolId || null,
+    newState: {
+      passwordChangedAt: new Date(),
+      terminateOtherSessions: Boolean(terminateOtherSessions),
+    },
+    result: 'SUCCESS',
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Your password has been changed successfully.');
+});
+

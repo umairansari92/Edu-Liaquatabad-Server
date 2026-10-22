@@ -318,3 +318,18 @@ export const adminMfaResetSchema = z.object({
   reason: safeString(300, 5, 'A clear justification reason (minimum 5 characters) is mandatory for resetting MFA.'),
 });
 
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Current password is required').max(128, 'Current password is too long'),
+    newPassword: passwordField,
+    confirmPassword: z.string().min(1, 'Confirm password is required'),
+    terminateOtherSessions: z.boolean().optional().default(true),
+  })
+  .refine((formValues) => formValues.newPassword === formValues.confirmPassword, {
+    message: 'New passwords do not match.',
+    path: ['confirmPassword'],
+  })
+  .refine((formValues) => formValues.currentPassword !== formValues.newPassword, {
+    message: 'New password cannot be the same as your current password.',
+    path: ['newPassword'],
+  });

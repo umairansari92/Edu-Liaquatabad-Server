@@ -18,6 +18,7 @@ import {
   handleResubmitCorrection,
   handleGetActiveSessions,
   handleTerminateSession,
+  handleChangePassword,
 } from '../controllers/authController.js';
 import {
   authLimiter,
@@ -41,6 +42,7 @@ import {
   loginSchema,
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
+  changePasswordSchema,
 } from '../validations/authSchemas.js';
 import { registerParentSchema } from '../validations/parentSchemas.js';
 
@@ -62,9 +64,10 @@ router.post('/refresh-token', refreshTokenLimiter, handleRefreshToken);
 
 router.post('/logout', authenticate, handleLogout);
 
-// ─── Multi-Device Session Management ──────────────────────────────────────────
+// ─── Multi-Device Session Management & Credential Security ────────────────────
 router.get('/sessions', authenticate, handleGetActiveSessions);
 router.delete('/sessions/:sessionId', authenticate, handleTerminateSession);
+router.patch('/change-password', authenticate, validate(changePasswordSchema), handleChangePassword);
 
 // ─── Multi-Factor Authentication (MFA) ────────────────────────────────────────
 router.use('/mfa', mfaRoutes);

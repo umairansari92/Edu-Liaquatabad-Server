@@ -3,6 +3,7 @@ import PDFDocument from 'pdfkit';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import User from '../models/User.js';
 import TeacherProfile from '../models/TeacherProfile.js';
+import StudentProfile from '../models/StudentProfile.js';
 import TeachingAssignment from '../models/TeachingAssignment.js';
 import School from '../models/School.js';
 import AuditLog from '../models/AuditLog.js';
@@ -89,7 +90,9 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
   }
 
   const targetProfile = await TeacherProfile.findOne({ userId: targetUserId })
-    .populate('currentSchoolId', 'name code')
+    .populate('currentSchoolId', 'name code address district')
+    .populate('transferHistory.fromSchoolId', 'name code address district')
+    .populate('transferHistory.toSchoolId', 'name code address district')
     .lean();
 
   const access = evaluateProfileAccess(actor, targetUser, targetProfile);
@@ -133,6 +136,16 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
       .lean();
   }
 
+  // Fetch StudentProfile if student role
+  let studentProfile = null;
+  if (targetUser.role === ROLES.STUDENT) {
+    studentProfile = await StudentProfile.findOne({ userId: targetUserId })
+      .populate('schoolId', 'name code address district')
+      .populate('classId', 'name numericGrade')
+      .populate('sectionId', 'name')
+      .lean();
+  }
+
   // ─── Absolute Privacy Policy: User's explicit PRIVATE settings are respected even by ROOT_ADMIN ───
   const showPhone = isSelf || (privacy.phoneNumber !== 'PRIVATE' && (isPrivilegedAdmin || (privacy.phoneNumber === 'SCHOOL' && access.canView)));
   const showEmail = isSelf || (privacy.email !== 'PRIVATE' && (isPrivilegedAdmin || (privacy.email === 'SCHOOL' && access.canView)));
@@ -155,6 +168,8 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
       status: targetUser.status,
       school: targetUser.schoolId || targetUser.claimedSchoolId,
       isClaimedOnly: !targetUser.schoolId && !!targetUser.claimedSchoolId,
+      assignedSchools: targetUser.assignedSchools || [],
+      townId: targetUser.townId || null,
       createdAt: targetUser.createdAt,
     },
     profile: targetProfile
@@ -183,6 +198,53 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
             actorName: historyItem.actorName,
             timestamp: historyItem.timestamp,
           })),
+          transferHistory: (targetProfile.transferHistory || []).map((historyItem) => ({
+            fromSchool: historyItem.fromSchoolId ? {
+              _id: historyItem.fromSchoolId._id || historyItem.fromSchoolId,
+              name: historyItem.fromSchoolId.name || 'School',
+              code: historyItem.fromSchoolId.code || '',
+            } : null,
+            toSchool: historyItem.toSchoolId ? {
+              _id: historyItem.toSchoolId._id || historyItem.toSchoolId,
+              name: historyItem.toSchoolId.name || 'School',
+              code: historyItem.toSchoolId.code || '',
+            } : null,
+            transferRequestId: historyItem.transferRequestId,
+            relievedDate: historyItem.relievedDate || null,
+            joiningDate: historyItem.joiningDate || null,
+            orderReferenceNumber: historyItem.orderReferenceNumber || '',
+          })),
+        }
+      : null,
+    studentProfile: studentProfile
+      ? {
+          grNumber: studentProfile.grNumber,
+          admissionRegisterNumber: studentProfile.admissionRegisterNumber,
+          globalStudentId: studentProfile.globalStudentId,
+          studentFullName: studentProfile.studentFullName || targetUser.fullName,
+          bFormNumber: canRevealCnic ? studentProfile.bFormNumber : maskCnic(studentProfile.bFormNumber),
+          dateOfBirth: studentProfile.dateOfBirth,
+          dateOfBirthInWords: studentProfile.dateOfBirthInWords,
+          gender: studentProfile.gender,
+          religion: studentProfile.religion,
+          placeOfBirth: studentProfile.placeOfBirth,
+          studentPhotoUrl: showPhoto ? studentProfile.studentPhotoUrl : '',
+          fatherFullName: studentProfile.fatherFullName,
+          motherFullName: studentProfile.motherFullName,
+          relationshipWithStudent: studentProfile.relationshipWithStudent,
+          guardianCnicNumber: canRevealCnic ? studentProfile.guardianCnicNumber : maskCnic(studentProfile.guardianCnicNumber),
+          guardianCellNumber: showPhone ? studentProfile.guardianCellNumber : 'Protected (Privacy)',
+          guardianEmail: showEmail ? studentProfile.guardianEmail : 'Protected (Privacy)',
+          permanentResidentialAddress: canRevealCnic ? studentProfile.permanentResidentialAddress : 'Protected (Privacy)',
+          admissionClassRequested: studentProfile.admissionClassRequested,
+          mediumOfInstruction: studentProfile.mediumOfInstruction,
+          lastSchoolAttended: studentProfile.lastSchoolAttended,
+          admissionDate: studentProfile.admissionDate,
+          admissionRemarks: studentProfile.admissionRemarks,
+          admissionHistory: studentProfile.admissionHistory || [],
+          class: studentProfile.classId,
+          section: studentProfile.sectionId,
+          lifecycleStatus: studentProfile.lifecycleStatus,
         }
       : null,
     assignments: {
@@ -243,9 +305,19 @@ export const handleUpdatePrivacySettings = asyncHandler(async (request, response
     return sendError(response, 400, 'Security Policy Violation: Residential Address cannot be exposed publicly. It must remain AUTHORIZED_ROLE or PRIVATE.');
   }
 
-  const targetProfile = await TeacherProfile.findOne({ userId: targetUserId });
+  let targetProfile = await TeacherProfile.findOne({ userId: targetUserId });
   if (!targetProfile) {
-    return sendError(response, 404, 'Teacher profile not found.');
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return sendError(response, 404, 'User not found.');
+    }
+    targetProfile = await TeacherProfile.create({
+      userId: targetUser._id,
+      currentSchoolId: targetUser.schoolId || null,
+      claimedSchoolId: targetUser.claimedSchoolId || null,
+      isTeachingStaff: targetUser.role === ROLES.TEACHER,
+      designation: targetUser.designation || 'Staff',
+    });
   }
 
   const existingSettings = targetProfile.privacySettings || {
