@@ -75,6 +75,33 @@ export const uploadHomeworkAttachments = multer({
 });
 
 /**
+ * Profile Photo Specific Upload Middleware
+ * Enforces single file, 5MB max, and strict image formats (JPEG, PNG, WebP)
+ */
+export const uploadProfilePhotoMemory = multer({
+  storage: memoryStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB max limit per profile photo
+    files: 1,
+  },
+  fileFilter: (request, uploadedFile, callbackFunction) => {
+    const fileExtension = path.extname(uploadedFile.originalname || '').toLowerCase();
+    const allowedPhotoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+    const allowedPhotoMimes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+    if (!allowedPhotoExtensions.has(fileExtension) || !allowedPhotoMimes.has(uploadedFile.mimetype)) {
+      return callbackFunction(
+        new Error('Invalid image format. Permitted formats: JPEG (.jpg, .jpeg), PNG (.png), and WebP (.webp).'),
+        false
+      );
+    }
+
+    uploadedFile.sanitizedFilename = sanitizeFilename(uploadedFile.originalname);
+    callbackFunction(null, true);
+  },
+});
+
+/**
  * Validates binary signature for an individual file buffer
  * @param {Object} uploadedFile
  * @returns {boolean}

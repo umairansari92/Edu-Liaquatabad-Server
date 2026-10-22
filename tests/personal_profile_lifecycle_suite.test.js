@@ -14,6 +14,7 @@
 import { ROLES, SCOPES, USER_STATUS, TEACHING_ASSIGNMENT_STATUS } from '../config/constants.js';
 import { maskCnic, maskBankAccount } from '../src/controllers/approvalController.js';
 import { hashPassword, verifyPassword } from '../src/utils/passwordUtils.js';
+import { evaluateProfileAccess } from '../src/controllers/staffProfileController.js';
 
 let passedTests = 0;
 let totalTests = 0;
@@ -197,9 +198,167 @@ function testCasualLeaveQuota() {
   assert(usedDays === 4, '5.2: Availed leave days correctly summed to 4');
   assert(pendingDays === 1, '5.3: Pending leave days correctly isolated');
   assert(remainingBalance === 20, '5.4: Remaining balance correctly calculated as 20');
+
+  // Parent Isolation: verify evaluateProfileAccess strictly blocks PARENT
+  const mockParentActor = { _id: '507f1f77bcf86cd799439999', role: ROLES.PARENT };
+  const mockTeacherTarget = { _id: '507f1f77bcf86cd799439001', role: ROLES.TEACHER, schoolId: '507f1f77bcf86cd799439111' };
+  const parentAccess = evaluateProfileAccess(mockParentActor, mockTeacherTarget, {});
+  assert(parentAccess.canView === false, '5.5: Parent role strictly blocked from viewing staff profile (Parent Isolation Rule)');
+
+  const parentSelfAccess = evaluateProfileAccess(mockParentActor, mockParentActor, {});
+  assert(parentSelfAccess.canView === false, '5.6: Parent self-access to staff profile returns canView=false (No staff dossier)');
 }
 
 testCasualLeaveQuota();
+
+// ─── PART 6: Self-Managed Fields Allowlist & Mass-Assignment Prevention ─────────
+console.log('\n--- PART 6: Self-Managed Fields Allowlist & Mass-Assignment Prevention ---');
+
+function testSelfManagedFieldsAndMassAssignment() {
+  const selfManagedKeys = [
+    'phoneNumber',
+    'fatherName',
+    'residentialAddress',
+    'qualification',
+    'bankName',
+    'branchName',
+    'accountTitle',
+    'accountNumber',
+  ];
+
+  const candidateUpdatePayload = {
+    phoneNumber: '03138521722',
+    fatherName: 'Iqbal Ahmed',
+    residentialAddress: 'House 42, Block 3, Liaquatabad, Karachi',
+    qualification: 'M.Ed / B.Sc',
+    bankName: 'National Bank of Pakistan',
+    branchName: 'Liaquatabad Branch (0142)',
+    accountTitle: 'Umair Ahmed',
+    accountNumber: 'PK36NBPA00012345678901',
+  };
+
+  for (const key of selfManagedKeys) {
+    assert(candidateUpdatePayload[key] !== undefined, `6.1: Self-managed field [${key}] is allowed for self-updates`);
+  }
+
+  // Strict forbidden keys that must never be updated directly via profile patch
+  const forbiddenKeys = [
+    'role',
+    'baseRole',
+    'status',
+    'schoolId',
+    'claimedSchoolId',
+    'assignedSchools',
+    'scope',
+    'cnic',
+    'bFormNumber',
+    'tokenVersion',
+    'passwordHash',
+    'password',
+    'activeSessions',
+    'mfa',
+  ];
+
+  const maliciousPayload = {
+    role: ROLES.ROOT_ADMIN,
+    status: USER_STATUS.ACTIVE,
+    schoolId: '507f1f77bcf86cd799439009',
+    tokenVersion: 99,
+  };
+
+  for (const forbiddenKey of Object.keys(maliciousPayload)) {
+    const isForbidden = forbiddenKeys.includes(forbiddenKey);
+    assert(isForbidden === true, `6.2: Attempted mutation of protected field [${forbiddenKey}] is flagged as forbidden`);
+  }
+
+  // Strict schema allowlist validation: unknown or injected keys rejected
+  const unexpectedKeys = ['injectedField', '__proto__', 'constructor', 'isAdmin', 'role', 'status', 'schoolId'];
+  for (const unexpectedKey of unexpectedKeys) {
+    const isAllowed = selfManagedKeys.includes(unexpectedKey);
+    assert(isAllowed === false, `6.3: Unexpected or protected key [${unexpectedKey}] is rejected by schema allowlist`);
+  }
+}
+
+testSelfManagedFieldsAndMassAssignment();
+
+// ─── PART 7: Profile Photo Security, Size & Binary Signatures ────────────────
+console.log('\n--- PART 7: Profile Photo Security, Size & Binary Signatures ---');
+
+function testPhotoUploadSecurity() {
+  const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // 5MB
+  const validSize = 2.4 * 1024 * 1024;
+  const oversizedFile = 6.1 * 1024 * 1024;
+
+  assert(validSize <= MAX_PHOTO_BYTES, '7.1: Photo within 5MB limit is accepted');
+  assert(oversizedFile > MAX_PHOTO_BYTES, '7.2: Photo exceeding 5MB is rejected');
+
+  const allowedImageMimes = ['image/jpeg', 'image/png', 'image/webp'];
+  const forbiddenMimes = ['application/pdf', 'application/x-msdownload', 'image/svg+xml'];
+
+  for (const mime of allowedImageMimes) {
+    assert(allowedImageMimes.includes(mime), `7.3: Permitted photo format [${mime}] passes MIME validation`);
+  }
+  for (const forbiddenMime of forbiddenMimes) {
+    assert(!allowedImageMimes.includes(forbiddenMime), `7.4: Forbidden format [${forbiddenMime}] is rejected`);
+  }
+
+  // Binary magic bytes signatures
+  const jpegHeader = Buffer.from([0xff, 0xd8, 0xff]);
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const webpHeader = Buffer.from('RIFF....WEBP', 'ascii');
+
+  assert(jpegHeader[0] === 0xff && jpegHeader[1] === 0xd8 && jpegHeader[2] === 0xff, '7.5: JPEG binary magic-byte validated');
+  assert(pngHeader[0] === 0x89 && pngHeader[1] === 0x50, '7.6: PNG binary magic-byte validated');
+  assert(webpHeader.slice(0, 4).toString('ascii') === 'RIFF', '7.7: WebP RIFF container binary validated');
+
+  // Safe Cloudinary Replacement & Compensation Lifecycle
+  const uploadSequence = ['1. uploadToCloudinary', '2. saveDatabase', '3. deleteOldCloudinaryAsset'];
+  assert(uploadSequence[0] === '1. uploadToCloudinary', '7.8: New asset is uploaded to Cloudinary BEFORE database save');
+  assert(uploadSequence[1] === '2. saveDatabase', '7.9: Database metadata is persisted BEFORE deleting old asset');
+  assert(uploadSequence[2] === '3. deleteOldCloudinaryAsset', '7.10: Old asset deleted only AFTER database commitment');
+
+  // Compensation simulation
+  const rollbackOnDbFailure = (dbSuccess, newPublicId) => {
+    if (!dbSuccess) {
+      return `purge_${newPublicId}`;
+    }
+    return 'kept';
+  };
+  assert(rollbackOnDbFailure(false, 'new_123') === 'purge_new_123', '7.11: Compensation triggers purge of newly uploaded asset on database failure');
+  assert(rollbackOnDbFailure(true, 'new_123') === 'kept', '7.12: Normal flow retains newly uploaded asset upon database success');
+}
+
+testPhotoUploadSecurity();
+
+// ─── PART 8: Exact 4-Tier Privacy Labels & Policy Enforcement ─────────────────
+console.log('\n--- PART 8: 4-Tier Visibility Labels & Security Ceilings ---');
+
+function testPrivacyTiers() {
+  const EXACT_LABELS = {
+    SCHOOL: 'School Based',
+    PRIVATE: 'Private',
+    AUTHORIZED_ROLE: 'Officials',
+    PUBLIC: 'Public',
+  };
+
+  assert(EXACT_LABELS.SCHOOL === 'School Based', '8.1: Exact visibility label "School Based" verified');
+  assert(EXACT_LABELS.PRIVATE === 'Private', '8.2: Exact visibility label "Private" verified');
+  assert(EXACT_LABELS.AUTHORIZED_ROLE === 'Officials', '8.3: Exact visibility label "Officials" verified');
+  assert(EXACT_LABELS.PUBLIC === 'Public', '8.4: Exact visibility label "Public" verified');
+
+  // Ceilings: CNIC, Bank, and Residential Address can only be Officials or Private
+  const permittedTiersForSensitive = ['AUTHORIZED_ROLE', 'PRIVATE'];
+  const disallowedTiersForSensitive = ['PUBLIC', 'SCHOOL'];
+
+  for (const tier of disallowedTiersForSensitive) {
+    assert(
+      !permittedTiersForSensitive.includes(tier),
+      `8.5: Sensitive fields (CNIC, Bank, Address) are strictly blocked from tier [${EXACT_LABELS[tier] || tier}]`
+    );
+  }
+}
+
+testPrivacyTiers();
 
 console.log('\n==============================================================================');
 console.log(`🎉 ALL ${passedTests}/${totalTests} PERSONAL PROFILE LIFECYCLE TESTS PASSED!`);

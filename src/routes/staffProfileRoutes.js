@@ -1,8 +1,12 @@
 import express from 'express';
 import { authenticate } from '../middlewares/authenticate.js';
 import { idempotencyGuard } from '../middlewares/idempotency.js';
+import { uploadProfilePhotoMemory, validateFileMagicBytes } from '../middlewares/fileUpload.js';
 import {
   handleGetStaffProfile,
+  handleUpdateStaffProfile,
+  handleUploadProfilePhoto,
+  handleDeleteProfilePhoto,
   handleUpdatePrivacySettings,
   handleRequestPdfAccess,
   handleGetStaffAccessHistory,
@@ -21,6 +25,19 @@ router.get('/school', handleGetSchoolFaculty);
 // View staff profile (Self, HM of same school, Supervisor, Admin+)
 router.get('/:id/profile', handleGetStaffProfile);
 
+// Update staff self-managed profile details
+router.patch('/:id/profile', handleUpdateStaffProfile);
+
+// Upload or replace profile photo (with file magic-bytes security validation)
+router.post(
+  '/:id/photo',
+  uploadProfilePhotoMemory.single('photo'),
+  validateFileMagicBytes,
+  handleUploadProfilePhoto
+);
+
+// Delete profile photo
+router.delete('/:id/photo', handleDeleteProfilePhoto);
 
 // Update staff field-level privacy settings & PDF consent
 router.patch('/:id/privacy', handleUpdatePrivacySettings);

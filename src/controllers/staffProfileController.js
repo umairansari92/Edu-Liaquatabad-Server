@@ -12,6 +12,7 @@ import { ROLES, SCOPES, USER_STATUS, TEACHING_ASSIGNMENT_STATUS } from '../../co
 import { maskCnic, maskBankAccount } from './approvalController.js';
 import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
 import { isTargetProtectedFromActor } from '../middlewares/authorizeHierarchy.js';
+import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUploader.js';
 
 /**
  * Access Control Evaluator for Staff Profile
@@ -19,6 +20,11 @@ import { isTargetProtectedFromActor } from '../middlewares/authorizeHierarchy.js
  */
 export const evaluateProfileAccess = (actor, targetUser, targetProfile) => {
   if (!actor || !actor.role) return { canView: false, canViewSensitive: false };
+
+  // Parent isolation: Parent accounts do not possess or view staff dossiers
+  if (actor.role === ROLES.PARENT) {
+    return { canView: false, canViewSensitive: false };
+  }
 
   const isSelf = String(actor._id) === String(targetUser._id);
   if (isSelf) {
@@ -73,6 +79,16 @@ export const evaluateProfileAccess = (actor, targetUser, targetProfile) => {
  */
 export const handleGetStaffProfile = asyncHandler(async (request, response) => {
   const actor = request.user;
+
+  // Backend Parent Isolation: Reject parent requests to staff profile endpoints
+  if (actor.role === ROLES.PARENT) {
+    return sendError(
+      response,
+      403,
+      'Access denied: Parent accounts do not possess staff service records. Please access the Parent Portal to view your linked student records.'
+    );
+  }
+
   const targetUserId = request.params.id === 'me' ? actor._id : request.params.id;
 
   const targetUser = await User.findById(targetUserId)
@@ -155,6 +171,7 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
   // Sensitive fields: If set to PRIVATE, ONLY self can view unmasked. Even ROOT_ADMIN receives masked values.
   const canRevealCnic = isSelf || (privacy.cnic !== 'PRIVATE' && access.canViewSensitive);
   const canRevealBank = isSelf || (privacy.bankDetails !== 'PRIVATE' && access.canViewSensitive);
+  const canRevealAddress = isSelf || (privacy.residentialAddress !== 'PRIVATE' && access.canViewSensitive);
 
   const responseData = {
     user: {
@@ -179,6 +196,7 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
           employeeId: targetProfile.employeeId,
           appointmentDate: targetProfile.appointmentDate,
           qualification: showQual ? targetProfile.qualification : 'Protected',
+          residentialAddress: canRevealAddress ? (targetProfile.residentialAddress || '') : 'Protected (Staff Privacy)',
           joiningDate: targetProfile.joiningDate,
           isTeachingStaff: targetProfile.isTeachingStaff,
           lifecycleStatus: targetProfile.lifecycleStatus,
@@ -235,7 +253,8 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
           guardianCnicNumber: canRevealCnic ? studentProfile.guardianCnicNumber : maskCnic(studentProfile.guardianCnicNumber),
           guardianCellNumber: showPhone ? studentProfile.guardianCellNumber : 'Protected (Privacy)',
           guardianEmail: showEmail ? studentProfile.guardianEmail : 'Protected (Privacy)',
-          permanentResidentialAddress: canRevealCnic ? studentProfile.permanentResidentialAddress : 'Protected (Privacy)',
+          permanentResidentialAddress: canRevealAddress ? studentProfile.permanentResidentialAddress : 'Protected (Privacy)',
+          residentialAddress: canRevealAddress ? (studentProfile.residentialAddress || studentProfile.permanentResidentialAddress) : 'Protected (Privacy)',
           admissionClassRequested: studentProfile.admissionClassRequested,
           mediumOfInstruction: studentProfile.mediumOfInstruction,
           lastSchoolAttended: studentProfile.lastSchoolAttended,
@@ -276,12 +295,467 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
 });
 
 /**
+ * PATCH /api/v1/staff/:id/profile
+ * Update self-managed fields for staff profile.
+ * Strictly prevents mass assignment to authoritative fields (role, school, cnic, status, etc.).
+ */
+export const handleUpdateStaffProfile = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+
+  // Backend Parent Isolation
+  if (requestingActor.role === ROLES.PARENT) {
+    return sendError(response, 403, 'Access denied: Parent accounts do not possess employee service records.');
+  }
+
+  const targetUserId = request.params.id === 'me' ? requestingActor._id : request.params.id;
+
+  const isSelf = String(requestingActor._id) === String(targetUserId);
+  const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(requestingActor.role);
+
+  if (!isSelf && !isPrivilegedAdmin) {
+    return sendError(response, 403, 'Unauthorized: You are only permitted to update your own personal profile.');
+  }
+
+  const targetUser = await User.findById(targetUserId);
+  if (!targetUser) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  if (isTargetProtectedFromActor(requestingActor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  // ─── STRICT MASS ASSIGNMENT & SCHEMA ALLOWLIST GUARD ───────────────────────
+  const ALLOWED_PROFILE_KEYS = [
+    'phoneNumber',
+    'fatherName',
+    'residentialAddress',
+    'qualification',
+    'bankName',
+    'branchName',
+    'accountTitle',
+    'accountNumber',
+  ];
+
+  const requestKeys = Object.keys(request.body);
+  if (requestKeys.length === 0) {
+    return sendError(response, 400, 'No fields provided for profile update.');
+  }
+
+  for (const key of requestKeys) {
+    if (!ALLOWED_PROFILE_KEYS.includes(key)) {
+      return sendError(
+        response,
+        400,
+        `Direct modification of protected or unrecognized field [${key}] is strictly prohibited. Permitted fields: ${ALLOWED_PROFILE_KEYS.join(', ')}.`
+      );
+    }
+
+    const value = request.body[key];
+    if (value !== null && value !== undefined && typeof value !== 'string') {
+      return sendError(
+        response,
+        400,
+        `Invalid data type for field [${key}]. Expected string value.`
+      );
+    }
+  }
+
+  // Format and length validations
+  if (request.body.phoneNumber !== undefined) {
+    const cleanPhone = String(request.body.phoneNumber || '').trim();
+    if (cleanPhone && (cleanPhone.length > 20 || !/^[0-9+\s-]{7,20}$/.test(cleanPhone))) {
+      return sendError(response, 400, 'Invalid contact phone number format. Permitted: 7 to 20 digits, spaces, hyphens, and leading plus.');
+    }
+  }
+  if (request.body.fatherName !== undefined && String(request.body.fatherName).length > 100) {
+    return sendError(response, 400, 'Father name exceeds maximum length of 100 characters.');
+  }
+  if (request.body.residentialAddress !== undefined && String(request.body.residentialAddress).length > 300) {
+    return sendError(response, 400, 'Residential address exceeds maximum length of 300 characters.');
+  }
+  if (request.body.qualification !== undefined && String(request.body.qualification).length > 100) {
+    return sendError(response, 400, 'Qualification exceeds maximum length of 100 characters.');
+  }
+  if (request.body.bankName !== undefined && String(request.body.bankName).length > 100) {
+    return sendError(response, 400, 'Bank name exceeds maximum length of 100 characters.');
+  }
+  if (request.body.branchName !== undefined && String(request.body.branchName).length > 100) {
+    return sendError(response, 400, 'Branch name exceeds maximum length of 100 characters.');
+  }
+  if (request.body.accountTitle !== undefined && String(request.body.accountTitle).length > 100) {
+    return sendError(response, 400, 'Account title exceeds maximum length of 100 characters.');
+  }
+  if (request.body.accountNumber !== undefined && String(request.body.accountNumber).length > 50) {
+    return sendError(response, 400, 'Account number exceeds maximum length of 50 characters.');
+  }
+
+  // Find or create TeacherProfile
+  let targetProfile = await TeacherProfile.findOne({ userId: targetUserId });
+  if (!targetProfile) {
+    targetProfile = await TeacherProfile.create({
+      userId: targetUser._id,
+      currentSchoolId: targetUser.schoolId || null,
+      claimedSchoolId: targetUser.claimedSchoolId || null,
+      isTeachingStaff: targetUser.role === ROLES.TEACHER,
+      designation: targetUser.designation || 'Staff',
+    });
+  }
+
+  const beforeSnapshot = {
+    phoneNumber: targetUser.phoneNumber || '',
+    fatherName: targetProfile.fatherName || '',
+    residentialAddress: targetProfile.residentialAddress || '',
+    qualification: targetProfile.qualification || '',
+    bankName: targetProfile.bankName || '',
+    branchName: targetProfile.branchName || '',
+    accountTitle: targetProfile.accountTitle || '',
+    accountNumber: maskBankAccount(targetProfile.accountNumber || ''),
+  };
+
+  const changedFields = [];
+
+  // Update User self-managed fields
+  if (request.body.phoneNumber !== undefined) {
+    const cleanPhone = String(request.body.phoneNumber || '').trim();
+    if (cleanPhone && !/^[0-9+\s-]{7,20}$/.test(cleanPhone)) {
+      return sendError(response, 400, 'Invalid contact phone number format.');
+    }
+    targetUser.phoneNumber = cleanPhone;
+    changedFields.push('phoneNumber');
+  }
+
+  // Update TeacherProfile self-managed fields
+  if (request.body.fatherName !== undefined) {
+    targetProfile.fatherName = String(request.body.fatherName || '').trim().slice(0, 100);
+    changedFields.push('fatherName');
+  }
+  if (request.body.residentialAddress !== undefined) {
+    targetProfile.residentialAddress = String(request.body.residentialAddress || '').trim().slice(0, 300);
+    changedFields.push('residentialAddress');
+  }
+  if (request.body.qualification !== undefined) {
+    targetProfile.qualification = String(request.body.qualification || '').trim().slice(0, 100);
+    changedFields.push('qualification');
+  }
+  if (request.body.bankName !== undefined) {
+    targetProfile.bankName = String(request.body.bankName || '').trim().slice(0, 100);
+    changedFields.push('bankName');
+  }
+  if (request.body.branchName !== undefined) {
+    targetProfile.branchName = String(request.body.branchName || '').trim().slice(0, 100);
+    changedFields.push('branchName');
+  }
+  if (request.body.accountTitle !== undefined) {
+    targetProfile.accountTitle = String(request.body.accountTitle || '').trim().slice(0, 100);
+    changedFields.push('accountTitle');
+  }
+  if (request.body.accountNumber !== undefined) {
+    targetProfile.accountNumber = String(request.body.accountNumber || '').trim().slice(0, 50);
+    changedFields.push('accountNumber');
+  }
+
+  // StudentProfile synchronization if target is Student
+  let studentProfile = null;
+  if (targetUser.role === ROLES.STUDENT) {
+    studentProfile = await StudentProfile.findOne({ userId: targetUserId });
+    if (studentProfile) {
+      if (request.body.fatherName !== undefined) studentProfile.fatherFullName = targetProfile.fatherName;
+      if (request.body.residentialAddress !== undefined) {
+        studentProfile.residentialAddress = targetProfile.residentialAddress;
+        studentProfile.permanentResidentialAddress = targetProfile.residentialAddress;
+      }
+      if (request.body.phoneNumber !== undefined) studentProfile.guardianCellNumber = targetUser.phoneNumber;
+      await studentProfile.save();
+    }
+  }
+
+  await targetUser.save();
+  await targetProfile.save();
+
+  const afterSnapshot = {
+    phoneNumber: targetUser.phoneNumber || '',
+    fatherName: targetProfile.fatherName || '',
+    residentialAddress: targetProfile.residentialAddress || '',
+    qualification: targetProfile.qualification || '',
+    bankName: targetProfile.bankName || '',
+    branchName: targetProfile.branchName || '',
+    accountTitle: targetProfile.accountTitle || '',
+    accountNumber: maskBankAccount(targetProfile.accountNumber || ''),
+  };
+
+  // Immutable Audit Log
+  await AuditLog.create({
+    actorId: requestingActor._id,
+    actorRole: requestingActor.role,
+    actorName: requestingActor.fullName,
+    actorDesignation: requestingActor.designation,
+    action: 'STAFF_PROFILE_UPDATED',
+    targetModel: 'TeacherProfile',
+    targetId: targetProfile._id,
+    targetName: targetUser.fullName,
+    townId: targetUser.townId,
+    schoolId: targetUser.schoolId?._id || targetUser.schoolId,
+    previousState: beforeSnapshot,
+    newState: afterSnapshot,
+    result: 'SUCCESS',
+    reason: isSelf ? 'Self-managed profile fields updated' : `Profile updated by administrative actor (${requestingActor.role})`,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Profile details updated successfully.', {
+    user: {
+      id: targetUser._id,
+      fullName: targetUser.fullName,
+      email: targetUser.email,
+      phoneNumber: targetUser.phoneNumber,
+      designation: targetUser.designation,
+      role: targetUser.role,
+      status: targetUser.status,
+    },
+    profile: {
+      fatherName: targetProfile.fatherName,
+      residentialAddress: targetProfile.residentialAddress,
+      qualification: targetProfile.qualification,
+      bankName: targetProfile.bankName,
+      branchName: targetProfile.branchName,
+      accountTitle: targetProfile.accountTitle,
+      accountNumber: isSelf ? targetProfile.accountNumber : maskBankAccount(targetProfile.accountNumber),
+    },
+    changedFields,
+  });
+});
+
+/**
+ * POST /api/v1/staff/:id/photo
+ * Upload or replace personal profile photo using in-memory upload and Cloudinary.
+ * Deletes previous photo on successful replacement.
+ */
+export const handleUploadProfilePhoto = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+
+  // Backend Parent Isolation
+  if (requestingActor.role === ROLES.PARENT) {
+    return sendError(response, 403, 'Access denied: Parent accounts do not possess employee service records.');
+  }
+
+  const targetUserId = request.params.id === 'me' ? requestingActor._id : request.params.id;
+
+  const isSelf = String(requestingActor._id) === String(targetUserId);
+  const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(requestingActor.role);
+
+  if (!isSelf && !isPrivilegedAdmin) {
+    return sendError(response, 403, 'Unauthorized: You can only update your own profile photo.');
+  }
+
+  const targetUser = await User.findById(targetUserId);
+  if (!targetUser) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  if (isTargetProtectedFromActor(requestingActor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  if (!request.file || !request.file.buffer) {
+    return sendError(response, 400, 'No photo file provided for upload.');
+  }
+
+  // Size validation: max 5MB
+  if (request.file.size > 5 * 1024 * 1024) {
+    return sendError(response, 400, 'Photo exceeds maximum allowed size of 5MB.');
+  }
+
+  // Allowed image mime types
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowedMimes.includes(request.file.mimetype)) {
+    return sendError(response, 400, 'Invalid image format. Permitted types: JPEG, PNG, WEBP.');
+  }
+
+  let targetProfile = await TeacherProfile.findOne({ userId: targetUserId });
+  if (!targetProfile) {
+    targetProfile = await TeacherProfile.create({
+      userId: targetUser._id,
+      currentSchoolId: targetUser.schoolId || null,
+      claimedSchoolId: targetUser.claimedSchoolId || null,
+      isTeachingStaff: targetUser.role === ROLES.TEACHER,
+      designation: targetUser.designation || 'Staff',
+    });
+  }
+
+  const oldPublicId = targetProfile.profilePhoto?.publicId;
+
+  // 1. Upload new photo to Cloudinary first
+  let uploadResult;
+  try {
+    uploadResult = await uploadBufferToCloudinary(request.file.buffer, {
+      folder: 'liaquatabad_sms/profiles',
+      resourceType: 'image',
+    });
+  } catch (cloudinaryError) {
+    return sendError(response, 502, `Cloudinary upload failed: ${cloudinaryError.message || 'Unable to store profile photo.'}`);
+  }
+
+  // 2. Persist new photo in database
+  targetProfile.profilePhoto = {
+    secureUrl: uploadResult.secureUrl,
+    publicId: uploadResult.publicId,
+  };
+
+  try {
+    await targetProfile.save();
+  } catch (dbError) {
+    // Compensation: delete newly uploaded photo from Cloudinary if database persistence fails
+    try {
+      await deleteFromCloudinary(uploadResult.publicId, 'image');
+    } catch (compensationError) {
+      console.warn('[Profile Photo Compensation Warning]:', compensationError.message);
+    }
+    throw dbError;
+  }
+
+  // If student, sync studentPhotoUrl
+  if (targetUser.role === ROLES.STUDENT) {
+    const studentProfile = await StudentProfile.findOne({ userId: targetUserId });
+    if (studentProfile) {
+      studentProfile.studentPhotoUrl = uploadResult.secureUrl;
+      await studentProfile.save();
+    }
+  }
+
+  // 3. Delete previous photo from Cloudinary only AFTER the new photo is safely committed
+  if (oldPublicId && oldPublicId !== uploadResult.publicId) {
+    try {
+      await deleteFromCloudinary(oldPublicId, 'image');
+    } catch (cleanupError) {
+      console.warn('[Profile Photo Cleanup Warning]:', cleanupError.message);
+    }
+  }
+
+  // Audit Log
+  await AuditLog.create({
+    actorId: requestingActor._id,
+    actorRole: requestingActor.role,
+    actorName: requestingActor.fullName,
+    actorDesignation: requestingActor.designation,
+    action: 'PROFILE_PHOTO_UPDATED',
+    targetModel: 'TeacherProfile',
+    targetId: targetProfile._id,
+    targetName: targetUser.fullName,
+    townId: targetUser.townId,
+    schoolId: targetUser.schoolId?._id || targetUser.schoolId,
+    newState: {
+      publicId: uploadResult.publicId,
+      format: uploadResult.format,
+      bytes: uploadResult.bytes,
+    },
+    result: 'SUCCESS',
+    reason: isSelf ? 'Profile photo updated by account owner' : `Profile photo updated by ${requestingActor.role}`,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Profile photo updated successfully.', {
+    profilePhoto: targetProfile.profilePhoto,
+  });
+});
+
+/**
+ * DELETE /api/v1/staff/:id/photo
+ * Remove personal profile photo and delete from Cloudinary storage.
+ */
+export const handleDeleteProfilePhoto = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+
+  // Backend Parent Isolation
+  if (requestingActor.role === ROLES.PARENT) {
+    return sendError(response, 403, 'Access denied: Parent accounts do not possess employee service records.');
+  }
+
+  const targetUserId = request.params.id === 'me' ? requestingActor._id : request.params.id;
+
+  const isSelf = String(requestingActor._id) === String(targetUserId);
+  const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(requestingActor.role);
+
+  if (!isSelf && !isPrivilegedAdmin) {
+    return sendError(response, 403, 'Unauthorized: You can only remove your own profile photo.');
+  }
+
+  const targetUser = await User.findById(targetUserId);
+  if (!targetUser) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  if (isTargetProtectedFromActor(requestingActor, targetUser)) {
+    return sendError(response, 404, 'Staff member not found.');
+  }
+
+  const targetProfile = await TeacherProfile.findOne({ userId: targetUserId });
+  if (!targetProfile || !targetProfile.profilePhoto?.publicId) {
+    return sendSuccess(response, 200, 'No active profile photo to remove.', {
+      profilePhoto: { secureUrl: '', publicId: '' },
+    });
+  }
+
+  const oldPublicId = targetProfile.profilePhoto.publicId;
+  try {
+    await deleteFromCloudinary(oldPublicId, 'image');
+  } catch (cleanupError) {
+    console.warn('[Profile Photo Delete Warning]:', cleanupError.message);
+  }
+
+  targetProfile.profilePhoto = { secureUrl: '', publicId: '' };
+  await targetProfile.save();
+
+  if (targetUser.role === ROLES.STUDENT) {
+    const studentProfile = await StudentProfile.findOne({ userId: targetUserId });
+    if (studentProfile) {
+      studentProfile.studentPhotoUrl = '';
+      await studentProfile.save();
+    }
+  }
+
+  await AuditLog.create({
+    actorId: requestingActor._id,
+    actorRole: requestingActor.role,
+    actorName: requestingActor.fullName,
+    actorDesignation: requestingActor.designation,
+    action: 'PROFILE_PHOTO_DELETED',
+    targetModel: 'TeacherProfile',
+    targetId: targetProfile._id,
+    targetName: targetUser.fullName,
+    townId: targetUser.townId,
+    schoolId: targetUser.schoolId?._id || targetUser.schoolId,
+    previousState: { publicId: oldPublicId },
+    newState: { publicId: '' },
+    result: 'SUCCESS',
+    reason: isSelf ? 'Profile photo removed by account owner' : `Profile photo removed by ${requestingActor.role}`,
+    ipAddress: request.ip || '',
+    userAgent: request.headers['user-agent'] || '',
+    requestId: request.headers['x-request-id'] || '',
+  });
+
+  return sendSuccess(response, 200, 'Profile photo removed successfully.', {
+    profilePhoto: { secureUrl: '', publicId: '' },
+  });
+});
+
+/**
  * PATCH /api/v1/staff/:id/privacy
  * Update staff field visibility and PDF consent settings.
  * Strictly enforces policy ceilings: CNIC and Bank Details can NEVER be PUBLIC.
  */
 export const handleUpdatePrivacySettings = asyncHandler(async (request, response) => {
   const actor = request.user;
+
+  // Backend Parent Isolation
+  if (actor.role === ROLES.PARENT) {
+    return sendError(response, 403, 'Access denied: Parent accounts do not possess employee service records.');
+  }
+
   const targetUserId = request.params.id === 'me' ? actor._id : request.params.id;
 
   const isSelf = String(actor._id) === String(targetUserId);
@@ -293,16 +767,33 @@ export const handleUpdatePrivacySettings = asyncHandler(async (request, response
 
   const { fieldVisibility = {}, allowAuthorizedPdfDownload } = request.body;
 
+  // ─── VALIDATE VISIBILITY TIERS ─────────────────────────────────────────────
+  const VALID_TIERS = ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'];
+  if (fieldVisibility && typeof fieldVisibility === 'object') {
+    for (const [fieldKey, tierValue] of Object.entries(fieldVisibility)) {
+      if (!VALID_TIERS.includes(tierValue)) {
+        return sendError(
+          response,
+          400,
+          `Invalid visibility tier [${tierValue}] for field [${fieldKey}]. Permitted: ${VALID_TIERS.join(', ')}.`
+        );
+      }
+    }
+  }
+
   // ─── SECURITY CEILING ENFORCEMENT ───────────────────────────────────────────
-  // CNIC and Bank Details can NEVER be PUBLIC or SCHOOL-wide on the open internet
+  // CNIC, B-Form, Bank Details, and Residential Address can NEVER be PUBLIC or SCHOOL-wide
   if (['PUBLIC', 'SCHOOL'].includes(fieldVisibility.cnic)) {
     return sendError(response, 400, 'Security Policy Violation: CNIC cannot be exposed publicly or school-wide. It must remain AUTHORIZED_ROLE or PRIVATE.');
+  }
+  if (['PUBLIC', 'SCHOOL'].includes(fieldVisibility.bFormNumber)) {
+    return sendError(response, 400, 'Security Policy Violation: B-Form number cannot be exposed publicly or school-wide. It must remain AUTHORIZED_ROLE or PRIVATE.');
   }
   if (['PUBLIC', 'SCHOOL'].includes(fieldVisibility.bankDetails)) {
     return sendError(response, 400, 'Security Policy Violation: Bank Details cannot be exposed publicly or school-wide. It must remain AUTHORIZED_ROLE or PRIVATE.');
   }
   if (['PUBLIC', 'SCHOOL'].includes(fieldVisibility.residentialAddress)) {
-    return sendError(response, 400, 'Security Policy Violation: Residential Address cannot be exposed publicly. It must remain AUTHORIZED_ROLE or PRIVATE.');
+    return sendError(response, 400, 'Security Policy Violation: Residential Address cannot be exposed publicly or school-wide. It must remain AUTHORIZED_ROLE or PRIVATE.');
   }
 
   let targetProfile = await TeacherProfile.findOne({ userId: targetUserId });

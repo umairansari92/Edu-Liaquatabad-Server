@@ -10,6 +10,7 @@ const TeacherProfileSchema = new mongoose.Schema({
   fatherName: { type: String, trim: true, default: '' },
   dateOfBirth: { type: Date },
   cnic: { type: String, trim: true, index: true }, // Format: 42101-1234567-1
+  residentialAddress: { type: String, trim: true, default: '' },
   profilePhoto: {
     secureUrl: { type: String, default: '' },
     publicId: { type: String, default: '' },
