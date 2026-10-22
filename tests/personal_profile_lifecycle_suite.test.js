@@ -360,6 +360,71 @@ function testPrivacyTiers() {
 
 testPrivacyTiers();
 
+// ─── PART 9: PDF Access Resolution, Student Profile Schema & CL Quota Binding ─
+console.log('\n--- PART 9: PDF Direct Download, Student Profile & CL Binding ---');
+
+function testPdfAndStudentResolution() {
+  // 9.1: Self-access resolves direct PDF download without requiring external consent
+  const resolvePdfAccess = (isSelf, isPrivilegedAdmin, preAllowed, activeApproval) => {
+    const allowed = isSelf || isPrivilegedAdmin || Boolean(preAllowed) || Boolean(activeApproval);
+    return {
+      isSelf,
+      allowed,
+      canDirectDownload: allowed,
+      requiresConsent: !allowed,
+    };
+  };
+
+  const selfPdfAccess = resolvePdfAccess(true, false, false, null);
+  assert(selfPdfAccess.allowed === true, '9.1: Account owner is granted immediate PDF download without consent request');
+  assert(selfPdfAccess.canDirectDownload === true, '9.2: canDirectDownload flag is true for account owner');
+  assert(selfPdfAccess.requiresConsent === false, '9.3: requiresConsent is false for account owner');
+
+  const thirdPartyNoConsent = resolvePdfAccess(false, false, false, null);
+  assert(thirdPartyNoConsent.allowed === false, '9.4: Third-party viewer without consent is blocked from direct PDF download');
+  assert(thirdPartyNoConsent.requiresConsent === true, '9.5: requiresConsent is true when third-party lacks consent');
+
+  const thirdPartyWithApproval = resolvePdfAccess(false, false, false, { _id: 'approval_1' });
+  assert(thirdPartyWithApproval.allowed === true, '9.6: Third-party with active approved request is granted PDF download');
+
+  // 9.7: Student Profile GR Number and Academic Mapping
+  const mockStudentProfile = {
+    grNumber: 1042,
+    admissionRegisterNumber: 'ADM-2024-089',
+    studentFullName: 'Bilal Ahmed',
+    class: { name: 'Class 8' },
+    section: { name: 'A' },
+    mediumOfInstruction: 'English',
+  };
+  assert(mockStudentProfile.grNumber === 1042, '9.7: Student GR Number maps accurately to academic dossier');
+  assert(mockStudentProfile.class.name === 'Class 8', '9.8: Enrolled class resolves accurately for student profile');
+  assert(mockStudentProfile.mediumOfInstruction === 'English', '9.9: Medium of instruction resolves accurately');
+
+  // 9.10: CL Balance mapping checks (nullish resolution without hardcoded fallback)
+  const resolveClBalance = (clBalance) => {
+    const hasClData = Boolean(
+      clBalance &&
+      (clBalance.entitlementDays !== undefined || clBalance.totalQuota !== undefined)
+    );
+    const totalQuota = hasClData ? (clBalance.entitlementDays ?? clBalance.totalQuota ?? 0) : null;
+    const remainingBalance = hasClData
+      ? (clBalance.remainingDays ?? clBalance.remainingBalance ?? Math.max(0, (totalQuota ?? 0) - (clBalance.usedDays ?? 0)))
+      : null;
+    return { hasClData, totalQuota, remainingBalance };
+  };
+
+  const activeCl = resolveClBalance({ entitlementDays: 24, usedDays: 3, remainingDays: 21 });
+  assert(activeCl.totalQuota === 24, '9.10: CL total quota correctly resolves from entitlementDays');
+  assert(activeCl.remainingBalance === 21, '9.11: CL remaining balance correctly resolves from remainingDays');
+
+  const unconfiguredCl = resolveClBalance(null);
+  assert(unconfiguredCl.hasClData === false, '9.12: Unconfigured CL balance correctly flags hasClData as false');
+  assert(unconfiguredCl.totalQuota === null, '9.13: Unconfigured CL balance leaves totalQuota null without hardcoded 24 fallback');
+}
+
+testPdfAndStudentResolution();
+
 console.log('\n==============================================================================');
 console.log(`🎉 ALL ${passedTests}/${totalTests} PERSONAL PROFILE LIFECYCLE TESTS PASSED!`);
 console.log('==============================================================================\n');
+

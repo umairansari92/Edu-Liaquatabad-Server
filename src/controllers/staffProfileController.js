@@ -279,6 +279,7 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
       : undefined,
     pdfAccess: {
       isSelf,
+      allowed: isSelf || isPrivilegedAdmin || !!targetProfile?.privacySettings?.allowAuthorizedPdfDownload || !!activeApproval,
       canDirectDownload: isSelf || isPrivilegedAdmin || !!targetProfile?.privacySettings?.allowAuthorizedPdfDownload || !!activeApproval,
       requiresConsent: !isSelf && !isPrivilegedAdmin && !targetProfile?.privacySettings?.allowAuthorizedPdfDownload && !activeApproval,
       activeApproval: activeApproval
