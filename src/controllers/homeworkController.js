@@ -10,6 +10,8 @@ import AuditLog from '../models/AuditLog.js';
 import { ROLES, TEACHING_ASSIGNMENT_STATUS, STUDENT_STATUS } from '../../config/constants.js';
 import { dispatchNotificationEvent } from '../services/notificationDispatcher.js';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUploader.js';
+import ParentStudentLink from '../models/ParentStudentLink.js';
+import cloudinary from '../../config/cloudinary.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECURITY INVARIANTS (enforced on every write operation):
@@ -596,4 +598,190 @@ export const handleCancelHomework = asyncHandler(async (request, response) => {
     _id:    homework._id,
     status: homework.status,
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /api/v1/homework/:id/attachments/:attachmentId — Download / Stream Attachment
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleDownloadHomeworkAttachment = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const { id: homeworkId, attachmentId } = request.params;
+  const shouldForceDownload = request.query.download === 'true';
+
+  if (!homeworkId || !/^[0-9a-fA-F]{24}$/.test(homeworkId)) {
+    return sendError(response, 400, 'A valid homework ID is required.');
+  }
+  if (!attachmentId || !/^[0-9a-fA-F]{24}$/.test(attachmentId)) {
+    return sendError(response, 400, 'A valid attachment ID is required.');
+  }
+
+  const homeworkRecord = await Homework.findById(homeworkId).lean();
+  if (!homeworkRecord) {
+    return sendError(response, 404, 'Homework assignment record not found.');
+  }
+
+  // ── Access Control & Authorization Scoping ──────────────────────────────────
+  const requestingActorId = String(requestingActor._id || requestingActor.userId);
+  const requestingActorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || '');
+  const homeworkSchoolId = String(homeworkRecord.schoolId);
+
+  let isActorAuthorized = false;
+
+  // 1. Root Admin & Super Admin: Full system oversight
+  if (requestingActor.role === ROLES.ROOT_ADMIN || requestingActor.role === ROLES.SUPER_ADMIN) {
+    isActorAuthorized = true;
+  }
+  // 2. Town Admin: Scoped to town
+  else if (requestingActor.role === ROLES.ADMIN) {
+    isActorAuthorized = true;
+  }
+  // 3. Supervisor: Scoped to assigned schools
+  else if (requestingActor.role === ROLES.SUPERVISOR) {
+    if (requestingActor.assignedSchools?.map(String).includes(homeworkSchoolId)) {
+      isActorAuthorized = true;
+    }
+  }
+  // 4. HM: School-boundary lock
+  else if (requestingActor.role === ROLES.HM) {
+    if (requestingActorSchoolId === homeworkSchoolId) {
+      isActorAuthorized = true;
+    }
+  }
+  // 5. TEACHER: School-boundary lock
+  else if (requestingActor.role === ROLES.TEACHER) {
+    if (requestingActorSchoolId === homeworkSchoolId) {
+      isActorAuthorized = true;
+    }
+  }
+  // 6. STUDENT: Enrolled in target school + class + section, and assignment is active & visible
+  else if (requestingActor.role === ROLES.STUDENT) {
+    const studentProfileRecord = await StudentProfile.findOne({
+      userId: requestingActorId,
+      lifecycleStatus: STUDENT_STATUS.ACTIVE,
+    }).lean();
+
+    if (
+      studentProfileRecord &&
+      String(studentProfileRecord.schoolId) === homeworkSchoolId &&
+      String(studentProfileRecord.classId) === String(homeworkRecord.classId) &&
+      String(studentProfileRecord.sectionId) === String(homeworkRecord.sectionId) &&
+      homeworkRecord.visibleToStudents !== false &&
+      homeworkRecord.status === 'ACTIVE'
+    ) {
+      isActorAuthorized = true;
+    }
+  }
+  // 7. PARENT: Verified ward enrolled in target school + class + section
+  else if (requestingActor.role === ROLES.PARENT) {
+    const verifiedParentWardLinks = await ParentStudentLink.find({
+      parentId: requestingActorId,
+      verificationStatus: 'VERIFIED',
+    }).populate('studentProfileId', 'schoolId classId sectionId lifecycleStatus').lean();
+
+    const hasEnrolledWard = verifiedParentWardLinks.some((linkRecord) => {
+      const wardProfileRecord = linkRecord.studentProfileId;
+      return (
+        wardProfileRecord &&
+        wardProfileRecord.lifecycleStatus === STUDENT_STATUS.ACTIVE &&
+        String(wardProfileRecord.schoolId) === homeworkSchoolId &&
+        String(wardProfileRecord.classId) === String(homeworkRecord.classId) &&
+        String(wardProfileRecord.sectionId) === String(homeworkRecord.sectionId)
+      );
+    });
+
+    if (hasEnrolledWard && homeworkRecord.visibleToStudents !== false && homeworkRecord.status === 'ACTIVE') {
+      isActorAuthorized = true;
+    }
+  }
+
+  if (!isActorAuthorized) {
+    return sendError(response, 403, 'Access denied. You do not have permission to view or download this study material.');
+  }
+
+  // ── Locate Target Attachment ────────────────────────────────────────────────
+  const targetAttachment = (homeworkRecord.attachments || []).find(
+    (attachmentElement) => String(attachmentElement._id) === String(attachmentId)
+  );
+
+  if (!targetAttachment) {
+    return sendError(response, 404, 'Attachment not found on this homework assignment.');
+  }
+
+  // ── Check 7-Day Temporary Retention Expiration ──────────────────────────────
+  if (targetAttachment.expiresAt && new Date() > new Date(targetAttachment.expiresAt)) {
+    return sendError(response, 410, 'This learning material has expired under the 7-day retention policy.');
+  }
+
+  // ── Resolve Downloader Stream / Private URL ─────────────────────────────────
+  let resolvedDeliveryUrl = null;
+
+  if (targetAttachment.publicId) {
+    try {
+      const isDocumentPdf = targetAttachment.fileType === 'PDF' || targetAttachment.mimeType === 'application/pdf';
+      resolvedDeliveryUrl = cloudinary.utils.private_download_url(
+        targetAttachment.publicId,
+        isDocumentPdf ? 'pdf' : (targetAttachment.format || 'jpg'),
+        {
+          resource_type: targetAttachment.resourceType || 'image',
+          type: 'upload',
+          expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour token
+        }
+      );
+    } catch (_signatureError) {
+      resolvedDeliveryUrl = targetAttachment.fileUrl;
+    }
+  } else {
+    resolvedDeliveryUrl = targetAttachment.fileUrl;
+  }
+
+  if (!resolvedDeliveryUrl) {
+    return sendError(response, 404, 'File resource location unavailable.');
+  }
+
+  // ── Fetch Upstream & Pipe Stream ────────────────────────────────────────────
+  try {
+    let upstreamBinaryResponse = await fetch(resolvedDeliveryUrl);
+
+    // Fallback attempt if private URL was rejected and direct URL exists
+    if (!upstreamBinaryResponse.ok && targetAttachment.fileUrl && resolvedDeliveryUrl !== targetAttachment.fileUrl) {
+      const fallbackResponse = await fetch(targetAttachment.fileUrl);
+      if (fallbackResponse.ok) {
+        upstreamBinaryResponse = fallbackResponse;
+      }
+    }
+
+    if (!upstreamBinaryResponse.ok) {
+      return sendError(
+        response,
+        502,
+        `Failed to retrieve document from cloud storage provider (Status: ${upstreamBinaryResponse.status}).`
+      );
+    }
+
+    const documentMimeType =
+      targetAttachment.mimeType ||
+      (targetAttachment.fileType === 'PDF' ? 'application/pdf' : 'application/octet-stream');
+    const documentFileName =
+      targetAttachment.fileName ||
+      (targetAttachment.fileType === 'PDF' ? 'homework_material.pdf' : 'homework_attachment');
+    const contentDispositionType = shouldForceDownload ? 'attachment' : 'inline';
+    const sanitizedHeaderFileName = encodeURIComponent(documentFileName);
+
+    response.setHeader('Content-Type', documentMimeType);
+    response.setHeader(
+      'Content-Disposition',
+      `${contentDispositionType}; filename="${sanitizedHeaderFileName}"; filename*=UTF-8''${sanitizedHeaderFileName}`
+    );
+    response.setHeader('Cache-Control', 'private, max-age=3600');
+
+    const upstreamContentLength = upstreamBinaryResponse.headers.get('content-length');
+    if (upstreamContentLength) {
+      response.setHeader('Content-Length', upstreamContentLength);
+    }
+
+    const binaryArrayBuffer = await upstreamBinaryResponse.arrayBuffer();
+    return response.send(Buffer.from(binaryArrayBuffer));
+  } catch (deliveryStreamingError) {
+    return sendError(response, 500, `Error streaming attachment document: ${deliveryStreamingError.message}`);
+  }
 });

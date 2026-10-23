@@ -51,6 +51,7 @@ import {
   handleGetStudentHomework,
   handleUpdateHomework,
   handleCancelHomework,
+  handleDownloadHomeworkAttachment,
 } from '../src/controllers/homeworkController.js';
 import { handleGetWardHomework } from '../src/controllers/parentBffController.js';
 import { cleanupExpiredHomeworkAttachments } from '../src/services/homeworkCleanupService.js';
@@ -112,6 +113,14 @@ function createMockRes() {
       return this;
     },
     json(data) {
+      this.body = data;
+      return this;
+    },
+    setHeader(key, val) {
+      this.headers[key.toLowerCase()] = val;
+      return this;
+    },
+    send(data) {
       this.body = data;
       return this;
     },
@@ -1171,6 +1180,189 @@ await runAsyncTest('Scenario 23: Zero Hard Deletions: Parent Homework record pre
   cloudinary.uploader.destroy = origDestroy;
   Homework.deleteOne = origHwDeleteOne;
   Homework.deleteMany = origHwDeleteMany;
+});
+
+// ─── SECTION 6: ATTACHMENT STREAMING & RBAC DOWNLOAD LIFECYCLE ───────────────
+
+await runAsyncTest('Scenario 24: handleDownloadHomeworkAttachment rejects invalid ID parameters with 400 Bad Request', async () => {
+  const mockReq = {
+    user: teacherA_User,
+    params: { id: 'invalid-id', attachmentId: 'invalid-att' },
+    query: {},
+  };
+  const mockRes = createMockRes();
+  await handleDownloadHomeworkAttachment(mockReq, mockRes);
+  assert.strictEqual(mockRes.statusCode, 400);
+});
+
+await runAsyncTest('Scenario 25: handleDownloadHomeworkAttachment blocks cross-school teacher with 403 Forbidden (BOLA guard)', async () => {
+  const crossSchoolTeacher = {
+    _id: '507f1f77bcf86cd799439999',
+    userId: '507f1f77bcf86cd799439999',
+    role: ROLES.TEACHER,
+    schoolId: { _id: schoolB_Id }, // Foreign School B
+  };
+
+  const origFindById = Homework.findById;
+  Homework.findById = () => ({
+    lean: () => Promise.resolve({
+      _id: '507f1f77bcf86cd799439001',
+      schoolId: schoolA_Id, // School A
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      attachments: [{ _id: '507f1f77bcf86cd799439002', fileName: 'test.pdf' }],
+    }),
+  });
+
+  const mockReq = {
+    user: crossSchoolTeacher,
+    params: { id: '507f1f77bcf86cd799439001', attachmentId: '507f1f77bcf86cd799439002' },
+    query: {},
+  };
+  const mockRes = createMockRes();
+  await handleDownloadHomeworkAttachment(mockReq, mockRes);
+  assert.strictEqual(mockRes.statusCode, 403);
+
+  Homework.findById = origFindById;
+});
+
+await runAsyncTest('Scenario 26: handleDownloadHomeworkAttachment blocks student from different section (403 Forbidden)', async () => {
+  const origHwFindById = Homework.findById;
+  const origStudentFindOne = StudentProfile.findOne;
+
+  Homework.findById = () => ({
+    lean: () => Promise.resolve({
+      _id: '507f1f77bcf86cd799439001',
+      schoolId: schoolA_Id,
+      classId: classA_Id,
+      sectionId: sectionA_Id, // Section A
+      visibleToStudents: true,
+      status: 'ACTIVE',
+      attachments: [{ _id: '507f1f77bcf86cd799439002', fileName: 'worksheet.pdf' }],
+    }),
+  });
+
+  // Student is in Section B, not Section A
+  StudentProfile.findOne = () => ({
+    lean: () => Promise.resolve({
+      userId: studentA_Id,
+      schoolId: schoolA_Id,
+      classId: classA_Id,
+      sectionId: sectionB_Id, // Different section
+      lifecycleStatus: STUDENT_STATUS.ACTIVE,
+    }),
+  });
+
+  const mockReq = {
+    user: studentA_User,
+    params: { id: '507f1f77bcf86cd799439001', attachmentId: '507f1f77bcf86cd799439002' },
+    query: {},
+  };
+  const mockRes = createMockRes();
+  await handleDownloadHomeworkAttachment(mockReq, mockRes);
+  assert.strictEqual(mockRes.statusCode, 403);
+
+  Homework.findById = origHwFindById;
+  StudentProfile.findOne = origStudentFindOne;
+});
+
+await runAsyncTest('Scenario 27: handleDownloadHomeworkAttachment rejects expired attachment past 7-day retention with 410 Gone', async () => {
+  const origHwFindById = Homework.findById;
+
+  Homework.findById = () => ({
+    lean: () => Promise.resolve({
+      _id: '507f1f77bcf86cd799439001',
+      schoolId: schoolA_Id,
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      attachments: [
+        {
+          _id: '507f1f77bcf86cd799439002',
+          fileName: 'expired.pdf',
+          expiresAt: new Date(Date.now() - 60000), // Expired 1 minute ago
+        },
+      ],
+    }),
+  });
+
+  const mockReq = {
+    user: teacherA_User,
+    params: { id: '507f1f77bcf86cd799439001', attachmentId: '507f1f77bcf86cd799439002' },
+    query: {},
+  };
+  const mockRes = createMockRes();
+  await handleDownloadHomeworkAttachment(mockReq, mockRes);
+  assert.strictEqual(mockRes.statusCode, 410);
+
+  Homework.findById = origHwFindById;
+});
+
+await runAsyncTest('Scenario 28: handleDownloadHomeworkAttachment streams PDF with Content-Type and Content-Disposition', async () => {
+  const origHwFindById = Homework.findById;
+  const origGlobalFetch = globalThis.fetch;
+  const origPrivateDownloadUrl = cloudinary.utils.private_download_url;
+
+  const mockPdfBytes = Buffer.from('%PDF-1.4 mock content');
+  cloudinary.utils.private_download_url = () => 'https://mock.cloudinary/download';
+
+  globalThis.fetch = async (url) => ({
+    ok: true,
+    status: 200,
+    headers: new Headers({
+      'content-length': String(mockPdfBytes.length),
+      'content-type': 'application/pdf',
+    }),
+    arrayBuffer: async () => mockPdfBytes.buffer,
+  });
+
+  Homework.findById = () => ({
+    lean: () => Promise.resolve({
+      _id: '507f1f77bcf86cd799439001',
+      schoolId: schoolA_Id,
+      classId: classA_Id,
+      sectionId: sectionA_Id,
+      attachments: [
+        {
+          _id: '507f1f77bcf86cd799439002',
+          fileName: 'algebra_worksheet.pdf',
+          fileType: 'PDF',
+          mimeType: 'application/pdf',
+          publicId: 'mock_cld_id',
+          expiresAt: new Date(Date.now() + 86400000),
+        },
+      ],
+    }),
+  });
+
+  // Test 28a: Inline preview (download=false)
+  const mockReqView = {
+    user: teacherA_User,
+    params: { id: '507f1f77bcf86cd799439001', attachmentId: '507f1f77bcf86cd799439002' },
+    query: { download: 'false' },
+  };
+  const mockResView = createMockRes();
+  await handleDownloadHomeworkAttachment(mockReqView, mockResView);
+
+  assert.strictEqual(mockResView.statusCode, 200);
+  assert.strictEqual(mockResView.headers['content-type'], 'application/pdf');
+  assert.ok(mockResView.headers['content-disposition'].includes('inline'));
+  assert.ok(mockResView.headers['content-disposition'].includes('algebra_worksheet.pdf'));
+
+  // Test 28b: Forced download (download=true)
+  const mockReqDownload = {
+    user: teacherA_User,
+    params: { id: '507f1f77bcf86cd799439001', attachmentId: '507f1f77bcf86cd799439002' },
+    query: { download: 'true' },
+  };
+  const mockResDownload = createMockRes();
+  await handleDownloadHomeworkAttachment(mockReqDownload, mockResDownload);
+
+  assert.strictEqual(mockResDownload.statusCode, 200);
+  assert.ok(mockResDownload.headers['content-disposition'].includes('attachment'));
+
+  Homework.findById = origHwFindById;
+  globalThis.fetch = origGlobalFetch;
+  cloudinary.utils.private_download_url = origPrivateDownloadUrl;
 });
 
 console.log('\n======================================================================');

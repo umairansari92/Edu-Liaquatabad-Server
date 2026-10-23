@@ -6,6 +6,7 @@ import {
   handleGetSchoolHomework,
   handleUpdateHomework,
   handleCancelHomework,
+  handleDownloadHomeworkAttachment,
 } from '../controllers/homeworkController.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { idempotencyGuard } from '../middlewares/idempotency.js';
@@ -69,6 +70,13 @@ router.delete(
   '/:id',
   authorizePermissions(PERMISSIONS.HOMEWORK_CREATE),
   handleCancelHomework
+);
+
+// ─── View / Download attachment (Teacher, Student, Parent, HM, Admin) ─────────
+router.get(
+  '/:id/attachments/:attachmentId',
+  authorizePermissions(PERMISSIONS.HOMEWORK_VIEW),
+  handleDownloadHomeworkAttachment
 );
 
 export default router;
