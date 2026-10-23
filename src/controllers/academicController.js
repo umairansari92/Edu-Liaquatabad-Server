@@ -15,6 +15,7 @@ import Homework from '../models/Homework.js';
 import TeacherProfile from '../models/TeacherProfile.js';
 import Timetable from '../models/Timetable.js';
 import ParentStudentLink from '../models/ParentStudentLink.js';
+import { checkIsSchoolClosed } from '../services/attendanceWindowService.js';
 import {
   ROLES,
   SCOPES,
@@ -662,6 +663,22 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
   const todayEnd   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
 
+  // Check if school is officially closed today (Statutory Sindh Govt Weekly Off or Active Holiday)
+  let isSchoolClosed = false;
+  let closureCheck = { isClosed: false };
+  if (mongoose.connection?.readyState === 1 || School.findById !== mongoose.Model.findById) {
+    try {
+      const school = await School.findById(teacherSchoolId).lean();
+      if (school) {
+        closureCheck = await checkIsSchoolClosed(school, today);
+        isSchoolClosed = Boolean(closureCheck?.isClosed);
+      }
+    } catch (_closureError) {
+      isSchoolClosed = false;
+      closureCheck = { isClosed: false };
+    }
+  }
+
   // 1. Fetch sections where teacher is primary Class Teacher
   const classTeacherSections = await Section.find({
     classTeacherId: teacherId,
@@ -839,7 +856,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
 
       const attendanceStatus = attendanceRecord
         ? attendanceRecord.verificationStatus
-        : 'NOT_SUBMITTED';
+        : (isSchoolClosed ? (closureCheck.type === 'HOLIDAY' ? 'HOLIDAY' : 'OFF_DAY') : 'NOT_SUBMITTED');
 
       const presentCount = attendanceRecord
         ? attendanceRecord.records.filter((attendanceRosterRecord) => attendanceRosterRecord.status === ATTENDANCE_STATUS.PRESENT).length
@@ -864,6 +881,9 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
         todayAttendance: {
           status: attendanceStatus,
           submitted: Boolean(attendanceRecord),
+          isSchoolClosed,
+          closureType: isSchoolClosed ? (closureCheck.type || null) : null,
+          closureReason: isSchoolClosed ? (closureCheck.reason || null) : null,
           presentCount,
           absentCount,
           leaveCount,
@@ -888,9 +908,26 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
   }
 
   const totalAssignedStudents = sectionSummaries.reduce((accumulatedCount, sectionSummary) => accumulatedCount + sectionSummary.studentCount, 0);
-  const pendingAttendanceSections = sectionSummaries.filter((sectionSummary) => sectionSummary.isClassTeacher && !sectionSummary.todayAttendance.submitted);
+  const pendingAttendanceSections = isSchoolClosed
+    ? []
+    : sectionSummaries.filter((sectionSummary) => sectionSummary.isClassTeacher && !sectionSummary.todayAttendance.submitted);
   const classTeacherSectionCount = sectionSummaries.filter((sectionSummary) => sectionSummary.isClassTeacher).length;
   const subjectTeacherSectionCount = sectionSummaries.filter((sectionSummary) => sectionSummary.assignedSubjects.length > 0).length;
+
+  const closureTitle = isSchoolClosed
+    ? (closureCheck.holiday?.title || (closureCheck.type === 'WEEKLY_OFF' ? 'Official Weekly Off' : 'School Closed'))
+    : null;
+
+  const todayClosurePayload = isSchoolClosed
+    ? {
+        isClosed: true,
+        type: closureCheck.type || 'WEEKLY_OFF',
+        reason: closureCheck.reason || 'School is closed today.',
+        title: closureTitle,
+        holiday: closureCheck.holiday || null,
+        weeklyOff: closureCheck.weeklyOff || null,
+      }
+    : null;
 
   return sendSuccess(response, 200, 'Teacher operational summary retrieved.', {
     teacherContext: {
@@ -906,11 +943,16 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
       subjectTeacherSectionCount,
       totalAssignedStudents,
       pendingAttendanceCount: pendingAttendanceSections.length,
+      isSchoolClosed,
+      closureType: isSchoolClosed ? (closureCheck.type || null) : null,
+      closureReason: isSchoolClosed ? (closureCheck.reason || null) : null,
+      closureTitle,
       activeHomeworkCount,
       uniqueSubjectsCount,
       totalAssignmentsCount,
       activeAssignmentsCount: uniqueSubjectsCount, // Contract alignment: exposes nonzero unique subjects count
     },
+    todayClosure: todayClosurePayload,
     sections: sectionSummaries,
     homework: {
       available: true,

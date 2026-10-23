@@ -20,6 +20,7 @@ import {
   validateTimetableConflicts,
   TimetableValidationError,
 } from '../services/timetableConflictService.js';
+import { checkIsSchoolClosed } from '../services/attendanceWindowService.js';
 
 /**
  * GET /api/v1/timetables/school/:schoolId
@@ -447,6 +448,34 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       return sendError(response, 404, 'No active timetable found for your school.');
     }
 
+    let schoolDetails = null;
+    let weeklyOffDays = [0];
+    let closureCheck = { isClosed: false };
+
+    if (mongoose.connection?.readyState === 1 || School.findById !== mongoose.Model.findById) {
+      try {
+        const query = School.findById(teacherSchoolId).select('name schoolCode emisCode townId timings');
+        schoolDetails = query && typeof query.lean === 'function' ? await query.lean() : await query;
+        if (schoolDetails?.townId && (mongoose.connection?.readyState === 1 || WeeklyOffPattern.findOne !== mongoose.Model.findOne)) {
+          const activePattern = await WeeklyOffPattern.findOne({
+            status: 'ACTIVE',
+            $or: [
+              { scopeType: 'SCHOOL', schoolId: teacherSchoolId },
+              { scopeType: 'TOWN', townId: schoolDetails.townId },
+            ],
+          }).sort({ scopeType: 1 }).lean();
+          if (activePattern && Array.isArray(activePattern.offDays) && activePattern.offDays.length > 0) {
+            weeklyOffDays = activePattern.offDays;
+          }
+        }
+        if (schoolDetails) {
+          closureCheck = await checkIsSchoolClosed(schoolDetails);
+        }
+      } catch (_err) {
+        // Safe fallback
+      }
+    }
+
     const teacherAllocations = activeTimetable.schedule.filter(
       (entry) => String(entry.teacherId) === String(requestingActor._id)
     );
@@ -455,8 +484,17 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       activeTimetable.periodSlots,
       null,
       null,
-      activeTimetable.fridayPeriodSlots || []
+      activeTimetable.fridayPeriodSlots || [],
+      weeklyOffDays
     );
+
+    if (closureCheck?.isClosed) {
+      liveStatus.status = closureCheck.type === 'HOLIDAY' ? 'HOLIDAY' : 'OFF_DAY';
+      liveStatus.message = closureCheck.reason;
+      liveStatus.isSchoolClosed = true;
+      liveStatus.closureType = closureCheck.type;
+      liveStatus.closureReason = closureCheck.reason;
+    }
     let currentTeacherActivity = null;
     let nextTeacherActivity = null;
 
@@ -537,12 +575,49 @@ export const handleGetMySchedule = asyncHandler(async (request, response) => {
       return true;
     });
 
+    let studentSchoolDetails = null;
+    let studentWeeklyOffDays = [0];
+    let studentClosureCheck = { isClosed: false };
+
+    if (mongoose.connection?.readyState === 1 || School.findById !== mongoose.Model.findById) {
+      try {
+        const query = School.findById(studentProfile.schoolId).select('name schoolCode emisCode townId timings');
+        studentSchoolDetails = query && typeof query.lean === 'function' ? await query.lean() : await query;
+        if (studentSchoolDetails?.townId && (mongoose.connection?.readyState === 1 || WeeklyOffPattern.findOne !== mongoose.Model.findOne)) {
+          const activePattern = await WeeklyOffPattern.findOne({
+            status: 'ACTIVE',
+            $or: [
+              { scopeType: 'SCHOOL', schoolId: studentProfile.schoolId },
+              { scopeType: 'TOWN', townId: studentSchoolDetails.townId },
+            ],
+          }).sort({ scopeType: 1 }).lean();
+          if (activePattern && Array.isArray(activePattern.offDays) && activePattern.offDays.length > 0) {
+            studentWeeklyOffDays = activePattern.offDays;
+          }
+        }
+        if (studentSchoolDetails) {
+          studentClosureCheck = await checkIsSchoolClosed(studentSchoolDetails);
+        }
+      } catch (_err) {
+        // Safe fallback
+      }
+    }
+
     const liveStatus = calculateLivePeriod(
       activeTimetable.periodSlots,
       null,
       null,
-      activeTimetable.fridayPeriodSlots || []
+      activeTimetable.fridayPeriodSlots || [],
+      studentWeeklyOffDays
     );
+
+    if (studentClosureCheck?.isClosed) {
+      liveStatus.status = studentClosureCheck.type === 'HOLIDAY' ? 'HOLIDAY' : 'OFF_DAY';
+      liveStatus.message = studentClosureCheck.reason;
+      liveStatus.isSchoolClosed = true;
+      liveStatus.closureType = studentClosureCheck.type;
+      liveStatus.closureReason = studentClosureCheck.reason;
+    }
     let currentClassActivity = null;
 
     if (liveStatus.status === 'ACTIVE_TEACHING' && liveStatus.activeSlot) {
