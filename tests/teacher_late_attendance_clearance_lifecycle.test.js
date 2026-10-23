@@ -134,7 +134,12 @@ HolidayCalendar.findOne = () => ({
 
 WeeklyOffPattern.findOne = () => ({
   sort: () => ({
-    lean: async () => null,
+    lean: async () => ({
+      scopeType: 'SCHOOL',
+      offDays: [], // Empty off-days ensures test suite executes reliably any day of the week
+      status: 'ACTIVE',
+      reason: 'Test schedule override',
+    }),
   }),
 });
 

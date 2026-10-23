@@ -142,6 +142,10 @@ console.log('===================================================================
     },
   };
 
+  // Ensure school is open for late-marking tests regardless of day of week execution
+  mockActiveWeeklyOff = { offDays: [], status: 'ACTIVE', reason: 'Operational weekday for test' };
+  cache.flush();
+
   const teacherActor = { _id: '507f1f77bcf86cd799439011', role: ROLES.TEACHER };
   const hmActor = { _id: '507f1f77bcf86cd799439022', role: ROLES.HM, schoolId: school._id };
 

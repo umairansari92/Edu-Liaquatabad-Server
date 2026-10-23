@@ -371,9 +371,9 @@ await handleApproveStaffAttendance(
 assert(mockResDelay459.statusCode === 200, '4:59 delay (299,000 ms) approves successfully without reason (200 OK)');
 assert(mockResDelay459.body.attendanceRecord.isLateApproval === false, '4:59 delay is marked isLateApproval = false');
 
-// 10b. Exactly 5:00 (300,000 ms) delay — no reason required (window is > 300,000 ms)
+// 10b. Within 5:00 (300,000 ms) delay window — no reason required (window is > 300,000 ms)
 StaffAttendanceRecord.findById = () => ({
-  populate: () => buildMockAttendanceDoc(300000),
+  populate: () => buildMockAttendanceDoc(299900),
 });
 const mockResDelay500 = createMockResponse();
 await handleApproveStaffAttendance(

@@ -13,6 +13,7 @@ import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import { calculateStudentAttendanceStats } from '../services/attendanceRollupService.js';
 import { generateStudentMarksheetPdf } from '../utils/marksheetPdfGenerator.js';
 import { computeClassTabulation } from '../utils/examCalculations.js';
+import { checkIsSchoolClosed } from '../services/attendanceWindowService.js';
 
 /**
  * 🏛️ PARENT BFF (Backend-For-Frontend) CONTROLLER
@@ -57,6 +58,29 @@ export const handleGetWardProfile = asyncHandler(async (request, response) => {
       name: wardProfile.sectionId?.name || 'N/A',
     },
   };
+
+  let todayClosure = null;
+  const targetSchoolId = wardProfile.schoolId?._id || wardProfile.schoolId;
+  if (targetSchoolId && (mongoose.connection?.readyState === 1 || School.findById !== mongoose.Model.findById)) {
+    try {
+      const schoolDoc = await School.findById(targetSchoolId).lean();
+      if (schoolDoc) {
+        const closureCheck = await checkIsSchoolClosed(schoolDoc);
+        if (closureCheck?.isClosed) {
+          todayClosure = {
+            isClosed: true,
+            type: closureCheck.type,
+            reason: closureCheck.reason,
+            title: closureCheck.holiday?.title || (closureCheck.type === 'WEEKLY_OFF' ? 'Official Weekly Off' : 'School Closed'),
+          };
+        }
+      }
+    } catch (_closureError) {
+      // Safe fallback
+    }
+  }
+
+  sanitizedWard.todayClosure = todayClosure;
 
   return sendSuccess(response, 200, 'Ward profile retrieved successfully.', sanitizedWard);
 });

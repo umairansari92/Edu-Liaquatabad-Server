@@ -1,5 +1,7 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
+import { checkIsSchoolClosed } from '../services/attendanceWindowService.js';
 import { generateDeviceFingerprint } from '../utils/deviceFingerprint.js';
 import {
   generateNextGrNumber,
@@ -395,8 +397,30 @@ export const handleGetMyStudentProfile = asyncHandler(async (request, response) 
     lifecycleStatus: studentProfile.lifecycleStatus,
   };
 
+  let todayClosure = null;
+  const targetSchoolId = studentProfile.schoolId?._id || studentProfile.schoolId;
+  if (targetSchoolId && (mongoose.connection?.readyState === 1 || School.findById !== mongoose.Model.findById)) {
+    try {
+      const schoolDoc = await School.findById(targetSchoolId).lean();
+      if (schoolDoc) {
+        const closureCheck = await checkIsSchoolClosed(schoolDoc);
+        if (closureCheck?.isClosed) {
+          todayClosure = {
+            isClosed: true,
+            type: closureCheck.type,
+            reason: closureCheck.reason,
+            title: closureCheck.holiday?.title || (closureCheck.type === 'WEEKLY_OFF' ? 'Official Weekly Off' : 'School Closed'),
+          };
+        }
+      }
+    } catch (_closureError) {
+      // Safe fallback
+    }
+  }
+
   return sendSuccess(response, 200, 'Student profile retrieved successfully.', {
     profile: sanitizedProfile,
+    todayClosure,
   });
 });
 
