@@ -347,7 +347,7 @@ export const processMidnightHmClTransition = async () => {
           category:  'ATTENDANCE',
           title:     'Attendance Recorded as Absent (Midnight Rollover)',
           message:   `Your unapproved CL for ${requestDatePkt} has transitioned to Absent per midnight cutoff policy. You may submit a late correction request if eligible.`,
-          actionLink: '/dashboard?tab=service',
+          actionLink: '/profile',
           rawMetadata: {
             staffId:        String(pendingRequest.staffUserId),
             staffName:      '',

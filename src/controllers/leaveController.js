@@ -484,7 +484,7 @@ export const handleApproveLeaveRequest = async (request, response) => {
       category:  'ATTENDANCE',
       title:     `${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Approved`,
       message:   `Your ${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'Casual Leave' : 'Earned Leave'} request has been approved by ${requestingActor.fullName}.`,
-      actionLink: '/dashboard?tab=service',
+      actionLink: '/profile',
       rawMetadata: {
         staffId:   String(existingLeaveRequest.staffUserId),
         staffName: requestingActor.fullName,
@@ -589,7 +589,7 @@ export const handleRejectLeaveRequest = async (request, response) => {
       category:  'ATTENDANCE',
       title:     `${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Rejected`,
       message:   `Your ${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'Casual Leave' : 'Earned Leave'} request has been rejected by ${requestingActor.fullName}. Reason: ${rejectionReason.trim()}`,
-      actionLink: '/dashboard?tab=service',
+      actionLink: '/profile',
       rawMetadata: {
         staffId:    String(existingLeaveRequest.staffUserId),
         staffName:  requestingActor.fullName,
@@ -1150,7 +1150,7 @@ export const handleLateCorrectionLeaveRequest = async (request, response) => {
       category: 'ATTENDANCE',
       title: `${existingLeaveRequest.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? 'CL' : 'EL'} Late Correction Approved`,
       message: `Your leave request for ${existingLeaveRequest.startDatePkt} has been corrected and approved by ${requestingActor.fullName}. Reason: ${correctionReason.trim()}`,
-      actionLink: '/dashboard?tab=service',
+      actionLink: '/profile',
       rawMetadata: {
         staffId: String(existingLeaveRequest.staffUserId),
         staffName: requestingActor.fullName,
