@@ -35,10 +35,10 @@ const TeacherProfileSchema = new mongoose.Schema({
   privacySettings: {
     fieldVisibility: {
       profilePhoto: { type: String, enum: ['PUBLIC', 'SCHOOL', 'PRIVATE'], default: 'PUBLIC' },
-      designation: { type: String, enum: ['PUBLIC', 'SCHOOL'], default: 'PUBLIC' },
-      qualification: { type: String, enum: ['PUBLIC', 'SCHOOL', 'PRIVATE'], default: 'PUBLIC' },
-      phoneNumber: { type: String, enum: ['SCHOOL', 'PRIVATE'], default: 'SCHOOL' },
-      email: { type: String, enum: ['SCHOOL', 'PRIVATE'], default: 'SCHOOL' },
+      designation: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'PUBLIC' },
+      qualification: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'PUBLIC' },
+      phoneNumber: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'SCHOOL' },
+      email: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'SCHOOL' },
       cnic: { type: String, enum: ['AUTHORIZED_ROLE', 'PRIVATE'], default: 'AUTHORIZED_ROLE' },
       bankDetails: { type: String, enum: ['AUTHORIZED_ROLE', 'PRIVATE'], default: 'AUTHORIZED_ROLE' },
       residentialAddress: { type: String, enum: ['AUTHORIZED_ROLE', 'PRIVATE'], default: 'AUTHORIZED_ROLE' },

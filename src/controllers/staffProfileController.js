@@ -163,8 +163,18 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
   }
 
   // ─── Absolute Privacy Policy: User's explicit PRIVATE settings are respected even by ROOT_ADMIN ───
-  const showPhone = isSelf || (privacy.phoneNumber !== 'PRIVATE' && (isPrivilegedAdmin || (privacy.phoneNumber === 'SCHOOL' && access.canView)));
-  const showEmail = isSelf || (privacy.email !== 'PRIVATE' && (isPrivilegedAdmin || (privacy.email === 'SCHOOL' && access.canView)));
+  const showPhone = isSelf || (privacy.phoneNumber !== 'PRIVATE' && (
+    isPrivilegedAdmin ||
+    privacy.phoneNumber === 'PUBLIC' ||
+    (privacy.phoneNumber === 'SCHOOL' && access.canView) ||
+    (privacy.phoneNumber === 'AUTHORIZED_ROLE' && access.canViewSensitive)
+  ));
+  const showEmail = isSelf || (privacy.email !== 'PRIVATE' && (
+    isPrivilegedAdmin ||
+    privacy.email === 'PUBLIC' ||
+    (privacy.email === 'SCHOOL' && access.canView) ||
+    (privacy.email === 'AUTHORIZED_ROLE' && access.canViewSensitive)
+  ));
   const showPhoto = isSelf || privacy.profilePhoto !== 'PRIVATE';
   const showQual = isSelf || privacy.qualification !== 'PRIVATE';
 
