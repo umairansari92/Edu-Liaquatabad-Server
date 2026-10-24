@@ -162,26 +162,31 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
       .lean();
   }
 
-  // ─── Absolute Privacy Policy: User's explicit PRIVATE settings are respected even by ROOT_ADMIN ───
-  const showPhone = isSelf || (privacy.phoneNumber !== 'PRIVATE' && (
-    isPrivilegedAdmin ||
-    privacy.phoneNumber === 'PUBLIC' ||
-    (privacy.phoneNumber === 'SCHOOL' && access.canView) ||
-    (privacy.phoneNumber === 'AUTHORIZED_ROLE' && access.canViewSensitive)
-  ));
-  const showEmail = isSelf || (privacy.email !== 'PRIVATE' && (
-    isPrivilegedAdmin ||
-    privacy.email === 'PUBLIC' ||
-    (privacy.email === 'SCHOOL' && access.canView) ||
-    (privacy.email === 'AUTHORIZED_ROLE' && access.canViewSensitive)
-  ));
-  const showPhoto = isSelf || privacy.profilePhoto !== 'PRIVATE';
-  const showQual = isSelf || privacy.qualification !== 'PRIVATE';
+  // ─── Unified 4-Tier Privacy Policy ──────────────────────────────────────────
+  // Evaluates visibility according to tier: PUBLIC, SCHOOL, AUTHORIZED_ROLE, PRIVATE.
+  // Explicit PRIVATE setting is respected even by ROOT_ADMIN.
+  const evaluateFieldAccess = (tier) => {
+    if (isSelf) return true;
+    if (tier === 'PRIVATE') return false;
+    if (isPrivilegedAdmin) return true;
+    if (tier === 'PUBLIC') return true;
+    if (tier === 'SCHOOL') return !!access.canView;
+    if (tier === 'AUTHORIZED_ROLE') return !!access.canViewSensitive;
+    return false;
+  };
 
-  // Sensitive fields: If set to PRIVATE, ONLY self can view unmasked. Even ROOT_ADMIN receives masked values.
-  const canRevealCnic = isSelf || (privacy.cnic !== 'PRIVATE' && access.canViewSensitive);
-  const canRevealBank = isSelf || (privacy.bankDetails !== 'PRIVATE' && access.canViewSensitive);
-  const canRevealAddress = isSelf || (privacy.residentialAddress !== 'PRIVATE' && access.canViewSensitive);
+  const showPhone = evaluateFieldAccess(privacy.phoneNumber);
+  const showEmail = evaluateFieldAccess(privacy.email);
+  const showPhoto = evaluateFieldAccess(privacy.profilePhoto);
+  const showQual = evaluateFieldAccess(privacy.qualification);
+
+  // Sensitive PII & Financial Records: Least privilege invariant.
+  // Must NEVER be exposed publicly or school-wide regardless of user preference.
+  // Unmasked ONLY if caller is self, OR if caller has jurisdictional sensitive clearance (access.canViewSensitive) AND setting is NOT PRIVATE.
+  // If set to PRIVATE, strictly owner-only (even privileged administrators receive masked values).
+  const canRevealCnic = isSelf || (privacy.cnic !== 'PRIVATE' && !!access.canViewSensitive);
+  const canRevealBank = isSelf || (privacy.bankDetails !== 'PRIVATE' && !!access.canViewSensitive);
+  const canRevealAddress = isSelf || (privacy.residentialAddress !== 'PRIVATE' && !!access.canViewSensitive);
 
   const responseData = {
     user: {
@@ -793,7 +798,8 @@ export const handleUpdatePrivacySettings = asyncHandler(async (request, response
   }
 
   // ─── SECURITY CEILING ENFORCEMENT ───────────────────────────────────────────
-  // CNIC, B-Form, Bank Details, and Residential Address can NEVER be PUBLIC or SCHOOL-wide
+  // Institutional Policy: National identity, financial, and residential records
+  // possess hard ceilings and can NEVER be exposed publicly or school-wide.
   if (['PUBLIC', 'SCHOOL'].includes(fieldVisibility.cnic)) {
     return sendError(response, 400, 'Security Policy Violation: CNIC cannot be exposed publicly or school-wide. It must remain AUTHORIZED_ROLE or PRIVATE.');
   }
@@ -1130,7 +1136,16 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
   yPos += 20;
 
   doc.fontSize(9).font('Helvetica');
-  const showCnicInPdf = isSelf || (privacy.cnic !== 'PRIVATE' && access.canViewSensitive);
+  const evaluatePdfFieldAccess = (tier) => {
+    if (isSelf) return true;
+    if (tier === 'PRIVATE') return false;
+    if (isPrivilegedAdmin) return true;
+    if (tier === 'PUBLIC') return true;
+    if (tier === 'SCHOOL') return !!access.canView;
+    if (tier === 'AUTHORIZED_ROLE') return !!access.canViewSensitive;
+    return false;
+  };
+  const showCnicInPdf = evaluatePdfFieldAccess(privacy.cnic);
   const personalInfo = [
     ['Full Name:', targetUser.fullName || 'N/A', "Father's Name:", targetProfile?.fatherName || 'N/A'],
     ['Official Email:', targetUser.email || 'N/A', 'Contact Phone:', targetUser.phoneNumber || 'N/A'],
@@ -1155,7 +1170,7 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
   doc.moveTo(40, yPos + 14).lineTo(555, yPos + 14).strokeColor('#cbd5e1').stroke();
   yPos += 20;
 
-  const showBankInPdf = isSelf || (privacy.bankDetails !== 'PRIVATE' && access.canViewSensitive);
+  const showBankInPdf = evaluatePdfFieldAccess(privacy.bankDetails);
   if (showBankInPdf) {
     const bankInfo = [
       ['Bank Name:', targetProfile?.bankName || 'Not Provided', 'Branch Name:', targetProfile?.branchName || 'Not Provided'],

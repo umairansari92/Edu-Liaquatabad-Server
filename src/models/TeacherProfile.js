@@ -34,7 +34,7 @@ const TeacherProfileSchema = new mongoose.Schema({
   // ─── Privacy & Access Control Settings ──────────────────────────────────────
   privacySettings: {
     fieldVisibility: {
-      profilePhoto: { type: String, enum: ['PUBLIC', 'SCHOOL', 'PRIVATE'], default: 'PUBLIC' },
+      profilePhoto: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'PUBLIC' },
       designation: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'PUBLIC' },
       qualification: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'PUBLIC' },
       phoneNumber: { type: String, enum: ['PUBLIC', 'SCHOOL', 'AUTHORIZED_ROLE', 'PRIVATE'], default: 'SCHOOL' },
