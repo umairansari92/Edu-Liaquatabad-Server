@@ -681,10 +681,13 @@ async function runTestSuite() {
       },
     };
     const nowPkt = new Date();
+    const simulatedLateClock = new Date(nowPkt);
+    simulatedLateClock.setUTCHours(23, 59, 0, 0);
     const resLateCleared = await validateSubmissionWindow({
       school: schoolClosedToday,
       requestingActor: { role: ROLES.HM },
       date: nowPkt,
+      currentTime: simulatedLateClock,
       isLateOverride: true,
       lateReason: 'Power disruption delayed local register data entry',
     });
