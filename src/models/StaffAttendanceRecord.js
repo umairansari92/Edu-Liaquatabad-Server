@@ -21,9 +21,19 @@ import { STAFF_ATTENDANCE_STATUS } from '../../config/constants.js';
 
 const StaffAttendanceRecordSchema = new mongoose.Schema({
 
-  // Organizational scope
-  schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true, index: true },
-  townId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Town', index: true },
+  // Organizational scope (schoolId required for school staff; townId required for office staff)
+  schoolId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'School',
+    index: true,
+    validate: {
+      validator: function () {
+        return Boolean(this.schoolId || this.townId);
+      },
+      message: 'Either schoolId or townId must be specified for StaffAttendanceRecord.',
+    },
+  },
+  townId: { type: mongoose.Schema.Types.ObjectId, ref: 'Town', index: true },
 
   // Staff identity
   staffUserId:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -36,8 +46,18 @@ const StaffAttendanceRecordSchema = new mongoose.Schema({
   // Server-authoritative submission timestamp (client cannot override)
   submittedAt: { type: Date, required: true, default: Date.now },
 
-  // Whether the HM self-marked (no approval required path)
-  isHmSelfRecord: { type: Boolean, default: false },
+  // Self-marked flags
+  isHmSelfRecord:         { type: Boolean, default: false },
+  isSuperAdminSelfRecord: { type: Boolean, default: false },
+
+  // Operational Origin
+  entryMode: {
+    type: String,
+    enum: ['STAFF_SELF', 'HM_SELF', 'SUPER_ADMIN_PANEL', 'ADMIN_TERMINAL'],
+    default: 'STAFF_SELF',
+  },
+  markedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  remarks:  { type: String, trim: true },
 
   // Approval state
   approvalStatus: {

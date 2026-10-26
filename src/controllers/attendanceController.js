@@ -11,9 +11,11 @@ import TeacherProfile from "../models/TeacherProfile.js";
 import HolidayCalendar from "../models/HolidayCalendar.js";
 import WeeklyOffPattern from "../models/WeeklyOffPattern.js";
 import LateAttendanceRequest from "../models/LateAttendanceRequest.js";
+import StaffAttendanceRecord from "../models/StaffAttendanceRecord.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
+  STAFF_ATTENDANCE_STATUS,
   STUDENT_STATUS,
   USER_STATUS,
   TEACHING_ASSIGNMENT_STATUS,
@@ -1927,25 +1929,47 @@ export const handleGetTeacherSelfAttendance = asyncHandler(async (request, respo
   const startDate = new Date(queryYear, queryMonth, 1, 0, 0, 0, 0);
   const endDate = new Date(queryYear, queryMonth + 1, 0, 23, 59, 59, 999);
 
-  // Query teacher daily attendance documents for this school and date range
-  const attendanceDocs = await Attendance.find({
-    schoolId: teacherSchoolId,
-    attendanceType: 'TEACHER',
-    date: { $gte: startDate, $lte: endDate },
-    'records.userId': teacherId,
-  })
-    .sort({ date: 1 })
-    .lean();
+  // Parallel query: authoritative HM-verified Attendance documents AND individual StaffAttendanceRecords
+  const [attendanceDocs, staffRecords] = await Promise.all([
+    Attendance.find({
+      schoolId: teacherSchoolId,
+      attendanceType: 'TEACHER',
+      date: { $gte: startDate, $lte: endDate },
+      'records.userId': teacherId,
+    })
+      .sort({ date: 1 })
+      .lean(),
+    StaffAttendanceRecord.find({
+      staffUserId: teacherId,
+      attendanceDate: { $gte: startDate, $lte: endDate },
+    })
+      .populate('approvedBy', 'fullName designation role')
+      .populate('rejectedBy', 'fullName designation role')
+      .populate('markedBy', 'fullName designation role')
+      .sort({ attendanceDate: 1 })
+      .lean(),
+  ]);
+
+  const staffRecordMap = new Map();
+  for (const staffRecord of staffRecords) {
+    const dateKey = staffRecord.attendanceDate.toISOString().split('T')[0];
+    staffRecordMap.set(dateKey, staffRecord);
+  }
 
   const history = [];
+  const processedDates = new Set();
   let presentCount = 0;
   let absentCount = 0;
   let leaveCount = 0;
   let lateCount = 0;
+  let pendingCount = 0;
 
   for (const doc of attendanceDocs) {
     const record = doc.records.find((rec) => String(rec.userId) === teacherId);
     if (!record) continue;
+
+    const dateKey = doc.date.toISOString().split('T')[0];
+    processedDates.add(dateKey);
 
     const status = record.status;
     if (status === ATTENDANCE_STATUS.PRESENT) presentCount++;
@@ -1953,13 +1977,58 @@ export const handleGetTeacherSelfAttendance = asyncHandler(async (request, respo
     else if (status === ATTENDANCE_STATUS.LEAVE) leaveCount++;
     else if (status === ATTENDANCE_STATUS.LATE) lateCount++;
 
+    const matchingStaffRecord = staffRecordMap.get(dateKey);
+
     history.push({
-      date: doc.date.toISOString().split('T')[0],
+      date: dateKey,
       status,
-      remarks: record.remarks || '',
+      remarks: record.remarks || matchingStaffRecord?.remarks || '',
       verificationStatus: doc.verificationStatus,
+      submittedAt: matchingStaffRecord?.submittedAt || doc.createdAt || null,
+      approvedAt: matchingStaffRecord?.approvedAt || doc.updatedAt || null,
+      approvedBy: matchingStaffRecord?.approvedBy || null,
+      approvalStatus: matchingStaffRecord?.approvalStatus || (doc.verificationStatus === 'VERIFIED' ? 'APPROVED' : 'PENDING_APPROVAL'),
+      lateApprovalReason: matchingStaffRecord?.lateApprovalReason || '',
+      rejectionReason: matchingStaffRecord?.rejectionReason || '',
+      entryMode: matchingStaffRecord?.entryMode || doc.entryMode || 'MANUAL_PORTAL',
     });
   }
+
+  // Include any pending or approved staff attendance submissions for dates not yet in bulk attendance register
+  for (const staffRecord of staffRecords) {
+    const dateKey = staffRecord.attendanceDate.toISOString().split('T')[0];
+    if (!processedDates.has(dateKey)) {
+      processedDates.add(dateKey);
+
+      let dayStatus = 'PENDING';
+      if (staffRecord.approvalStatus === STAFF_ATTENDANCE_STATUS.APPROVED) {
+        dayStatus = ATTENDANCE_STATUS.PRESENT;
+        presentCount++;
+      } else if (staffRecord.approvalStatus === STAFF_ATTENDANCE_STATUS.REJECTED) {
+        dayStatus = ATTENDANCE_STATUS.ABSENT;
+        absentCount++;
+      } else {
+        pendingCount++;
+      }
+
+      history.push({
+        date: dateKey,
+        status: dayStatus,
+        remarks: staffRecord.remarks || '',
+        verificationStatus: staffRecord.approvalStatus,
+        submittedAt: staffRecord.submittedAt,
+        approvedAt: staffRecord.approvedAt || null,
+        approvedBy: staffRecord.approvedBy || null,
+        approvalStatus: staffRecord.approvalStatus,
+        lateApprovalReason: staffRecord.lateApprovalReason || '',
+        rejectionReason: staffRecord.rejectionReason || '',
+        entryMode: staffRecord.entryMode || 'STAFF_SELF',
+      });
+    }
+  }
+
+  // Sort chronologically by date
+  history.sort((itemA, itemB) => itemA.date.localeCompare(itemB.date));
 
   const totalMarkedDays = history.length;
   const effectivePresent = presentCount + lateCount;
@@ -1975,6 +2044,7 @@ export const handleGetTeacherSelfAttendance = asyncHandler(async (request, respo
       absentCount,
       leaveCount,
       lateCount,
+      pendingCount,
       attendancePercentage,
     },
     history,

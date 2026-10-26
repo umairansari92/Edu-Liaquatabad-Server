@@ -15,6 +15,10 @@ import {
   handleApproveStaffAttendance,
   handleRejectStaffAttendance,
   handleGetMyStaffAttendanceHistory,
+  handleSuperAdminMarkOfficeStaffAttendance,
+  handleSuperAdminSelfAttendance,
+  handleGetOfficeStaffAttendanceRoster,
+  handleGetStaffAttendanceRecords,
 } from '../controllers/staffAttendanceController.js';
 
 const staffAttendanceRouter = express.Router();
@@ -29,7 +33,32 @@ staffAttendanceRouter.post(
   handleHmSelfAttendance
 );
 
-// Staff submits attendance for approval
+// Super Admin marks own attendance (self-effective)
+staffAttendanceRouter.post(
+  '/super-admin-self',
+  handleSuperAdminSelfAttendance
+);
+
+// Super Admin marks office staff attendance (office terminal)
+staffAttendanceRouter.post(
+  '/office-mark',
+  handleSuperAdminMarkOfficeStaffAttendance
+);
+
+// Office staff daily attendance roster (Super Admin / Admin terminal view)
+staffAttendanceRouter.get(
+  '/office-roster',
+  handleGetOfficeStaffAttendanceRoster
+);
+
+// General scoped attendance records query
+staffAttendanceRouter.get(
+  '/records',
+  authorizePermissions(PERMISSIONS.STAFF_ATTENDANCE_APPROVE),
+  handleGetStaffAttendanceRecords
+);
+
+// Staff submits attendance for approval (School staff only; office staff blocked in controller)
 staffAttendanceRouter.post(
   '/submit',
   authorizePermissions(PERMISSIONS.STAFF_ATTENDANCE_SUBMIT),
