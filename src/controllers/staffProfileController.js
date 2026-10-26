@@ -997,23 +997,52 @@ export const handleGetStaffAccessHistory = asyncHandler(async (request, response
       .lean(),
     AuditLog.find({
       targetId: targetUserId,
-      action: 'PROFILE_PDF_DOWNLOADED',
+      action: { $in: ['PROFILE_PDF_DOWNLOADED', 'STAFF_PROFILE_PDF_DOWNLOADED'] },
     })
       .sort({ createdAt: -1 })
       .limit(20)
       .lean(),
   ]);
 
+  const requestItems = requests.map((req) => {
+    let action = 'PROFILE_ACCESS_REQUESTED';
+    if (req.status === 'APPROVED') action = 'PROFILE_ACCESS_APPROVED';
+    else if (req.status === 'DENIED') action = 'PROFILE_ACCESS_DENIED';
+    else if (req.status === 'REVOKED') action = 'PROFILE_ACCESS_REVOKED';
+    else if (req.status === 'EXPIRED') action = 'PROFILE_ACCESS_EXPIRED';
+
+    return {
+      id: req._id,
+      action,
+      actorName: req.requesterName || 'Official',
+      actorRole: req.requesterRole || 'Staff',
+      actorDesignation: req.requesterDesignation || '',
+      purpose: req.purpose || req.decisionRemarks || '',
+      timestamp: req.decisionDate || req.createdAt,
+      status: req.status,
+    };
+  });
+
+  const downloadItems = downloads.map((downloadRecord) => ({
+    id: downloadRecord._id,
+    action: downloadRecord.action || 'PROFILE_PDF_DOWNLOADED',
+    actorName: downloadRecord.actorName || 'Official',
+    actorRole: downloadRecord.actorRole || 'Official',
+    actorDesignation: downloadRecord.actorDesignation || '',
+    downloadedAt: downloadRecord.createdAt,
+    timestamp: downloadRecord.createdAt,
+    reason: downloadRecord.reason || 'Official Government Verification',
+    purpose: downloadRecord.reason || 'Official Government Verification',
+  }));
+
+  const history = [...requestItems, ...downloadItems].sort(
+    (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+  );
+
   return sendSuccess(response, 200, 'Access history retrieved successfully.', {
+    history,
     requests,
-    downloads: downloads.map((downloadRecord) => ({
-      id: downloadRecord._id,
-      actorName: downloadRecord.actorName,
-      actorRole: downloadRecord.actorRole,
-      actorDesignation: downloadRecord.actorDesignation,
-      downloadedAt: downloadRecord.createdAt,
-      reason: downloadRecord.reason,
-    })),
+    downloads: downloadItems,
   });
 });
 
