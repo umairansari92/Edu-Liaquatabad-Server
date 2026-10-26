@@ -380,6 +380,31 @@ console.log('\n--- 9. MongoDB Query $and Operator Invariant ---');
   assert(correctedQuery.$and.length === 2, 'Test 35: Both date-range and scope filters coexist cleanly in MongoDB query');
 }
 
+// ─── 10. Absence & Leave Reason / Remarks Invariant ──────────────────────────
+console.log('\n--- 10. Absence & Leave Remarks Preservation Invariant ---');
+{
+  const mockAttendanceRecord = {
+    date: new Date('2026-10-20T12:00:00.000Z'),
+    records: [
+      { userId: 'user_001', status: 'ABSENT', remarks: 'Severe viral fever, doctor slip submitted' },
+      { userId: 'user_002', status: 'LEAVE', remarks: 'Family emergency in Hyderabad' },
+      { userId: 'user_003', status: 'PRESENT', remarks: '' },
+    ],
+  };
+
+  const dateStr = getKarachiDateString(new Date(mockAttendanceRecord.date));
+  const dateRemarksMap = { [dateStr]: {} };
+  for (const entry of mockAttendanceRecord.records) {
+    if (entry.remarks && typeof entry.remarks === 'string' && entry.remarks.trim().length > 0) {
+      dateRemarksMap[dateStr][String(entry.userId)] = entry.remarks.trim();
+    }
+  }
+
+  assert(dateRemarksMap['2026-10-20']['user_001'] === 'Severe viral fever, doctor slip submitted', 'Test 36: Absent student remark preserved in dateRemarksMap');
+  assert(dateRemarksMap['2026-10-20']['user_002'] === 'Family emergency in Hyderabad', 'Test 37: Leave student remark preserved in dateRemarksMap');
+  assert(dateRemarksMap['2026-10-20']['user_003'] === undefined, 'Test 38: Empty remark for present student omitted from dateRemarksMap');
+}
+
 console.log('\n==============================================================================');
 console.log(`🎉 ALL ${passedTests}/${totalTests} SMART ATTENDANCE REGISTER TESTS PASSED! (100%)`);
 console.log('==============================================================================\n');

@@ -845,6 +845,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
   // Build { dateString → { userId → status } } & document lookup
   const dateAttendanceDocMap = {};
   const dateStatusMap = {};
+  const dateRemarksMap = {};
   const workingDays   = [];
 
   for (const rec of attendanceRecords) {
@@ -852,8 +853,13 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
     workingDays.push(dateStr);
     dateAttendanceDocMap[dateStr] = rec;
     dateStatusMap[dateStr] = {};
+    dateRemarksMap[dateStr] = {};
     for (const entry of rec.records) {
-      dateStatusMap[dateStr][String(entry.userId)] = entry.status;
+      const studentUserId = String(entry.userId);
+      dateStatusMap[dateStr][studentUserId] = entry.status;
+      if (entry.remarks && typeof entry.remarks === 'string' && entry.remarks.trim().length > 0) {
+        dateRemarksMap[dateStr][studentUserId] = entry.remarks.trim();
+      }
     }
   }
 
@@ -983,13 +989,18 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
   const students = studentProfiles.map((profile, index) => {
     const uidStr     = String(profile.userId?._id || profile.userId);
     const attendance = {};
+    const attendanceRemarks = {};
     const dailyStatus = {};
     const totals     = { P: 0, A: 0, L: 0 };
 
     for (const calDay of calendarDays) {
       const dateStr = calDay.date;
       const statusValue = dateStatusMap[dateStr]?.[uidStr] || null;
+      const remarksValue = dateRemarksMap[dateStr]?.[uidStr] || "";
       attendance[dateStr] = statusValue;
+      if (remarksValue) {
+        attendanceRemarks[dateStr] = remarksValue;
+      }
 
       if (statusValue === ATTENDANCE_STATUS.PRESENT)     totals.P++;
       else if (statusValue === ATTENDANCE_STATUS.ABSENT) totals.A++;
@@ -997,6 +1008,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
 
       dailyStatus[dateStr] = {
         status: statusValue,
+        remarks: remarksValue,
         dayType: calDay.dayType,
         dayStatus: calDay.status,
         label: statusValue
@@ -1019,6 +1031,7 @@ export const handleGetAttendanceRegister = asyncHandler(async (request, response
       globalStudentId:  profile.globalStudentId || `GR-${profile.grNumber}`,
       gender:           profile.gender || "UNSPECIFIED",
       attendance,
+      attendanceRemarks,
       dailyStatus,
       totals,
       workingDaysRecorded: recordedDaysForStudent,
