@@ -1,6 +1,6 @@
 import { verifyAccessToken } from '../utils/tokenUtils.js';
 import { sendError } from '../utils/apiResponse.js';
-import { USER_STATUS, ROLE_HIERARCHY, ROLES } from '../../config/constants.js';
+import { USER_STATUS, ROLE_HIERARCHY, ROLES, STAFF_CATEGORY } from '../../config/constants.js';
 import { getEffectivePermissions } from '../config/permissions.js';
 import User from '../models/User.js';
 
@@ -56,6 +56,9 @@ export const authenticate = async (request, response, nextFunction) => {
       townId: authenticatedUser.townId,
       schoolId: authenticatedUser.schoolId,
       assignedSchools: authenticatedUser.assignedSchools || [],
+      staffCategory:
+        authenticatedUser.staffCategory ||
+        (authenticatedUser.schoolId ? STAFF_CATEGORY.SCHOOL_STAFF : null),
       permissions: effectivePermissions,
       tokenVersion: authenticatedUser.tokenVersion,
       mfaVerified: decodedTokenPayload.mfaVerified === true,

@@ -28,6 +28,7 @@ import StaffAttendanceRecord from '../models/StaffAttendanceRecord.js';
 import LeaveRequest from '../models/LeaveRequest.js';
 import User from '../models/User.js';
 import AuditLog from '../models/AuditLog.js';
+import Notification from '../models/Notification.js';
 import {
   STAFF_ATTENDANCE_STATUS,
   ATTENDANCE_STATUS,
@@ -216,7 +217,9 @@ export const handleSubmitStaffAttendance = async (request, response) => {
 
   // Resolve approver
   let approverToNotifyId = null;
-  const staffCategory = requestingActor.staffCategory;
+  const staffCategory =
+    requestingActor.staffCategory ||
+    (requestingActor.schoolId ? STAFF_CATEGORY.SCHOOL_STAFF : STAFF_CATEGORY.OFFICE_STAFF);
 
   if (staffCategory === STAFF_CATEGORY.SCHOOL_STAFF && requestingActor.schoolId) {
     const schoolHm = await User.findOne({
@@ -241,7 +244,7 @@ export const handleSubmitStaffAttendance = async (request, response) => {
       townId:         requestingActor.townId,
       staffUserId:    requestingActor._id,
       staffRole:      requestingActor.role,
-      staffCategory:  staffCategory || null,
+      staffCategory:  staffCategory || STAFF_CATEGORY.SCHOOL_STAFF,
       attendanceDate,
       submittedAt:    nowTimestamp,
       isHmSelfRecord: false,
@@ -482,6 +485,24 @@ export const handleApproveStaffAttendance = async (request, response) => {
     logger.warn(`[StaffAttendanceController] Approval notification failed: ${notificationError.message}`);
   }
 
+  // Mark the approver's notification as read
+  try {
+    await Notification.updateMany(
+      {
+        recipientUserId: requestingActor._id,
+        'metadata.staffId': String(existingRecord.staffUserId),
+        category: 'ATTENDANCE',
+        isRead: false,
+      },
+      {
+        $set: {
+          isRead: true,
+          'metadata.status': STAFF_ATTENDANCE_STATUS.APPROVED,
+        },
+      }
+    );
+  } catch (_) {}
+
   return response.status(200).json({
     success: true,
     message: isLateApproval
@@ -622,6 +643,24 @@ export const handleRejectStaffAttendance = async (request, response) => {
     logger.warn(`[StaffAttendanceController] Rejection notification failed: ${notificationError.message}`);
   }
 
+  // Mark the approver's notification as read
+  try {
+    await Notification.updateMany(
+      {
+        recipientUserId: requestingActor._id,
+        'metadata.staffId': String(existingRecord.staffUserId),
+        category: 'ATTENDANCE',
+        isRead: false,
+      },
+      {
+        $set: {
+          isRead: true,
+          'metadata.status': STAFF_ATTENDANCE_STATUS.REJECTED,
+        },
+      }
+    );
+  } catch (_) {}
+
   return response.status(200).json({
     success: true,
     message: 'Staff attendance rejected.',
@@ -645,8 +684,12 @@ export const handleGetPendingStaffAttendance = async (request, response) => {
     if (!requestingActor.schoolId) {
       return response.status(403).json({ success: false, message: 'HM must have an assigned school.' });
     }
-    queryFilter.schoolId      = requestingActor.schoolId;
-    queryFilter.staffCategory = STAFF_CATEGORY.SCHOOL_STAFF;
+    queryFilter.schoolId = requestingActor.schoolId;
+    queryFilter.$or = [
+      { staffCategory: STAFF_CATEGORY.SCHOOL_STAFF },
+      { staffCategory: null },
+      { staffCategory: { $exists: false } },
+    ];
   }
 
   if (date) {

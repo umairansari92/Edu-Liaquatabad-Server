@@ -12,6 +12,7 @@ import HolidayCalendar from "../models/HolidayCalendar.js";
 import WeeklyOffPattern from "../models/WeeklyOffPattern.js";
 import LateAttendanceRequest from "../models/LateAttendanceRequest.js";
 import StaffAttendanceRecord from "../models/StaffAttendanceRecord.js";
+import Notification from "../models/Notification.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
@@ -2267,6 +2268,28 @@ export const handleDecideLateAttendanceClearance = asyncHandler(async (request, 
     }
   }
 
+  // Idempotency: If request is already decided, sync the notification and return cleanly
+  if (existingRequest.status !== 'PENDING') {
+    try {
+      await Notification.updateMany(
+        { 'metadata.requestId': requestId },
+        {
+          $set: {
+            isRead: true,
+            'metadata.status': existingRequest.status,
+            'metadata.rejectionReason': existingRequest.decisionRemarks || '',
+          },
+        }
+      );
+    } catch (_) {}
+    return sendSuccess(
+      response,
+      200,
+      `This clearance request has already been ${existingRequest.status.toLowerCase()}.`,
+      { request: existingRequest, alreadyDecided: true }
+    );
+  }
+
   // Expiry calculation: Option A — end of attendance day in PKT (23:59:59.999 PKT)
   const unlockedUntil = decision === 'APPROVE'
     ? getKarachiEndOfDayDate(existingRequest.datePkt || existingRequest.date)
@@ -2297,6 +2320,20 @@ export const handleDecideLateAttendanceClearance = asyncHandler(async (request, 
       "This clearance request has already been decided or is no longer pending."
     );
   }
+
+  // Mark the approver's notification as read and updated with decision status
+  try {
+    await Notification.updateMany(
+      { 'metadata.requestId': requestId },
+      {
+        $set: {
+          isRead: true,
+          'metadata.status': updatedRequest.status,
+          'metadata.rejectionReason': updateFields.decisionRemarks || '',
+        },
+      }
+    );
+  } catch (_) {}
 
   const className = existingRequest.classId?.name || 'Class';
   const sectionName = existingRequest.sectionId?.name && existingRequest.sectionId.name !== 'null' && existingRequest.sectionId.name.toLowerCase() !== 'default'
