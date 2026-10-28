@@ -121,6 +121,15 @@ const teacher_User = {
   status: USER_STATUS.ACTIVE,
 };
 
+const parent_User = {
+  _id: '507f1f77bcf86cd799439051',
+  role: ROLES.PARENT,
+  scope: SCOPES.PERSONAL,
+  schoolId: schoolA_Id,
+  organizationId: '507f1f77bcf86cd799439099',
+  status: USER_STATUS.ACTIVE,
+};
+
 // ─── 1. ACADEMIC CROSS-VALIDATION SECURITY TESTS ─────────────────────────────
 console.log('--- 1. Academic Cross-Validation Guards (Anti-Injection Shield) ---');
 
@@ -390,12 +399,53 @@ await runAsyncTest('handleEnrollStudent auto-derives institutional email matchin
 console.log('\n--- 3. Scoped Student Directory & Anti-BOLA / IDOR Protection ---');
 
 await runAsyncTest('handleGetSchoolStudents blocks non-authorized role with 403', async () => {
-  const req = { user: teacher_User, query: {} };
+  const req = { user: parent_User, query: {} };
   const res = createMockRes();
 
   await handleGetSchoolStudents(req, res);
   assert.equal(res.statusCode, 403);
   assert.match(res.body.message, /access denied/i);
+});
+
+await runAsyncTest('handleGetSchoolStudents allows Teacher to list own school students', async () => {
+  const origFind = StudentProfile.find;
+  const origCount = StudentProfile.countDocuments;
+
+  StudentProfile.find = (query) => {
+    assert.equal(String(query.schoolId), schoolA_Id);
+    return {
+      populate: () => ({
+        populate: () => ({
+          populate: () => ({
+            sort: () => ({
+              skip: () => ({
+                limit: () => ({
+                  lean: async () => [{ _id: 'sp_t1', grNumber: 105, studentFullName: 'Sara Khan' }],
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+  };
+  StudentProfile.countDocuments = async (query) => {
+    assert.equal(String(query.schoolId), schoolA_Id);
+    return 1;
+  };
+
+  const req = { user: teacher_User, query: {} };
+  const res = createMockRes();
+
+  try {
+    await handleGetSchoolStudents(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.data.students.length, 1);
+  } finally {
+    StudentProfile.find = origFind;
+    StudentProfile.countDocuments = origCount;
+  }
 });
 
 await runAsyncTest('handleGetSchoolStudents allows HM to list own school students', async () => {

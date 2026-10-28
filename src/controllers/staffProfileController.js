@@ -61,11 +61,14 @@ export const evaluateProfileAccess = (actor, targetUser, targetProfile) => {
     }
   }
 
-  // HM: Same school only
-  if (actor.role === ROLES.HM) {
+  // HM & Teacher: Same school only
+  if (actor.role === ROLES.HM || actor.role === ROLES.TEACHER) {
     const actorSchoolId = String(actor.schoolId?._id || actor.schoolId || '');
     if (actorSchoolId && targetSchoolId && actorSchoolId === String(targetSchoolId)) {
-      return { canView: true, canViewSensitive: true };
+      return {
+        canView: true,
+        canViewSensitive: actor.role === ROLES.HM, // HM can view sensitive; Teacher views schoolbase visible fields
+      };
     }
   }
 

@@ -27,18 +27,18 @@ router.get('/users.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN), ha
 
 // ─── Export Staff Directory CSV ────────────────────────────────────────────────
 // User + TeacherProfile join — excludes students/parents
-router.get('/staff',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM), handleExportStaffCsv);
-router.get('/staff.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM), handleExportStaffCsv);
+router.get('/staff',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER), handleExportStaffCsv);
+router.get('/staff.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER), handleExportStaffCsv);
 
 // ─── Export Students Directory CSV ────────────────────────────────────────────
 // StudentProfile + User + School + Class + Section join
-router.get('/students',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM), handleExportStudentsCsv);
-router.get('/students.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM), handleExportStudentsCsv);
+router.get('/students',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER), handleExportStudentsCsv);
+router.get('/students.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER), handleExportStudentsCsv);
 
 // ─── Export Guardians/Parents Directory CSV ────────────────────────────────────
 // PARENT baseRole users with linked student names, GR Nos, schools
-router.get('/guardians',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN), handleExportGuardiansCsv);
-router.get('/guardians.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN), handleExportGuardiansCsv);
+router.get('/guardians',     authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER), handleExportGuardiansCsv);
+router.get('/guardians.csv', authorizeRoles(ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.HM, ROLES.TEACHER), handleExportGuardiansCsv);
 
 export default router;
 

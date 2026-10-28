@@ -55,6 +55,7 @@ const DIRECTORY_ALLOWED_ROLES = new Set([
   ROLES.ADMIN,
   ROLES.SUPERVISOR,
   ROLES.HM,
+  ROLES.TEACHER,
 ]);
 
 /**
@@ -568,11 +569,11 @@ export const handleGetSchoolStudents = asyncHandler(async (request, response) =>
   // ── Strict School Scope Enforcement (Anti-BOLA/IDOR Shield) ───────────────
   let effectiveSchoolId;
 
-  if (actorRole === ROLES.HM) {
+  if (actorRole === ROLES.HM || actorRole === ROLES.TEACHER) {
     if (!requestingActor.schoolId) {
-      return sendError(response, 400, 'Your Head Master account is not linked to an authorized school.');
+      return sendError(response, 400, 'Your account is not linked to an authorized school.');
     }
-    // Explicit test requirement: HM School A requesting School B must be rejected with 403
+    // Explicit test requirement: School staff requesting another school must be rejected with 403
     if (request.query.schoolId && String(request.query.schoolId) !== String(requestingActor.schoolId)) {
       return sendError(response, 403, 'Access denied. You can only access students belonging to your assigned school.');
     }

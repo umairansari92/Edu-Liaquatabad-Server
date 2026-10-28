@@ -197,8 +197,9 @@ export const ROLE_DEFAULT_PERMISSIONS = Object.freeze({
     PERMISSIONS.STAFF_ATTENDANCE_APPROVE,
   ],
 
-  // TEACHER: Class/section operational authority
+  // TEACHER: Class/section operational authority & school-scoped roster visibility
   [ROLES.TEACHER]: [
+    PERMISSIONS.USERS_VIEW,
     PERMISSIONS.SCHOOLS_VIEW,
     PERMISSIONS.ATTENDANCE_VIEW,
     PERMISSIONS.ATTENDANCE_MARK,
