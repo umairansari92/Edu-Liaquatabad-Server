@@ -7,7 +7,13 @@ import { sendSuccess, sendError } from '../utils/apiResponse.js';
 import { ROLES, DOCUMENT_TYPES, AUDIENCE_TYPES } from '../../config/constants.js';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUploader.js';
 
-const ALLOWED_HM_AUDIENCES = [AUDIENCE_TYPES.TEACHERS, AUDIENCE_TYPES.STUDENTS, AUDIENCE_TYPES.PARENTS];
+const ALLOWED_HM_AUDIENCES = [
+  AUDIENCE_TYPES.ALL,
+  AUDIENCE_TYPES.TEACHERS,
+  AUDIENCE_TYPES.STUDENTS,
+  AUDIENCE_TYPES.PARENTS,
+  AUDIENCE_TYPES.NON_TEACHING_STAFF,
+];
 const PROHIBITED_HM_TYPES = [DOCUMENT_TYPES.OFFICIAL_ORDER, DOCUMENT_TYPES.ANNOUNCEMENT, DOCUMENT_TYPES.PDF_BOOK, DOCUMENT_TYPES.SYLLABUS];
 
 /**
@@ -42,7 +48,9 @@ export const authorizeDocumentAccess = (requestingActor, targetDocument) => {
     if (requestingActor.role === ROLES.TEACHER && documentAudience.includes(AUDIENCE_TYPES.TEACHERS)) return true;
     if (requestingActor.role === ROLES.STUDENT && documentAudience.includes(AUDIENCE_TYPES.STUDENTS)) return true;
     if (requestingActor.role === ROLES.PARENT && documentAudience.includes(AUDIENCE_TYPES.PARENTS)) return true;
-    if ([ROLES.ADMIN, ROLES.SUPERVISOR].includes(requestingActor.role) && documentAudience.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS)) return true;
+    if (requestingActor.role === ROLES.PEON && documentAudience.includes(AUDIENCE_TYPES.NON_TEACHING_STAFF)) return true;
+    if ([ROLES.ADMIN, ROLES.SUPERVISOR].includes(requestingActor.role) && 
+        (documentAudience.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS) || documentAudience.includes(AUDIENCE_TYPES.OFFICE_STAFF))) return true;
     return false;
   }
 
@@ -56,7 +64,9 @@ export const authorizeDocumentAccess = (requestingActor, targetDocument) => {
     if (requestingActor.role === ROLES.TEACHER && documentAudience.includes(AUDIENCE_TYPES.TEACHERS)) return true;
     if (requestingActor.role === ROLES.STUDENT && documentAudience.includes(AUDIENCE_TYPES.STUDENTS)) return true;
     if (requestingActor.role === ROLES.PARENT && documentAudience.includes(AUDIENCE_TYPES.PARENTS)) return true;
-    if ([ROLES.ADMIN, ROLES.SUPERVISOR].includes(requestingActor.role) && documentAudience.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS)) return true;
+    if (requestingActor.role === ROLES.PEON && documentAudience.includes(AUDIENCE_TYPES.NON_TEACHING_STAFF)) return true;
+    if ([ROLES.ADMIN, ROLES.SUPERVISOR].includes(requestingActor.role) && 
+        (documentAudience.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS) || documentAudience.includes(AUDIENCE_TYPES.OFFICE_STAFF))) return true;
     return false;
   }
 
@@ -90,6 +100,7 @@ export const authorizeDocumentAccess = (requestingActor, targetDocument) => {
     if (requestingActor.role === ROLES.TEACHER && documentAudience.includes(AUDIENCE_TYPES.TEACHERS)) return true;
     if (requestingActor.role === ROLES.STUDENT && documentAudience.includes(AUDIENCE_TYPES.STUDENTS)) return true;
     if (requestingActor.role === ROLES.PARENT && documentAudience.includes(AUDIENCE_TYPES.PARENTS)) return true;
+    if (requestingActor.role === ROLES.PEON && documentAudience.includes(AUDIENCE_TYPES.NON_TEACHING_STAFF)) return true;
     return false;
   }
 
@@ -103,7 +114,7 @@ export const authorizeDocumentAccess = (requestingActor, targetDocument) => {
  */
 export const handleGetDocuments = asyncHandler(async (request, response) => {
   const actor = request.user;
-  const { documentType, scopeCategory, search, status = 'PUBLISHED' } = request.query;
+  const { documentType, scopeCategory, search, status = 'PUBLISHED', activeOnly } = request.query;
 
   // Pagination with hard clamping (max 100)
   const pageNumber = Math.max(1, parseInt(request.query.page, 10) || 1);
@@ -111,6 +122,26 @@ export const handleGetDocuments = asyncHandler(async (request, response) => {
   const skipCount = (pageNumber - 1) * limitNumber;
 
   const query = { status };
+
+  // Expiry & Active Window Enforcement for Dashboard Hero Display
+  if (activeOnly === 'true') {
+    const currentMoment = new Date();
+    const defaultTtlCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    query.$and = [
+      {
+        $or: [
+          { expiresAt: { $gt: currentMoment } },
+          { expiresAt: null, createdAt: { $gte: defaultTtlCutoff } },
+        ],
+      },
+      {
+        $or: [
+          { scheduledAt: null },
+          { scheduledAt: { $lte: currentMoment } },
+        ],
+      },
+    ];
+  }
 
   if (documentType && Object.values(DOCUMENT_TYPES).includes(documentType)) {
     query.documentType = documentType;
@@ -150,6 +181,7 @@ export const handleGetDocuments = asyncHandler(async (request, response) => {
     if (actor.role === ROLES.TEACHER) audienceFilter.push(AUDIENCE_TYPES.TEACHERS);
     if (actor.role === ROLES.STUDENT) audienceFilter.push(AUDIENCE_TYPES.STUDENTS);
     if (actor.role === ROLES.PARENT) audienceFilter.push(AUDIENCE_TYPES.PARENTS);
+    if (actor.role === ROLES.PEON) audienceFilter.push(AUDIENCE_TYPES.NON_TEACHING_STAFF);
 
     query.$or = [
       { scope: 'SCHOOL', schoolId: actorSchoolId, targetAudience: { $in: audienceFilter } },
@@ -279,6 +311,8 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
     priority = 'NORMAL',
     schoolId,
     townId,
+    effectiveDate = null,
+    expiresAt = null,
   } = request.body || {};
 
   if (!title || !documentType) {
@@ -331,13 +365,13 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
     const invalidAudiences = targetAudience.filter((aud) => !ALLOWED_HM_AUDIENCES.includes(aud));
     if (
       invalidAudiences.length > 0 ||
-      targetAudience.includes(AUDIENCE_TYPES.ALL) ||
-      targetAudience.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS)
+      targetAudience.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS) ||
+      targetAudience.includes(AUDIENCE_TYPES.OFFICE_STAFF)
     ) {
       return sendError(
         response,
         403,
-        `Access denied. Head Masters can only broadcast to school audiences: ${ALLOWED_HM_AUDIENCES.join(', ')}. Global or town-wide audiences are prohibited.`
+        `Access denied. Head Masters can only broadcast to school audiences: ${ALLOWED_HM_AUDIENCES.join(', ')}. Global or office audiences are prohibited.`
       );
     }
     if (targetAudience.length === 0) {
@@ -386,6 +420,8 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
   }
 
   const isUrgent = priority === 'URGENT';
+  const parsedEffectiveDate = effectiveDate ? new Date(effectiveDate) : null;
+  const parsedExpiresAt = expiresAt ? new Date(expiresAt) : null;
 
   // ─── Atomic Database Transaction with Compensation Cleanup ────────────────
   const session = await mongoose.startSession();
@@ -406,6 +442,8 @@ export const handleCreateDocument = asyncHandler(async (request, response) => {
       fileSizeBytes: resolvedSizeBytes || 0,
       priority: isUrgent ? 'URGENT' : 'NORMAL',
       isPinned: isUrgent,
+      effectiveDate: parsedEffectiveDate && !isNaN(parsedEffectiveDate.getTime()) ? parsedEffectiveDate : null,
+      expiresAt: parsedExpiresAt && !isNaN(parsedExpiresAt.getTime()) ? parsedExpiresAt : null,
       targetAudience,
       publishedBy: actor._id,
       publisherRole: actor.role,

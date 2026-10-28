@@ -48,6 +48,19 @@ const DocumentSchema = new mongoose.Schema({
     default: false,
     index: true,
   },
+  effectiveDate: {
+    type: Date,
+    default: null,
+  },
+  expiresAt: {
+    type: Date,
+    default: null,
+    index: true,
+  },
+  scheduledAt: {
+    type: Date,
+    default: null,
+  },
 
   publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   publisherRole: { type: String, required: true },

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { AUDIENCE_TYPES } from '../../config/constants.js';
 
 const AnnouncementSchema = new mongoose.Schema(
   {
@@ -20,9 +21,28 @@ const AnnouncementSchema = new mongoose.Schema(
       enum: ['CRITICAL', 'HOLIDAY', 'EVENT', 'INFO'],
       default: 'INFO',
     },
+    priority: {
+      type: String,
+      enum: ['NORMAL', 'IMPORTANT', 'URGENT'],
+      default: 'NORMAL',
+    },
+    targetAudience: [{
+      type: String,
+      enum: Object.values(AUDIENCE_TYPES),
+      default: ['ALL'],
+    }],
     eventDate: {
       type: Date,
       default: null,
+    },
+    scheduledAt: {
+      type: Date,
+      default: null,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+      index: true,
     },
     announcerName: {
       type: String,
@@ -59,6 +79,12 @@ const AnnouncementSchema = new mongoose.Schema(
     townId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Town',
+      default: null,
+      index: true,
+    },
+    schoolId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'School',
       default: null,
       index: true,
     },

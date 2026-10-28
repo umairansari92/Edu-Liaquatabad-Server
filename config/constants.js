@@ -195,8 +195,10 @@ export const DOCUMENT_TYPES = Object.freeze({
 export const AUDIENCE_TYPES = Object.freeze({
   ALL:                 'ALL',
   GOVERNMENT_OFFICERS: 'GOVERNMENT_OFFICERS',
+  OFFICE_STAFF:        'OFFICE_STAFF',
   HM:                  'HM',
   TEACHERS:            'TEACHERS',
+  NON_TEACHING_STAFF:  'NON_TEACHING_STAFF',
   STUDENTS:            'STUDENTS',
   PARENTS:             'PARENTS',
 });

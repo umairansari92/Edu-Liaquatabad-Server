@@ -1,25 +1,99 @@
 import mongoose from 'mongoose';
 import Announcement from '../models/Announcement.js';
 import AuditLog from '../models/AuditLog.js';
-import { ROLES } from '../../config/constants.js';
+import { ROLES, AUDIENCE_TYPES } from '../../config/constants.js';
 import logger from '../../config/logger.js';
 import { invalidatePublicStatsCache } from './publicStatsController.js';
 
 const AUTHORIZED_ANNOUNCEMENT_ROLES = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN, ROLES.ADMIN];
 
 /**
- * Public: Retrieve currently active executive announcement
+ * Public/Protected: Retrieve currently active executive announcement
  * GET /api/v1/announcements/active
+ * Filters out:
+ * 1. Expired announcements (now > expiresAt, or default 7-day TTL if null)
+ * 2. Scheduled future announcements (now < scheduledAt)
+ * 3. Audience mismatch if actor is authenticated
  */
 export const handleGetActiveAnnouncement = async (request, response, nextFunction) => {
   try {
-    const activeAnnouncement = await Announcement.findOne({ status: 'ACTIVE' })
+    const currentMoment = new Date();
+    const requestingActor = request.user || null;
+
+    const query = { status: 'ACTIVE' };
+
+    // Find latest active announcement
+    const activeAnnouncement = await Announcement.findOne(query)
       .sort({ createdAt: -1 })
       .lean();
 
+    if (!activeAnnouncement) {
+      return response.status(200).json({
+        success: true,
+        data: null,
+      });
+    }
+
+    // 1. Scheduled Publication Window Guard
+    if (activeAnnouncement.scheduledAt) {
+      const scheduledTime = new Date(activeAnnouncement.scheduledAt).getTime();
+      if (!isNaN(scheduledTime) && scheduledTime > currentMoment.getTime()) {
+        return response.status(200).json({
+          success: true,
+          data: null,
+        });
+      }
+    }
+
+    // 2. Explicit Expiry Guard
+    if (activeAnnouncement.expiresAt) {
+      const expiryTime = new Date(activeAnnouncement.expiresAt).getTime();
+      if (!isNaN(expiryTime) && currentMoment.getTime() >= expiryTime) {
+        return response.status(200).json({
+          success: true,
+          data: null,
+        });
+      }
+    } else {
+      // Default TTL Guard: Maximum 7 days for general announcements, 3 days for critical
+      const createdTime = new Date(activeAnnouncement.createdAt).getTime();
+      const maxTtlMs = activeAnnouncement.type === 'CRITICAL' ? (3 * 24 * 60 * 60 * 1000) : (7 * 24 * 60 * 60 * 1000);
+      if (currentMoment.getTime() - createdTime > maxTtlMs) {
+        return response.status(200).json({
+          success: true,
+          data: null,
+        });
+      }
+    }
+
+    // 3. Audience Targeting Guard
+    if (requestingActor && Array.isArray(activeAnnouncement.targetAudience) && activeAnnouncement.targetAudience.length > 0) {
+      const audiences = activeAnnouncement.targetAudience.map((audienceItem) => String(audienceItem).toUpperCase());
+      if (!audiences.includes('ALL')) {
+        const actorRole = String(requestingActor.role || '').toUpperCase();
+        let isAudienceMatched = false;
+        if (actorRole === ROLES.TEACHER && audiences.includes(AUDIENCE_TYPES.TEACHERS)) isAudienceMatched = true;
+        if (actorRole === ROLES.STUDENT && audiences.includes(AUDIENCE_TYPES.STUDENTS)) isAudienceMatched = true;
+        if (actorRole === ROLES.PARENT && audiences.includes(AUDIENCE_TYPES.PARENTS)) isAudienceMatched = true;
+        if (actorRole === ROLES.PEON && audiences.includes(AUDIENCE_TYPES.NON_TEACHING_STAFF)) isAudienceMatched = true;
+        if (actorRole === ROLES.HM && audiences.includes(AUDIENCE_TYPES.HM)) isAudienceMatched = true;
+        if ([ROLES.ADMIN, ROLES.SUPERVISOR, ROLES.SUPER_ADMIN, ROLES.ROOT_ADMIN].includes(actorRole) &&
+            (audiences.includes(AUDIENCE_TYPES.OFFICE_STAFF) || audiences.includes(AUDIENCE_TYPES.GOVERNMENT_OFFICERS))) {
+          isAudienceMatched = true;
+        }
+
+        if (!isAudienceMatched) {
+          return response.status(200).json({
+            success: true,
+            data: null,
+          });
+        }
+      }
+    }
+
     return response.status(200).json({
       success: true,
-      data: activeAnnouncement || null,
+      data: activeAnnouncement,
     });
   } catch (announcementFetchError) {
     logger.error(`[Announcement] Failed to fetch active announcement: ${announcementFetchError.message}`);
@@ -98,7 +172,12 @@ export const handleCreateAnnouncement = async (request, response, nextFunction) 
       title,
       message,
       type = 'INFO',
+      priority = 'NORMAL',
+      targetAudience = ['ALL'],
       eventDate = null,
+      scheduledAt = null,
+      expiresAt = null,
+      schoolId = null,
       announcerName,
       announcerDesignation,
       announcerPhotoUrl = null,
@@ -174,11 +253,18 @@ export const handleCreateAnnouncement = async (request, response, nextFunction) 
     );
 
     // 2. Insert new active announcement
+    const parsedScheduledAt = scheduledAt ? new Date(scheduledAt) : null;
+    const parsedExpiresAt = expiresAt ? new Date(expiresAt) : null;
+
     const newAnnouncementData = {
       title: title.trim(),
       message: message.trim(),
       type: type || 'INFO',
+      priority: priority || (type === 'CRITICAL' ? 'URGENT' : 'NORMAL'),
+      targetAudience: Array.isArray(targetAudience) && targetAudience.length > 0 ? targetAudience : ['ALL'],
       eventDate: eventDate ? new Date(eventDate) : null,
+      scheduledAt: parsedScheduledAt && !isNaN(parsedScheduledAt.getTime()) ? parsedScheduledAt : null,
+      expiresAt: parsedExpiresAt && !isNaN(parsedExpiresAt.getTime()) ? parsedExpiresAt : null,
       announcerName: announcerName.trim(),
       announcerDesignation: announcerDesignation.trim(),
       announcerPhotoUrl: announcerPhotoUrl ? announcerPhotoUrl.trim() : null,
@@ -186,6 +272,7 @@ export const handleCreateAnnouncement = async (request, response, nextFunction) 
       status: 'ACTIVE',
       postedBy: requestingActor._id,
       townId: requestingActor.townId || null,
+      schoolId: schoolId || requestingActor.schoolId || null,
     };
 
     const [createdAnnouncement] = await Announcement.create([newAnnouncementData], operationOptions);

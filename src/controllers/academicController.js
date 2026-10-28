@@ -15,7 +15,7 @@ import Homework from '../models/Homework.js';
 import TeacherProfile from '../models/TeacherProfile.js';
 import Timetable from '../models/Timetable.js';
 import ParentStudentLink from '../models/ParentStudentLink.js';
-import { checkIsSchoolClosed } from '../services/attendanceWindowService.js';
+import { checkIsSchoolClosed, resolveSchoolActiveClosure } from '../services/attendanceWindowService.js';
 import {
   ROLES,
   SCOPES,
@@ -666,16 +666,19 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
   // Check if school is officially closed today (Statutory Sindh Govt Weekly Off or Active Holiday)
   let isSchoolClosed = false;
   let closureCheck = { isClosed: false };
+  let todayClosurePayload = null;
   if (mongoose.connection?.readyState === 1 || School.findById !== mongoose.Model.findById) {
     try {
       const school = await School.findById(teacherSchoolId).lean();
       if (school) {
         closureCheck = await checkIsSchoolClosed(school, today);
         isSchoolClosed = Boolean(closureCheck?.isClosed);
+        todayClosurePayload = await resolveSchoolActiveClosure(school, today);
       }
     } catch (_closureError) {
       isSchoolClosed = false;
       closureCheck = { isClosed: false };
+      todayClosurePayload = null;
     }
   }
 
@@ -916,18 +919,7 @@ export const handleGetTeacherSummary = asyncHandler(async (request, response) =>
 
   const closureTitle = isSchoolClosed
     ? (closureCheck.holiday?.title || (closureCheck.type === 'WEEKLY_OFF' ? 'Official Weekly Off' : 'School Closed'))
-    : null;
-
-  const todayClosurePayload = isSchoolClosed
-    ? {
-        isClosed: true,
-        type: closureCheck.type || 'WEEKLY_OFF',
-        reason: closureCheck.reason || 'School is closed today.',
-        title: closureTitle,
-        holiday: closureCheck.holiday || null,
-        weeklyOff: closureCheck.weeklyOff || null,
-      }
-    : null;
+    : (todayClosurePayload?.title || null);
 
   return sendSuccess(response, 200, 'Teacher operational summary retrieved.', {
     teacherContext: {
@@ -983,7 +975,7 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
     return sendError(response, 403, 'Your HM account has no school assignment. Contact platform administrators.');
   }
 
-  const school = await School.findById(actorSchoolId).select('name code schoolCode dmcRegion schoolType status address phone email timings gradeRange').lean();
+  const school = await School.findById(actorSchoolId).select('name code schoolCode dmcRegion schoolType status address phone email timings gradeRange townId organizationId').lean();
   if (!school) {
     return sendError(response, 404, 'Assigned school entity not found in municipal registry.');
   }
@@ -991,6 +983,13 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
   const today = new Date();
   const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
   const dayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+  let todayClosurePayload = null;
+  try {
+    todayClosurePayload = await resolveSchoolActiveClosure(school, today);
+  } catch (_closureError) {
+    todayClosurePayload = null;
+  }
 
   // Parallel count queries — strictly scoped to actorSchoolId
   const [
@@ -1342,6 +1341,7 @@ export const handleGetHmSchoolSummary = asyncHandler(async (request, response) =
       gradeRange: school.gradeRange,
       timings: school.timings,
     },
+    todayClosure: todayClosurePayload,
     metrics: {
       totalStudents,
       teachingStaff,

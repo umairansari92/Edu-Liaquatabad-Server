@@ -137,24 +137,27 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
 
   // ── Stage 2: Check WeeklyOffPattern (Recurring weekend rules) ───────────────
   // Precedence: SCHOOL-scoped pattern ('S') overrides TOWN-scoped pattern ('T') via .sort({ scopeType: 1 })
-  const activeWeeklyOff = await WeeklyOffPattern.findOne({
-    status: 'ACTIVE',
-    effectiveFrom: { $lte: date },
-    $and: [
-      {
-        $or: [
-          { effectiveTo: null },
-          { effectiveTo: { $gte: date } },
-        ],
-      },
-      {
-        $or: [
-          { scopeType: 'SCHOOL', schoolId: school._id },
-          { scopeType: 'TOWN', townId: school.townId },
-        ],
-      },
-    ],
-  }).sort({ scopeType: 1 }).lean();
+  let activeWeeklyOff = null;
+  if (mongoose.connection.readyState === 1 || WeeklyOffPattern.findOne !== mongoose.Model.findOne) {
+    activeWeeklyOff = await WeeklyOffPattern.findOne({
+      status: 'ACTIVE',
+      effectiveFrom: { $lte: date },
+      $and: [
+        {
+          $or: [
+            { effectiveTo: null },
+            { effectiveTo: { $gte: date } },
+          ],
+        },
+        {
+          $or: [
+            { scopeType: 'SCHOOL', schoolId: school._id },
+            { scopeType: 'TOWN', townId: school.townId },
+          ],
+        },
+      ],
+    }).sort({ scopeType: 1 }).lean();
+  }
 
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -190,6 +193,75 @@ export const checkIsSchoolClosed = async (school, date = new Date()) => {
   const result = { isClosed: false };
   cache.set(cacheKey, result, 60);
   return result;
+};
+
+/**
+ * Resolves the active holiday, closure, or gazetted banner announcement for a school.
+ * Considers both town-wide announcements and school-scoped announcements.
+ *
+ * Checks:
+ * 1. Today's active closure (from checkIsSchoolClosed)
+ * 2. Any active or scheduled banner announcement where showInBanner: true,
+ *    status !== 'CANCELLED', and endDate >= todayPkt.
+ *
+ * @param {Object} school - School document (with _id, townId)
+ * @param {Date} [date=new Date()]
+ * @returns {Promise<Object|null>} todayClosure payload or null
+ */
+export const resolveSchoolActiveClosure = async (school, date = new Date()) => {
+  if (!school) return null;
+
+  const targetDatePkt = getKarachiDateString(date);
+
+  // Stage A: Check if the school is closed today
+  const closureCheck = await checkIsSchoolClosed(school, date);
+  const isSchoolClosed = Boolean(closureCheck?.isClosed);
+
+  // Stage B: Find any active or scheduled banner holiday/closure for this school or town
+  let activeBannerNotice = null;
+  if (mongoose.connection?.readyState === 1 || HolidayCalendar.findOne !== mongoose.Model.findOne) {
+    try {
+      activeBannerNotice = await HolidayCalendar.findOne({
+        status: { $ne: 'CANCELLED' },
+        showInBanner: true,
+        endDate: { $gte: targetDatePkt },
+        $or: [
+          { scopeType: 'TOWN', townId: school.townId },
+          { scopeType: 'SCHOOL', schoolId: school._id },
+        ],
+      })
+        .sort({ scopeType: 1, startDate: 1, createdAt: -1 })
+        .lean();
+    } catch (_error) {
+      activeBannerNotice = null;
+    }
+  }
+
+  // If school is closed today
+  if (isSchoolClosed) {
+    return {
+      isClosed: true,
+      type: closureCheck.type || (closureCheck.holiday ? closureCheck.holiday.holidayType : 'WEEKLY_OFF'),
+      reason: closureCheck.reason || 'School is closed today.',
+      title: closureCheck.holiday?.title || (closureCheck.type === 'WEEKLY_OFF' ? 'Official Weekly Off' : 'School Closed'),
+      holiday: closureCheck.holiday || activeBannerNotice || null,
+      weeklyOff: closureCheck.weeklyOff || null,
+    };
+  }
+
+  // If school is open today, but has an active banner notice (e.g. Gazetted Exam Announcement, Scheduled Holiday)
+  if (activeBannerNotice) {
+    return {
+      isClosed: false,
+      type: activeBannerNotice.holidayType || 'GAZETTED',
+      reason: activeBannerNotice.reason,
+      title: activeBannerNotice.title,
+      holiday: activeBannerNotice,
+      weeklyOff: null,
+    };
+  }
+
+  return null;
 };
 
 /**
