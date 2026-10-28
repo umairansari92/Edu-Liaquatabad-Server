@@ -165,6 +165,47 @@ export const handleGetStaffProfile = asyncHandler(async (request, response) => {
       .lean();
   }
 
+  // ─── STRICT ROLE-BASED ACCESS: TEACHER VIEWING COLLEAGUE STAFF ────────────
+  // When a teacher views another staff member's profile within the same school:
+  // Return ONLY explicitly approved, non-sensitive school directory information.
+  // Strictly omit: CNIC, date of birth, contact phone, contact email, fatherName,
+  // residential address, bank & payroll details, transfer history, approval history,
+  // correction remarks, employeeId, appointmentDate, and internal classification privacySettings.
+  const isColleagueTeacher = actor.role === ROLES.TEACHER && !isSelf && targetUser.role !== ROLES.STUDENT;
+
+  if (isColleagueTeacher) {
+    const colleagueResponseData = {
+      user: {
+        id: targetUser._id,
+        fullName: targetUser.fullName,
+        designation: targetUser.designation,
+        role: targetUser.role,
+        school: targetUser.schoolId || targetUser.claimedSchoolId,
+      },
+      profile: targetProfile
+        ? {
+            isTeachingStaff: targetProfile.isTeachingStaff,
+            qualification: targetProfile.qualification || '',
+            profilePhoto: targetProfile.profilePhoto || { secureUrl: '', publicId: '' },
+          }
+        : null,
+      assignments: {
+        active: assignments.filter((assignmentItem) => assignmentItem.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+        history: [], // Historical trajectory omitted from colleague directory view
+      },
+      isColleagueDirectoryView: true,
+      pdfAccess: {
+        isSelf: false,
+        allowed: false,
+        canDirectDownload: false,
+        requiresConsent: false,
+        activeApproval: null,
+      },
+    };
+
+    return sendSuccess(response, 200, 'Staff directory profile retrieved successfully.', colleagueResponseData);
+  }
+
   // ─── Unified 4-Tier Privacy Policy ──────────────────────────────────────────
   // Evaluates visibility according to tier: PUBLIC, SCHOOL, AUTHORIZED_ROLE, PRIVATE.
   // Explicit PRIVATE setting is respected even by ROOT_ADMIN.
@@ -885,6 +926,15 @@ export const handleRequestPdfAccess = asyncHandler(async (request, response) => 
     return sendError(response, 400, 'You do not need to submit an access request to download your own profile PDF.');
   }
 
+  // Teacher Access Ceiling: Teachers cannot request official employment dossiers of colleague teachers
+  if (actor.role === ROLES.TEACHER) {
+    return sendError(
+      response,
+      403,
+      'Access denied. Teachers cannot request official service record dossiers of colleague teachers.'
+    );
+  }
+
   const targetUser = await User.findById(targetUserId).populate('schoolId', 'name code');
   if (!targetUser) {
     return sendError(response, 404, 'Staff member not found.');
@@ -984,6 +1034,14 @@ export const handleGetStaffAccessHistory = asyncHandler(async (request, response
   const isSelf = String(actor._id) === String(targetUserId);
   const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actor.role);
 
+  if (!isSelf && !isPrivilegedAdmin) {
+    return sendError(
+      response,
+      403,
+      'Access denied. You do not have permission to inspect access audit logs of other staff members.'
+    );
+  }
+
   const targetUser = await User.findById(targetUserId).lean();
   if (!targetUser) {
     return sendError(response, 404, 'Staff member not found.');
@@ -1081,6 +1139,15 @@ export const handleGenerateStaffProfilePdf = asyncHandler(async (request, respon
 
   const isSelf = String(actor._id) === String(targetUser._id);
   const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actor.role);
+
+  // Teacher Access Ceiling: Teachers cannot download official employment dossiers of colleague teachers
+  if (actor.role === ROLES.TEACHER && !isSelf) {
+    return sendError(
+      response,
+      403,
+      'Access denied. Official service record dossiers are restricted to the employee, Head Master, and authorized administrative officials.'
+    );
+  }
   const preAllowed = !!targetProfile?.privacySettings?.allowAuthorizedPdfDownload;
   const privacy = targetProfile?.privacySettings?.fieldVisibility || {
     profilePhoto: 'PUBLIC',

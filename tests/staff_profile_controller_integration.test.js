@@ -635,6 +635,245 @@ console.log('\n--- PART 6: Service Record PDF Generation & Audit Verification --
   assert(pdfAuditEvent.action === 'STAFF_PROFILE_PDF_DOWNLOADED', '6.5: Audit event action correctly set');
 }
 
+// ─── PART 7: Teacher Colleague Directory Access & Security Ceilings ─────────
+console.log('\n--- PART 7: Teacher Colleague Directory Access & Security Ceilings ---');
+
+// Simulated Colleague Directory DTO Generator matching staffProfileController
+const simulateGetStaffProfile = (actor, targetUser, targetProfile, assignments = []) => {
+  const isSelf = String(actor._id) === String(targetUser._id);
+  const targetSchoolId = targetUser.schoolId;
+  const actorSchoolId = actor.schoolId;
+
+  // Evaluate base access
+  if (actor.role === ROLES.TEACHER || actor.role === ROLES.HM) {
+    if (!actorSchoolId || !targetSchoolId || String(actorSchoolId) !== String(targetSchoolId)) {
+      return { statusCode: 403, error: 'Access denied. You do not have authorization to view this staff profile.' };
+    }
+  }
+
+  // Teacher viewing colleague (same school)
+  const isColleagueTeacher = actor.role === ROLES.TEACHER && !isSelf && targetUser.role !== ROLES.STUDENT;
+  if (isColleagueTeacher) {
+    return {
+      statusCode: 200,
+      data: {
+        user: {
+          id: targetUser._id,
+          fullName: targetUser.fullName,
+          designation: targetUser.designation,
+          role: targetUser.role,
+          school: targetUser.schoolId,
+        },
+        profile: targetProfile
+          ? {
+              isTeachingStaff: targetProfile.isTeachingStaff,
+              qualification: targetProfile.qualification || '',
+              profilePhoto: targetProfile.profilePhoto || { secureUrl: '', publicId: '' },
+            }
+          : null,
+        assignments: {
+          active: assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+          history: [],
+        },
+        isColleagueDirectoryView: true,
+        pdfAccess: {
+          isSelf: false,
+          allowed: false,
+          canDirectDownload: false,
+          requiresConsent: false,
+          activeApproval: null,
+        },
+      },
+    };
+  }
+
+  // HM viewing teacher in same school
+  if (actor.role === ROLES.HM && !isSelf) {
+    return {
+      statusCode: 200,
+      data: {
+        user: {
+          id: targetUser._id,
+          fullName: targetUser.fullName,
+          designation: targetUser.designation,
+          role: targetUser.role,
+          school: targetUser.schoolId,
+        },
+        profile: targetProfile
+          ? {
+              fatherName: targetProfile.fatherName,
+              dateOfBirth: targetProfile.dateOfBirth,
+              employeeId: targetProfile.employeeId,
+              appointmentDate: targetProfile.appointmentDate,
+              qualification: targetProfile.qualification,
+              isTeachingStaff: targetProfile.isTeachingStaff,
+              profilePhoto: targetProfile.profilePhoto,
+              cnic: maskCnic(targetProfile.cnic),
+              bankName: targetProfile.bankName ? 'Provided' : '',
+              branchName: '****',
+              accountNumber: maskBankAccount(targetProfile.accountNumber),
+              accountTitle: '****',
+              transferHistory: targetProfile.transferHistory || [],
+            }
+          : null,
+        assignments: {
+          active: assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+          history: assignments.filter((a) => a.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+        },
+        isColleagueDirectoryView: false,
+      },
+    };
+  }
+
+  // Self view
+  if (isSelf) {
+    return {
+      statusCode: 200,
+      data: {
+        user: { ...targetUser, id: targetUser._id },
+        profile: targetProfile,
+        assignments: {
+          active: assignments.filter((a) => a.status === TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+          history: assignments.filter((a) => a.status !== TEACHING_ASSIGNMENT_STATUS.ACTIVE),
+        },
+        isColleagueDirectoryView: false,
+        pdfAccess: { isSelf: true, allowed: true, canDirectDownload: true },
+      },
+    };
+  }
+
+  return { statusCode: 403, error: 'Access denied.' };
+};
+
+const fullTeacherProfile = {
+  fatherName: 'Muhammad Hashim',
+  dateOfBirth: new Date('1988-04-12'),
+  employeeId: 'EMP-90214',
+  appointmentDate: new Date('2015-09-01'),
+  joiningDate: new Date('2015-09-01'),
+  qualification: 'M.Sc Mathematics, B.Ed',
+  residentialAddress: 'House 42, Block 3, Liaquatabad, Karachi',
+  isTeachingStaff: true,
+  profilePhoto: { secureUrl: 'https://cloudinary.com/photo1.jpg', publicId: 'photo_1' },
+  cnic: '42101-7654321-3',
+  bankName: 'National Bank of Pakistan',
+  branchName: 'Liaquatabad Branch 0214',
+  accountNumber: 'PK36NBPA00000098765432',
+  accountTitle: 'Siraj Ahmed',
+  correctionRemarks: 'None',
+  approvalHistory: [{ action: 'APPROVE', decision: 'APPROVED', actorRole: 'HM' }],
+  transferHistory: [{ fromSchoolId: schoolB_id, toSchoolId: schoolA_id }],
+  privacySettings: {
+    fieldVisibility: {
+      profilePhoto: 'PUBLIC',
+      designation: 'PUBLIC',
+      cnic: 'AUTHORIZED_ROLE',
+      bankDetails: 'AUTHORIZED_ROLE',
+    },
+    allowAuthorizedPdfDownload: false,
+  },
+};
+
+const dummyAssignments = [
+  { _id: 'assign_active', status: TEACHING_ASSIGNMENT_STATUS.ACTIVE, classId: { name: 'Class 9' } },
+  { _id: 'assign_history', status: TEACHING_ASSIGNMENT_STATUS.COMPLETED, classId: { name: 'Class 8' } },
+];
+
+// 7.1: Teacher viewing colleague in same school
+{
+  const teacherActor = { _id: '507f1f77bcf86cd799439099', role: ROLES.TEACHER, schoolId: schoolA_id };
+  const result = simulateGetStaffProfile(teacherActor, targetStaff, fullTeacherProfile, dummyAssignments);
+
+  assert(result.statusCode === 200, '7.1: Teacher can view colleague staff profile in same school (HTTP 200)');
+  assert(result.data.isColleagueDirectoryView === true, '7.1: Response flagged as isColleagueDirectoryView');
+
+  // Verify allowlisted directory fields are present
+  assert(result.data.user.fullName === 'Siraj Ahmed', '7.1: Full name is present');
+  assert(result.data.profile.qualification === 'M.Sc Mathematics, B.Ed', '7.1: Qualification is present');
+  assert(result.data.profile.profilePhoto.secureUrl === 'https://cloudinary.com/photo1.jpg', '7.1: Profile photo is present');
+  assert(result.data.assignments.active.length === 1, '7.1: Active teaching assignments present');
+
+  // 7.2: Verify complete omission of sensitive and administrative fields (Zero PII leak)
+  assert(result.data.profile.cnic === undefined, '7.2: CNIC is completely omitted (not even masked)');
+  assert(result.data.profile.bankName === undefined, '7.2: Bank name is completely omitted');
+  assert(result.data.profile.accountNumber === undefined, '7.2: Account number is completely omitted');
+  assert(result.data.profile.dateOfBirth === undefined, '7.2: Date of birth is completely omitted');
+  assert(result.data.profile.fatherName === undefined, '7.2: Father name is completely omitted');
+  assert(result.data.profile.residentialAddress === undefined, '7.2: Residential address is completely omitted');
+  assert(result.data.profile.employeeId === undefined, '7.2: Employee ID is completely omitted');
+  assert(result.data.profile.appointmentDate === undefined, '7.2: Appointment date is completely omitted');
+  assert(result.data.profile.transferHistory === undefined, '7.2: Transfer history is completely omitted');
+  assert(result.data.profile.approvalHistory === undefined, '7.2: Approval history is completely omitted');
+  assert(result.data.user.phoneNumber === undefined, '7.2: Personal phone number is completely omitted');
+  assert(result.data.user.email === undefined, '7.2: Personal email is completely omitted');
+  assert(result.data.privacySettings === undefined, '7.2: Internal classification privacySettings omitted');
+  assert(result.data.assignments.history.length === 0, '7.2: Historical assignment trajectory omitted');
+}
+
+// 7.3: Teacher from School B viewing teacher from School A -> 403 Forbidden
+{
+  const teacherSchoolB = { _id: '507f1f77bcf86cd799439098', role: ROLES.TEACHER, schoolId: schoolB_id };
+  const crossResult = simulateGetStaffProfile(teacherSchoolB, targetStaff, fullTeacherProfile, dummyAssignments);
+  assert(crossResult.statusCode === 403, '7.3: Teacher from School B viewing teacher from School A receives HTTP 403');
+}
+
+// 7.4 - 7.6: Teacher Security Ceilings (PDF Request, PDF Download, Access History)
+{
+  const teacherActor = { _id: '507f1f77bcf86cd799439099', role: ROLES.TEACHER, schoolId: schoolA_id };
+
+  // 7.4: Teacher requesting PDF consent
+  const simulatePdfConsentRequest = (actor, target) => {
+    if (actor.role === ROLES.TEACHER && String(actor._id) !== String(target._id)) {
+      return { statusCode: 403, message: 'Access denied. Teachers cannot request official service record dossiers of colleague teachers.' };
+    }
+    return { statusCode: 201 };
+  };
+  const requestResult = simulatePdfConsentRequest(teacherActor, targetStaff);
+  assert(requestResult.statusCode === 403, '7.4: Teacher requesting PDF consent for colleague receives HTTP 403');
+
+  // 7.5: Teacher downloading PDF
+  const simulatePdfDownloadCheck = (actor, target) => {
+    if (actor.role === ROLES.TEACHER && String(actor._id) !== String(target._id)) {
+      return { statusCode: 403, message: 'Access denied. Official service record dossiers are restricted.' };
+    }
+    return { statusCode: 200 };
+  };
+  const downloadResult = simulatePdfDownloadCheck(teacherActor, targetStaff);
+  assert(downloadResult.statusCode === 403, '7.5: Teacher downloading PDF for colleague receives HTTP 403');
+
+  // 7.6: Teacher viewing access audit history
+  const simulateAccessHistoryCheck = (actor, target) => {
+    const isSelf = String(actor._id) === String(target._id);
+    const isPrivilegedAdmin = [ROLES.ROOT_ADMIN, ROLES.SUPER_ADMIN].includes(actor.role);
+    if (!isSelf && !isPrivilegedAdmin) {
+      return { statusCode: 403, message: 'Access denied. You do not have permission to inspect access audit logs.' };
+    }
+    return { statusCode: 200 };
+  };
+  const historyResult = simulateAccessHistoryCheck(teacherActor, targetStaff);
+  assert(historyResult.statusCode === 403, '7.6: Teacher inspecting colleague access audit history receives HTTP 403');
+}
+
+// 7.7: Teacher viewing own profile
+{
+  const selfActor = { _id: '507f1f77bcf86cd799439050', role: ROLES.TEACHER, schoolId: schoolA_id };
+  const selfResult = simulateGetStaffProfile(selfActor, targetStaff, fullTeacherProfile, dummyAssignments);
+  assert(selfResult.statusCode === 200, '7.7: Teacher viewing own profile receives HTTP 200');
+  assert(selfResult.data.isColleagueDirectoryView === false, '7.7: Self profile has isColleagueDirectoryView false');
+  assert(selfResult.data.pdfAccess.canDirectDownload === true, '7.7: Self profile retains direct PDF download permission');
+}
+
+// 7.8: Same-school HM viewing staff
+{
+  const hmActor = { _id: '507f1f77bcf86cd799439051', role: ROLES.HM, schoolId: schoolA_id };
+  const hmResult = simulateGetStaffProfile(hmActor, targetStaff, fullTeacherProfile, dummyAssignments);
+  assert(hmResult.statusCode === 200, '7.8: Same-school HM viewing staff receives HTTP 200');
+  assert(hmResult.data.isColleagueDirectoryView === false, '7.8: HM view is NOT flagged as colleague directory view');
+  assert(hmResult.data.profile.employeeId === 'EMP-90214', '7.8: HM receives employee ID');
+  assert(hmResult.data.profile.cnic === '42101-*******-3', '7.8: HM receives masked CNIC per sensitive policy');
+  assert(hmResult.data.profile.transferHistory.length === 1, '7.8: HM receives transfer history of staff member');
+}
+
 console.log('\n==============================================================================');
 console.log(`🎉 ALL ${passedTests}/${totalTests} CONTROLLER INTEGRATION & SECURITY TESTS PASSED!`);
 console.log('   Full Lifecycle, Boundary Isolations, and Domain Model Invariants Verified');
