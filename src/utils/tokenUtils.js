@@ -119,7 +119,7 @@ export const setRefreshCookie = (response, token) => {
   response.cookie('refreshToken', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
     path: '/api/v1/auth', // Restrict cookie delivery strictly to auth endpoints
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
@@ -129,7 +129,7 @@ export const clearRefreshCookie = (response) => {
   response.clearCookie('refreshToken', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
     path: '/api/v1/auth',
   });
 };

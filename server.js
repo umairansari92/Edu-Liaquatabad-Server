@@ -77,11 +77,52 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
+/**
+ * In non-production environments, permits connections from private network IPs (RFC 1918)
+ * and local hostnames across standard development ports so developers can test on LAN/mobile devices.
+ */
+const isAllowedDevOrigin = (origin) => {
+  if (process.env.NODE_ENV === 'production') return false;
+  try {
+    const originUrl = new URL(origin);
+    const originHostname = originUrl.hostname;
+
+    // Localhost & loopback
+    if (originHostname === 'localhost' || originHostname === '127.0.0.1' || originHostname === '::1') {
+      return true;
+    }
+
+    // RFC 1918 Private IPv4 Address Ranges:
+    // 10.0.0.0/8 (10.0.0.0 - 10.255.255.255)
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(originHostname)) {
+      return true;
+    }
+
+    // 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(originHostname)) {
+      return true;
+    }
+
+    // 192.168.0.0/16 (192.168.0.0 - 192.168.255.255)
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(originHostname)) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+};
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     const normalizedOrigin = origin.trim().replace(/\/$/, '');
-    if (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes(origin)) {
+    if (
+      allowedOrigins.includes(normalizedOrigin) ||
+      allowedOrigins.includes(origin) ||
+      isAllowedDevOrigin(origin)
+    ) {
       callback(null, true);
     } else {
       logger.warn(`[CORS Blocked] Origin: ${origin} not in allowed list`);
