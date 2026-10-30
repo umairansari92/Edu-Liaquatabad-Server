@@ -12,11 +12,14 @@ import HolidayCalendar from "../models/HolidayCalendar.js";
 import WeeklyOffPattern from "../models/WeeklyOffPattern.js";
 import LateAttendanceRequest from "../models/LateAttendanceRequest.js";
 import StaffAttendanceRecord from "../models/StaffAttendanceRecord.js";
+import LeaveRequest from "../models/LeaveRequest.js";
 import Notification from "../models/Notification.js";
 import {
   ROLES,
   ATTENDANCE_STATUS,
   STAFF_ATTENDANCE_STATUS,
+  LEAVE_TYPE,
+  LEAVE_STATUS,
   STUDENT_STATUS,
   USER_STATUS,
   TEACHING_ASSIGNMENT_STATUS,
@@ -46,7 +49,92 @@ import cache from "../utils/cache.js";
 //   4. HM and above: school boundary alone is sufficient.
 //   5. PEON/STUDENT/PARENT must be blocked upstream by permission middleware.
 // ─────────────────────────────────────────────────────────────────────────────
-const resolveTeacherSection = async (requestingActor, sectionId, response) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// PROXY ATTENDANCE ELIGIBILITY VERIFIER
+// Validates whether a section's assigned teacher is on Leave (CL/EL) or Absent today,
+// enabling a colleague within the same school to record proxy attendance with an audit trail.
+// ─────────────────────────────────────────────────────────────────────────────
+export const checkSectionTeacherProxyEligibility = async ({ schoolId, section, date = new Date() }) => {
+  const queryDate = new Date(date);
+  const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
+  const dayEnd   = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
+
+  const assignedTeacherId = section.classTeacherId?._id || section.classTeacherId;
+
+  if (!assignedTeacherId) {
+    return {
+      eligible: true,
+      reason: "No class teacher assigned (uncovered classroom).",
+      proxiedTeacher: null,
+      leaveType: null,
+    };
+  }
+
+  // Fetch teacher details
+  const teacherUser = await User.findById(assignedTeacherId).select("fullName designation role").lean();
+  if (!teacherUser) {
+    return {
+      eligible: true,
+      reason: "Assigned class teacher record not found in directory.",
+      proxiedTeacher: null,
+      leaveType: null,
+    };
+  }
+
+  // 1. Check for active LeaveRequest (CL / EL) covering the query date
+  const leave = await LeaveRequest.findOne({
+    schoolId,
+    staffUserId: assignedTeacherId,
+    status: { $in: [LEAVE_STATUS.APPROVED, LEAVE_STATUS.PENDING] },
+    startDate: { $lte: dayEnd },
+    endDate:   { $gte: dayStart },
+  }).lean();
+
+  if (leave) {
+    const leaveLabel = leave.leaveType === LEAVE_TYPE.CASUAL_LEAVE ? "Casual Leave (CL)" : "Earned Leave (EL)";
+    return {
+      eligible: true,
+      reason: `Assigned teacher (${teacherUser.fullName}) is on ${leaveLabel}.`,
+      proxiedTeacher: teacherUser,
+      leaveType: leave.leaveType,
+    };
+  }
+
+  // 2. Check StaffAttendanceRecord
+  const staffAttendance = await StaffAttendanceRecord.findOne({
+    schoolId,
+    staffUserId: assignedTeacherId,
+    attendanceDate: { $gte: dayStart, $lte: dayEnd },
+  }).lean();
+
+  if (!staffAttendance) {
+    return {
+      eligible: true,
+      reason: `Assigned teacher (${teacherUser.fullName}) has not checked in today (Absent).`,
+      proxiedTeacher: teacherUser,
+      leaveType: null,
+    };
+  }
+
+  if (staffAttendance.approvalStatus === STAFF_ATTENDANCE_STATUS.REJECTED) {
+    return {
+      eligible: true,
+      reason: `Assigned teacher (${teacherUser.fullName}) attendance was rejected (Absent).`,
+      proxiedTeacher: teacherUser,
+      leaveType: null,
+    };
+  }
+
+  // If teacher submitted self-attendance and was approved, they are present on duty
+  return {
+    eligible: false,
+    reason: `Assigned teacher (${teacherUser.fullName}) is marked Present on duty today. Proxy attendance is only permitted for absent or on-leave teachers.`,
+    proxiedTeacher: teacherUser,
+    leaveType: null,
+  };
+};
+
+const resolveTeacherSection = async (requestingActor, sectionId, response, options = {}) => {
   if (requestingActor.status && requestingActor.status !== USER_STATUS.ACTIVE) {
     sendError(response, 403, "Access denied. Your account is not in an active state. Contact your Head Master.");
     return null;
@@ -70,7 +158,7 @@ const resolveTeacherSection = async (requestingActor, sectionId, response) => {
     return null;
   }
 
-  // TEACHER gate: verify via TeachingAssignment or classTeacherId
+  // TEACHER gate: verify via TeachingAssignment or classTeacherId OR authorized Proxy
   if (requestingActor.role === ROLES.TEACHER) {
     const actorId = String(requestingActor._id || requestingActor.userId);
     const isAssigned = (await TeachingAssignment.isTeacherAssigned({
@@ -81,11 +169,41 @@ const resolveTeacherSection = async (requestingActor, sectionId, response) => {
     })) || (section.classTeacherId && String(section.classTeacherId._id || section.classTeacherId) === actorId);
 
     if (!isAssigned) {
-      sendError(response, 403,
-        "Access denied. You have no active teaching assignment or class teacher role in this section. " +
-        "Contact your Head Master to assign you to this class."
-      );
-      return null;
+      // PROXY ATTENDANCE GATE:
+      // A teacher may only access another section if options.isProxy === true,
+      // a valid reason (minimum 5 chars) is provided, and the assigned teacher is absent or on leave today.
+      const { isProxy, proxyReason } = options;
+      if (isProxy) {
+        if (!proxyReason || typeof proxyReason !== "string" || proxyReason.trim().length < 5) {
+          sendError(response, 400, "A valid proxyReason is required when taking proxy attendance (minimum 5 characters).");
+          return null;
+        }
+
+        const eligibility = await checkSectionTeacherProxyEligibility({
+          schoolId: actorSchoolId,
+          section,
+          date: options.date || new Date(),
+        });
+
+        if (!eligibility.eligible) {
+          sendError(
+            response,
+            403,
+            `Proxy Attendance Denied: ${eligibility.reason || "The assigned teacher is not on leave or absent today."}`
+          );
+          return null;
+        }
+
+        section.isProxyAuthorized = true;
+        section.proxiedTeacher = eligibility.proxiedTeacher;
+        section.proxyReason = proxyReason.trim();
+      } else {
+        sendError(response, 403,
+          "Access denied. You have no active teaching assignment or class teacher role in this section. " +
+          "If taking proxy for an absent colleague, use the Proxy Attendance option with a valid justification."
+        );
+        return null;
+      }
     }
   }
   // HM (Level 50+): school boundary above is sufficient — they govern the whole school.
@@ -98,17 +216,21 @@ const resolveTeacherSection = async (requestingActor, sectionId, response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 export const handleGetAttendanceStatus = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
-  const { sectionId, date } = request.query;
+  const { sectionId, date, isProxy, proxyReason } = request.query;
 
   if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
     return sendError(response, 400, "A valid sectionId is required.");
   }
 
-  const section = await resolveTeacherSection(requestingActor, sectionId, response);
-  if (!section) return;
-
   const queryDate = date ? new Date(date) : new Date();
   if (isNaN(queryDate.getTime())) return sendError(response, 400, "Invalid date format.");
+
+  const section = await resolveTeacherSection(requestingActor, sectionId, response, {
+    isProxy: isProxy === "true" || isProxy === true,
+    proxyReason: typeof proxyReason === "string" ? proxyReason : "",
+    date: queryDate,
+  });
+  if (!section) return;
 
   const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
   const dayEnd   = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
@@ -147,17 +269,21 @@ export const handleGetAttendanceStatus = asyncHandler(async (request, response) 
 // ═══════════════════════════════════════════════════════════════════════════════
 export const handleGetAttendanceSheet = asyncHandler(async (request, response) => {
   const requestingActor = request.user;
-  const { sectionId, date } = request.query;
+  const { sectionId, date, isProxy, proxyReason } = request.query;
 
   if (!sectionId || !/^[0-9a-fA-F]{24}$/.test(sectionId)) {
     return sendError(response, 400, "A valid sectionId is required.");
   }
 
-  const section = await resolveTeacherSection(requestingActor, sectionId, response);
-  if (!section) return;
-
   const queryDate = date ? new Date(date) : new Date();
   if (isNaN(queryDate.getTime())) return sendError(response, 400, "Invalid date format.");
+
+  const section = await resolveTeacherSection(requestingActor, sectionId, response, {
+    isProxy: isProxy === "true" || isProxy === true,
+    proxyReason: typeof proxyReason === "string" ? proxyReason : "",
+    date: queryDate,
+  });
+  if (!section) return;
 
   const dayStart = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 0, 0, 0, 0);
   const dayEnd   = new Date(queryDate.getFullYear(), queryDate.getMonth(), queryDate.getDate(), 23, 59, 59, 999);
@@ -391,8 +517,8 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     records = [],
     isLateOverride = false,
     lateReason = '',
-    // CL Proxy fields — HM only. When the assigned teacher is on Casual Leave,
-    // the HM submits attendance on that teacher's behalf using these fields.
+    // Proxy fields — for HM or covering Teacher
+    isProxy = false,
     proxyTeacherId = null,
     proxyReason    = '',
   } = request.body;
@@ -471,7 +597,12 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     }
   }
 
-  const section = await resolveTeacherSection(requestingActor, sectionId, response);
+  const section = await resolveTeacherSection(requestingActor, sectionId, response, {
+    isProxy: Boolean(isProxy),
+    proxyReason,
+    proxyTeacherId,
+    date,
+  });
   if (!section) return;
 
   const queryDate = date ? new Date(date) : new Date();
@@ -608,14 +739,28 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   const teacherSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || "");
   const teacherId       = requestingActor._id || requestingActor.userId;
 
-  // ── CL Proxy Validation (HM only) ────────────────────────────────────────────
-  // When an HM submits attendance for a section whose teacher is on Casual Leave,
-  // they MUST supply proxyTeacherId (the teacher being proxied) and proxyReason.
+  // ── Proxy Validation (HM & TEACHER) ─────────────────────────────────────────
+  // When an HM or covering TEACHER submits attendance for a section whose teacher is on Leave/Absent,
+  // they MUST supply proxyTeacherId (or section.proxiedTeacher) and proxyReason.
   // We verify the teacher belongs to the same school — no cross-school proxy allowed.
   let proxyTeacherRecord = null;
   const isHmClProxy = requestingActor.role === ROLES.HM && proxyTeacherId && typeof proxyTeacherId === 'string';
+  const isTeacherProxy = requestingActor.role === ROLES.TEACHER && (Boolean(isProxy) || Boolean(section.isProxyAuthorized));
 
-  if (isHmClProxy) {
+  if (isTeacherProxy) {
+    if (!proxyReason || typeof proxyReason !== 'string' || proxyReason.trim().length < 5) {
+      return sendError(response, 400, 'proxyReason is required when submitting proxy attendance (minimum 5 characters).');
+    }
+
+    const targetTeacherId = section.proxiedTeacher?._id || proxyTeacherId || section.classTeacherId?._id || section.classTeacherId;
+    if (targetTeacherId) {
+      proxyTeacherRecord = await User.findOne({
+        _id: targetTeacherId,
+        schoolId: teacherSchoolId,
+        role: ROLES.TEACHER,
+      }).select('fullName designation').lean();
+    }
+  } else if (isHmClProxy) {
     if (!/^[0-9a-fA-F]{24}$/.test(proxyTeacherId)) {
       return sendError(response, 400, 'Invalid proxyTeacherId format. Must be a valid MongoDB ObjectId.');
     }
@@ -694,7 +839,13 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
   let auditAction;
   let auditReason;
 
-  if (isHmClProxy && proxyTeacherRecord) {
+  if (isTeacherProxy) {
+    auditAction = "ATTENDANCE_TEACHER_PROXY_SUBMITTED";
+    auditReason =
+      `Teacher '${requestingActor.fullName}' submitted student attendance as proxy for teacher ` +
+      `'${proxyTeacherRecord?.fullName || 'Assigned Teacher'}' (${proxyTeacherRecord?._id || 'N/A'}) in ` +
+      `${section.classId?.name || 'Class'} - ${section.name}. Proxy reason: ${proxyReason.trim()}`;
+  } else if (isHmClProxy && proxyTeacherRecord) {
     auditAction = "ATTENDANCE_HM_CL_PROXY_SUBMITTED";
     auditReason =
       `HM submitted student attendance on behalf of teacher ` +
@@ -731,11 +882,12 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
       isLateOverride:  Boolean(windowCheck.isLateOverride),
       lateReason:      windowCheck.lateReason || null,
       clearanceId:     windowCheck.clearanceId || null,
-      // CL Proxy fields — present only when HM is acting on behalf of a CL teacher
-      isClProxy:       isHmClProxy,
-      proxyTeacherId:  isHmClProxy ? proxyTeacherId : null,
-      proxyTeacherName: isHmClProxy ? (proxyTeacherRecord?.fullName || null) : null,
-      proxyReason:     isHmClProxy ? proxyReason.trim() : null,
+      // Proxy fields — present when HM or covering Teacher is acting on behalf of an absent/on-leave teacher
+      isProxy:         Boolean(isTeacherProxy || isHmClProxy),
+      proxyType:       isTeacherProxy ? "TEACHER_PROXY" : (isHmClProxy ? "HM_CL_PROXY" : null),
+      proxyTeacherId:  isTeacherProxy ? (proxyTeacherRecord?._id || null) : (isHmClProxy ? proxyTeacherId : null),
+      proxyTeacherName: (isTeacherProxy || isHmClProxy) ? (proxyTeacherRecord?.fullName || null) : null,
+      proxyReason:     (isTeacherProxy || isHmClProxy) ? proxyReason.trim() : null,
     },
     result:    "SUCCESS",
     reason:    auditReason,
@@ -754,11 +906,12 @@ export const handleSubmitAttendance = asyncHandler(async (request, response) => 
     leaveCount,
     verificationStatus: "PENDING_VERIFICATION",
     submittedAt:        attendanceRecord.updatedAt,
-    // Included when HM submits on behalf of a CL teacher
-    proxyContext: isHmClProxy
+    // Included when Teacher or HM submits on behalf of an absent/CL teacher
+    proxyContext: (isTeacherProxy || isHmClProxy)
       ? {
-          isClProxy:        true,
-          proxyTeacherId,
+          isProxy:          true,
+          proxyType:        isTeacherProxy ? "TEACHER_PROXY" : "HM_CL_PROXY",
+          proxyTeacherId:   proxyTeacherRecord?._id || proxyTeacherId || null,
           proxyTeacherName: proxyTeacherRecord?.fullName || null,
           proxyReason:      proxyReason.trim(),
         }
@@ -2488,5 +2641,79 @@ export const handleGetLateAttendanceClearanceStatus = asyncHandler(async (reques
       isExpired: clearance.unlockedUntil ? new Date() > new Date(clearance.unlockedUntil) : false,
       createdAt: clearance.createdAt,
     } : null,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /attendance/eligible-proxy-sections
+// Returns classes/sections in the same school whose assigned teacher is absent or on leave today,
+// allowing covering teachers to record proxy attendance with an institutional justification.
+// ═══════════════════════════════════════════════════════════════════════════════
+export const handleGetEligibleProxySections = asyncHandler(async (request, response) => {
+  const requestingActor = request.user;
+  const actorSchoolId = String(requestingActor.schoolId?._id || requestingActor.schoolId || "");
+  if (!actorSchoolId) {
+    return sendError(response, 403, "No school associated with user account.");
+  }
+
+  const queryDate = request.query.date ? new Date(request.query.date) : new Date();
+
+  // 1. Get all active sections in the school
+  const allSections = await Section.find({
+    schoolId: actorSchoolId,
+    status: "ACTIVE",
+  })
+    .populate("classId", "name numericGrade code")
+    .populate("classTeacherId", "fullName designation role")
+    .lean();
+
+  // 2. Find which sections the requestingActor is directly assigned to
+  const actorId = String(requestingActor._id || requestingActor.userId);
+  const assignedTeaching = await TeachingAssignment.find({
+    teacherId: actorId,
+    schoolId: actorSchoolId,
+    status: "ACTIVE",
+  }).select("sectionId classId").lean();
+
+  const assignedSectionIdSet = new Set(
+    assignedTeaching
+      .filter((t) => t.sectionId)
+      .map((t) => String(t.sectionId))
+  );
+
+  const eligibleSections = [];
+
+  for (const sec of allSections) {
+    const secIdStr = String(sec._id);
+    const isDirectlyAssigned =
+      assignedSectionIdSet.has(secIdStr) ||
+      (sec.classTeacherId && String(sec.classTeacherId._id || sec.classTeacherId) === actorId);
+
+    // Skip teacher's own assigned sections
+    if (isDirectlyAssigned) continue;
+
+    // Check proxy eligibility for this section
+    const check = await checkSectionTeacherProxyEligibility({
+      schoolId: actorSchoolId,
+      section: sec,
+      date: queryDate,
+    });
+
+    if (check.eligible) {
+      eligibleSections.push({
+        _id: sec._id,
+        name: sec.name,
+        class: sec.classId,
+        classTeacher: check.proxiedTeacher || sec.classTeacherId || null,
+        proxyReasonInfo: check.reason,
+        leaveType: check.leaveType || null,
+        capacity: sec.capacity || 40,
+      });
+    }
+  }
+
+  return sendSuccess(response, 200, "Eligible proxy sections retrieved.", {
+    eligibleSections,
+    date: queryDate.toISOString().split("T")[0],
   });
 });

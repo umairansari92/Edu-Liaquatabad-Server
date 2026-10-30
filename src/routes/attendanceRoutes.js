@@ -16,6 +16,7 @@ import {
   handleDecideLateAttendanceClearance,
   handleGetPendingLateAttendanceClearances,
   handleGetLateAttendanceClearanceStatus,
+  handleGetEligibleProxySections,
 } from "../controllers/attendanceController.js";
 import {
   handleGetStudentAttendanceAnalytics,
@@ -67,6 +68,13 @@ router.get(
   "/status",
   authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
   handleGetAttendanceStatus
+);
+
+// ─── GET Eligible Proxy Sections for Covering Teacher ─────────────────────────
+router.get(
+  "/eligible-proxy-sections",
+  authorizePermissions(PERMISSIONS.ATTENDANCE_VIEW),
+  handleGetEligibleProxySections
 );
 
 // ─── GET Attendance Sheet ──────────────────────────────────────────────────────
